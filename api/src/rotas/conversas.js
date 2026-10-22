@@ -118,7 +118,7 @@ async function finalizarEnvio(req, cv, { tipo, texto, midia, enviar }) {
   try { externoId = await enviar(); } catch (e) { falhou = true; console.error('[envio]', e.message, JSON.stringify(e.resposta || '').slice(0, 200)); }
   const final = await comContexto(ctx(req), async (c) => {
     await c.query(`UPDATE mensagens SET status = $2, externo_id = $3 WHERE id = $1`, [msg.id, falhou ? 'erro' : 'ok', externoId]);
-    if (!falhou) await c.query(`UPDATE conversas SET ultima_previa = $2, ultima_mensagem_em = now(), atualizada_em = now() WHERE id = $1`, [cv.id, previaDe(tipo, texto)]);
+    if (!falhou) await c.query(`UPDATE conversas SET ultima_previa = $2, ultima_mensagem_em = now(), humano_respondeu_em = now(), atualizada_em = now() WHERE id = $1`, [cv.id, previaDe(tipo, texto)]);
     return (await c.query(`SELECT m.*, u.nome AS autor_nome, ${cursor('m.criada_em')} AS cursor FROM mensagens m LEFT JOIN usuarios u ON u.id = m.autor_id WHERE m.id = $1`, [msg.id])).rows[0];
   });
   if (falhou) throw erro(502, 'A mensagem não foi enviada. Confira a conexão do WhatsApp e tente de novo.');
@@ -220,10 +220,14 @@ conversas.post('/:id/assumir', exigirPerfil('dono', 'atendente'), rota(async (re
 }));
 
 conversas.post('/:id/devolver', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
-  res.json(await mudarEstado(req, uuid(req.params.id), async (c, cv) => {
-    await c.query(`UPDATE conversas SET estado = 'assistente', atendente_id = NULL WHERE id = $1`, [cv.id]);
+  const r = await mudarEstado(req, uuid(req.params.id), async (c, cv) => {
+    const a = (await c.query('SELECT ativo FROM assistentes WHERE loja_id = $1', [cv.loja_id])).rows[0];
+    if (!a?.ativo) throw erro(409, 'O assistente virtual desta loja está desligado. Ligue em "Assistente virtual".');
+    // marca como já respondido até agora: o assistente só fala quando o cliente escrever de novo
+    await c.query(`UPDATE conversas SET estado = 'assistente', atendente_id = NULL, bot_respondeu_em = now() WHERE id = $1`, [cv.id]);
     await evento(c, cv, req, `${req.usuario.nome} devolveu a conversa ao assistente`);
-  }));
+  });
+  res.json(r);
 }));
 
 conversas.post('/:id/encerrar', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {

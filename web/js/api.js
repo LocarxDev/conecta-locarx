@@ -79,6 +79,30 @@ const real = {
   respostas: () => chamar('GET', '/loja/respostas'),
   salvarResposta: (d) => (d.id ? chamar('PUT', `/loja/respostas/${encodeURIComponent(d.id)}`, d) : chamar('POST', '/loja/respostas', d)),
   excluirResposta: (id) => chamar('DELETE', `/loja/respostas/${encodeURIComponent(id)}`),
+
+  // etapa 3 — assistente e base de conhecimento
+  assistente: () => chamar('GET', '/loja/assistente'),
+  salvarAssistente: (d) => chamar('PUT', '/loja/assistente', d),
+  salvarChaveIa: (d) => chamar('POST', '/loja/assistente/chave', d),
+  removerChaveIa: () => chamar('DELETE', '/loja/assistente/chave'),
+  testarAssistente: (historico) => chamar('POST', '/loja/assistente/testar', { historico }),
+  perguntasSemResposta: () => chamar('GET', '/loja/perguntas'),
+  resolverPergunta: (id) => chamar('POST', `/loja/perguntas/${encodeURIComponent(id)}/resolver`, {}),
+  conhecimento: (q) => chamar('GET', '/conhecimento?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
+  salvarConhecimento: (d) => (d.id ? chamar('PUT', `/conhecimento/${encodeURIComponent(d.id)}`, { titulo: d.titulo, conteudo: d.conteudo }) : chamar('POST', '/conhecimento', d)),
+  salvarConhecimentoLote: (itens) => chamar('POST', '/conhecimento/lote', { itens }),
+  acaoConhecimento: (id, acao) => chamar('POST', `/conhecimento/${encodeURIComponent(id)}/${acao}`, {}),
+  importarConhecimento: (d) => chamar('POST', '/conhecimento/importar', d),
+  rede: () => chamar('GET', '/admin/rede'),
+  salvarRede: (d) => chamar('PUT', '/admin/rede', d),
+  incluirSinonimo: (termos) => chamar('POST', '/admin/sinonimos', { termos }),
+  excluirSinonimo: (id) => chamar('DELETE', `/admin/sinonimos/${encodeURIComponent(id)}`),
+
+  // etapa 4 — reservas e API LocarX
+  reservas: (q) => chamar('GET', '/loja/reservas?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
+  atualizarReserva: (id) => chamar('POST', `/loja/reservas/${encodeURIComponent(id)}/atualizar`, {}),
+  filiaisLocarx: () => chamar('GET', '/admin/locarx/filiais'),
+  testarLocarx: (branchId) => chamar('GET', `/admin/locarx/teste?branchId=${encodeURIComponent(branchId)}`),
 };
 
 export const api = USAR_EXEMPLO ? exemplo : real;

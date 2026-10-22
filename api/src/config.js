@@ -40,6 +40,15 @@ export const config = {
       return s;
     })(),
   } : null,
+  // API LocarX (etapa 4): um token só para todas as lojas, com acesso de parceiro
+  locarx: process.env.LOCARX_API_TOKEN ? {
+    url: (process.env.LOCARX_API_URL || 'https://api.locarx.com.br/api').trim().replace(/\/+$/, ''),
+    token: process.env.LOCARX_API_TOKEN.trim(),
+  } : null,
+  // Servidor MCP (LocarX Tools para outros sistemas, ex.: Lívia I.A. e chat do site). Desligado sem MCP_TOKEN.
+  mcpToken: process.env.MCP_TOKEN && process.env.MCP_TOKEN.length >= 32 ? process.env.MCP_TOKEN : null,
+  // Só para testes no computador: IA simulada, sem chamar Anthropic/OpenAI
+  iaSimulada: process.env.IA_SIMULADA === '1' && !producao,
   // Em desenvolvimento local (http://localhost) o cookie não pode ter o prefixo __Host- nem Secure.
   cookieSeguro: process.env.COOKIE_INSEGURO_LOCAL !== '1',
 };

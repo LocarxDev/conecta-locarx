@@ -13,14 +13,18 @@ import * as emBreve from './telas/em-breve.js';
 import * as whatsapp from './telas/whatsapp.js';
 import * as respostasRapidas from './telas/respostas.js';
 import * as conversas from './telas/conversas.js';
+import * as assistenteTela from './telas/assistente.js';
+import * as baseTela from './telas/base.js';
+import * as redeTela from './telas/rede.js';
+import * as reservasTela from './telas/reservas.js';
 
 const app = document.getElementById('app');
 const estado = { usuario: null, destino: null };
 
 const MODULOS_LOJA = [
-  { rota: 'em-breve/clientes', rotulo: 'Clientes', icone: 'clientes' },
-  { rota: 'em-breve/funil', rotulo: 'Funil de vendas', icone: 'funil' },
-  { rota: 'em-breve/reservas', rotulo: 'Reservas', icone: 'reservas' },
+  { rota: 'em-breve/clientes', rotulo: 'Clientes', icone: 'clientes', travado: true },
+  { rota: 'em-breve/funil', rotulo: 'Funil de vendas', icone: 'funil', travado: true },
+  { rota: 'reservas', rotulo: 'Reservas', icone: 'reservas' },
 ];
 
 function menuDoPerfil(perfilUsuario) {
@@ -29,7 +33,7 @@ function menuDoPerfil(perfilUsuario) {
       { grupo: 'Rede LocarX' },
       { rota: 'inicio', rotulo: 'Visão da rede', icone: 'inicio' },
       { rota: 'lojas', rotulo: 'Lojas', icone: 'lojas' },
-      { rota: 'em-breve/base-rede', rotulo: 'Base da rede', icone: 'assistente', travado: true },
+      { rota: 'rede', rotulo: 'Base da rede', icone: 'assistente' },
       { rota: 'em-breve/relatorios-rede', rotulo: 'Relatórios', icone: 'relatorios', travado: true },
     ];
   }
@@ -37,18 +41,20 @@ function menuDoPerfil(perfilUsuario) {
     { grupo: 'Atendimento' },
     { rota: 'inicio', rotulo: 'Início', icone: 'inicio' },
     { rota: 'conversas', rotulo: 'Conversas', icone: 'conversas', contador: true },
-    ...MODULOS_LOJA.map((m) => ({ ...m, travado: true })),
+    ...MODULOS_LOJA,
   ];
   if (perfilUsuario === 'dono') {
     itens.push(
       { grupo: 'Gestão da loja' },
       { rota: 'whatsapp', rotulo: 'WhatsApp da loja', icone: 'whatsapp' },
       { rota: 'respostas', rotulo: 'Respostas rápidas', icone: 'editar' },
-      { rota: 'em-breve/assistente', rotulo: 'Assistente virtual', icone: 'assistente', travado: true },
+      { rota: 'assistente', rotulo: 'Assistente virtual', icone: 'assistente' },
+      { rota: 'base', rotulo: 'Base de conhecimento', icone: 'info' },
       { rota: 'em-breve/relatorios', rotulo: 'Relatórios', icone: 'relatorios', travado: true },
       { rota: 'atendentes', rotulo: 'Atendentes', icone: 'atendentes' },
     );
   }
+  if (perfilUsuario === 'atendente') itens.push({ grupo: 'Apoio' }, { rota: 'base', rotulo: 'Base de conhecimento', icone: 'info' });
   return itens;
 }
 
@@ -66,6 +72,10 @@ const ROTAS = [
   { padrao: /^conversas(?:\/([\w-]+))?$/, tela: conversas.montar, perfis: ['dono', 'atendente'] },
   { padrao: /^whatsapp$/, tela: whatsapp.montar, perfis: ['dono'] },
   { padrao: /^respostas$/, tela: respostasRapidas.montar, perfis: ['dono'] },
+  { padrao: /^assistente$/, tela: assistenteTela.montar, perfis: ['dono'] },
+  { padrao: /^base$/, tela: baseTela.montar, perfis: ['dono', 'atendente'] },
+  { padrao: /^rede$/, tela: redeTela.montar, perfis: ['admin', 'matriz'] },
+  { padrao: /^reservas$/, tela: reservasTela.montar, perfis: ['dono', 'atendente'] },
   { padrao: /^em-breve\/([\w-]+)$/, tela: emBreve.montar },
 ];
 

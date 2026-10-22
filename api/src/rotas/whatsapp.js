@@ -5,6 +5,7 @@ import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js
 import { evolution, lerMensagemEvolution } from '../servicos/canais/evolution.js';
 import { iguais } from '../servicos/seguranca.js';
 import { rota, erro, exigirPerfil, registrar } from '../http.js';
+import { estadoInicial, agendar, dentroDoHorario } from '../servicos/ia/assistente.js';
 
 export const canal = Router();
 export const webhooks = Router();
@@ -130,33 +131,69 @@ webhooks.post('/evolution/:segredo', rota(async (req, res) => {
 const PREVIA = { imagem: 'Foto', audio: 'Áudio', video: 'Vídeo', documento: 'Documento', localizacao: 'Localização', figurinha: 'Figurinha', outro: 'Mensagem' };
 export const previaDe = (tipo, texto) => (texto ? String(texto).slice(0, 140) : (PREVIA[tipo] || 'Mensagem'));
 
+const PALAVRAS_SAIR = /^\s*(parar|sair|stop|cancelar mensagens|não quero mais mensagens|nao quero mais mensagens)\s*[.!]?\s*$/i;
+
 async function registrarRecebida(lojaId, m) {
-  await comoSistema(async (c) => {
+  const r = await comoSistema(async (c) => {
     if (m.externoId) {
       const ja = (await c.query('SELECT 1 FROM mensagens WHERE loja_id = $1 AND externo_id = $2', [lojaId, m.externoId])).rowCount;
-      if (ja) return; // repetida ou eco de mensagem enviada pelo próprio Conecta
+      if (ja) return null; // repetida ou eco de mensagem enviada pelo próprio Conecta
     }
-    const contato = (await c.query(
-      `INSERT INTO contatos (loja_id, telefone, nome) VALUES ($1, $2, $3)
-       ON CONFLICT (loja_id, telefone) DO UPDATE SET nome = coalesce(contatos.nome, EXCLUDED.nome)
-       RETURNING id`, [lojaId, m.telefone, m.nome])).rows[0];
     const entrada = !m.deMim;
+    const contato = (await c.query(
+      `INSERT INTO contatos (loja_id, telefone, nome, optin_em) VALUES ($1, $2, $3, CASE WHEN $4 THEN now() END)
+       ON CONFLICT (loja_id, telefone) DO UPDATE SET nome = coalesce(contatos.nome, EXCLUDED.nome), optin_em = coalesce(contatos.optin_em, EXCLUDED.optin_em)
+       RETURNING id, optout`, [lojaId, m.telefone, m.nome, entrada])).rows[0];
+    const anterior = (await c.query('SELECT id, estado FROM conversas WHERE loja_id = $1 AND contato_id = $2', [lojaId, contato.id])).rows[0];
+    // conversa nova ou reaberta: vai para o assistente (se estiver ligado e no horário) ou para a equipe
+    const reabrir = entrada && (!anterior || anterior.estado === 'encerrada');
+    const estadoNovo = reabrir ? await estadoInicial(c, lojaId) : null;
     const conversa = (await c.query(
-      `INSERT INTO conversas (loja_id, contato_id, estado, nao_lidas, ultima_previa, ultima_mensagem_em, ultima_do_cliente)
-       VALUES ($1, $2, 'aguardando', $3, $4, $5, $6)
+      `INSERT INTO conversas (loja_id, contato_id, estado, nao_lidas, ultima_previa, ultima_mensagem_em, ultima_do_cliente, humano_respondeu_em)
+       VALUES ($1, $2, coalesce($6::text, 'aguardando'), $3, $4, now(), CASE WHEN $5::boolean THEN now() END, CASE WHEN $5::boolean THEN NULL ELSE now() END)
        ON CONFLICT (loja_id, contato_id) DO UPDATE SET
          nao_lidas = conversas.nao_lidas + $3,
-         estado = CASE WHEN $7 AND conversas.estado = 'encerrada' THEN 'aguardando' ELSE conversas.estado END,
-         atendente_id = CASE WHEN $7 AND conversas.estado = 'encerrada' THEN NULL ELSE conversas.atendente_id END,
-         ultima_previa = EXCLUDED.ultima_previa, ultima_mensagem_em = EXCLUDED.ultima_mensagem_em,
-         ultima_do_cliente = coalesce(EXCLUDED.ultima_do_cliente, conversas.ultima_do_cliente),
+         estado = CASE WHEN $6::text IS NOT NULL THEN $6::text
+                       WHEN NOT $5::boolean AND conversas.estado = 'assistente' THEN 'humano'
+                       ELSE conversas.estado END,
+         atendente_id = CASE WHEN $6::text IS NOT NULL THEN NULL ELSE conversas.atendente_id END,
+         ultima_previa = EXCLUDED.ultima_previa, ultima_mensagem_em = now(),
+         ultima_do_cliente = CASE WHEN $5::boolean THEN now() ELSE conversas.ultima_do_cliente END,
+         humano_respondeu_em = CASE WHEN $5::boolean THEN conversas.humano_respondeu_em ELSE now() END,
+         bot_respondeu_em = CASE WHEN $6::text IS NOT NULL THEN NULL ELSE conversas.bot_respondeu_em END,
          atualizada_em = now()
-       RETURNING id`,
-      [lojaId, contato.id, entrada ? 1 : 0, previaDe(m.tipo, m.texto), m.quando, entrada ? m.quando : null, entrada])).rows[0];
+       RETURNING id, estado, ausencia_enviada_em`,
+      [lojaId, contato.id, entrada ? 1 : 0, previaDe(m.tipo, m.texto), entrada, estadoNovo])).rows[0];
     await c.query(
       `INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto, midia, externo_id, criada_em)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
        ON CONFLICT (loja_id, externo_id) WHERE externo_id IS NOT NULL DO NOTHING`,
       [conversa.id, lojaId, entrada ? 'entrada' : 'saida', entrada ? 'cliente' : 'atendente', m.tipo, m.texto, m.midia, m.externoId]);
+    // cliente pediu para não receber mais mensagens ativas (lembretes, avisos)
+    if (entrada && m.tipo === 'texto' && PALAVRAS_SAIR.test(m.texto || '') && !contato.optout) {
+      await c.query('UPDATE contatos SET optout = true, atualizado_em = now() WHERE id = $1', [contato.id]);
+      await c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto) VALUES ($1, $2, 'interna', 'sistema', 'evento', 'Cliente pediu para não receber mensagens automáticas')`, [conversa.id, lojaId]);
+    }
+    // fora do horário com "mensagem de ausência": manda uma vez a cada 12 h
+    let ausencia = null;
+    if (entrada && conversa.estado === 'aguardando') {
+      const a = (await c.query('SELECT * FROM assistentes WHERE loja_id = $1', [lojaId])).rows[0];
+      if (a?.ativo && a.fora_horario === 'mensagem' && a.msg_ausencia && !dentroDoHorario(a.horario)
+          && (!conversa.ausencia_enviada_em || Date.now() - new Date(conversa.ausencia_enviada_em) > 12 * 3_600_000)) {
+        await c.query('UPDATE conversas SET ausencia_enviada_em = now() WHERE id = $1', [conversa.id]);
+        ausencia = a.msg_ausencia;
+      }
+    }
+    return { conversa, ausencia };
   });
+  if (!r) return;
+  if (r.conversa.estado === 'assistente' && !m.deMim) agendar(r.conversa.id);
+  if (r.ausencia) await enviarAusencia(lojaId, r.conversa.id, m.telefone, r.ausencia).catch((e) => console.error('[ausencia]', e.message));
+}
+
+async function enviarAusencia(lojaId, conversaId, telefone, texto) {
+  const canal = await comoSistema(async (c) => (await c.query('SELECT * FROM canais WHERE loja_id = $1', [lojaId])).rows[0]);
+  if (!canal || canal.status !== 'conectado') return;
+  const externoId = await provedores[canal.provedor].enviarTexto(canal.instancia, telefone, texto);
+  await comoSistema((c) => c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto, externo_id) VALUES ($1, $2, 'saida', 'assistente', 'texto', $3, $4)`, [conversaId, lojaId, texto, externoId]));
 }

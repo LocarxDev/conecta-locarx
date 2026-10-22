@@ -1,0 +1,30 @@
+// IA SIMULADA — só para testes no computador (IA_SIMULADA=1, nunca em produção).
+// Imita o comportamento do assistente usando as mesmas ferramentas, sem chamar Anthropic/OpenAI.
+export async function simularIa({ historico, ferramentas }) {
+  const usadas = [];
+  const usar = async (nome, args) => { usadas.push(nome); const f = ferramentas.find((x) => x.nome === nome); return f ? f.executar(args) : 'sem ferramenta'; };
+  const ultima = [...historico].reverse().find((h) => h.papel === 'cliente')?.texto || '';
+  const t = ultima.toLowerCase();
+  let texto;
+  if (/confirmo/.test(t) && ferramentas.some((f) => f.nome === 'criar_reserva')) {
+    const d = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10), e = new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10);
+    const per = { data_retirada: d, hora_retirada: '10:00', data_devolucao: e, hora_devolucao: '10:00' };
+    const preco = await usar('calcular_preco', { fleet_id: 102, ...per, protecoes: ['PROTECAO_X'] });
+    const r = await usar('criar_reserva', { fleet_id: 102, ...per, protecoes: ['PROTECAO_X'], nome: 'Ana Paula Souza', cpf: '529.982.247-25', cnh: '01234567890', email: 'ana@exemplo.com', cliente_confirmou: true });
+    await usar('chamar_atendente', { motivo: 'reserva criada' });
+    texto = `Reserva feita! Código ${r.codigo}. Total ${preco.total}, pagamento na loja.`;
+  } else if (!t.includes('?') && /reserv|carro|alugar/.test(t) && ferramentas.some((f) => f.nome === 'consultar_disponibilidade')) {
+    const d = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10), e = new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10);
+    const r = await usar('consultar_disponibilidade', { data_retirada: d, hora_retirada: '10:00', data_devolucao: e, hora_devolucao: '10:00' }).catch((x) => x.message);
+    texto = `Tenho estas opções: ${typeof r === 'string' ? r : r.map((g) => `${g.grupo} (${g.diaria}/dia)`).join(', ')}`;
+  } else if (t.includes('?') || /cau[cç][aã]o|document|cnh|idade|km|quilometr/.test(t)) {
+    const r = await usar('buscar_informacoes', { pergunta: ultima });
+    if (String(r).startsWith('Nada encontrado')) {
+      await usar('chamar_atendente', { motivo: 'informação não encontrada', sem_resposta: true, pergunta: ultima });
+      texto = 'Vou confirmar essa informação com um atendente da loja, só um instante.';
+    } else texto = 'Pelas nossas regras: ' + String(r).replace(/^### .*\n/, '').slice(0, 300);
+  } else {
+    texto = 'Olá! Sou o assistente virtual da LocarX. Posso ajudar com reservas e dúvidas sobre a locação.';
+  }
+  return { texto, uso: { entrada: 100, saida: 30 }, usadas };
+}

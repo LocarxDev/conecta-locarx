@@ -19,6 +19,8 @@ function formLoja(loja = {}) {
         <option value="">Escolha</option>${UFS.map((uf) => html`<option ${uf === loja.uf ? 'selected' : ''}>${uf}</option>`)}
       </select></div>
     </div>
+    <div class="filtros"><button type="button" class="btn btn-contorno" id="buscar-filiais">Buscar filiais no portal LocarX</button><span class="sub" id="filiais-info"></span></div>
+    <div class="campo" id="campo-filiais" hidden><label for="l-filial">Filial do portal</label><select id="l-filial"></select></div>
     <div class="form-linha">
       <div class="campo"><label for="l-branch">Filial no portal (branchId)</label><input id="l-branch" name="branchId" inputmode="numeric" value="${f.branchId ?? ''}" placeholder="Ex.: 5" required></div>
       <div class="campo"><label for="l-code">Código da filial</label><input id="l-code" name="branchCode" value="${f.branchCode || ''}" placeholder="Ex.: SSA1" required></div>
@@ -37,6 +39,25 @@ function abrirFormLoja(loja, aoSalvar) {
   });
   const form = $('#form-loja', modal.el);
   form.elements.branchCode.addEventListener('input', (e) => { e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
+  let filiais = [];
+  $('#buscar-filiais', form).addEventListener('click', (e) => comBotao(e.currentTarget, async () => {
+    try {
+      filiais = await api.filiaisLocarx();
+      const sel = $('#l-filial', form);
+      render(sel, html`<option value="">Escolha a filial</option>${filiais.map((f, i) => html`<option value="${i}">${f.nome} · ${f.cidade}/${f.uf} · ${f.codigo} (${f.branchId})</option>`)}`);
+      $('#campo-filiais', form).hidden = false;
+      $('#filiais-info', form).textContent = `${filiais.length} filiais encontradas`;
+    } catch (err) { avisar(err.message, 'erro'); }
+  }));
+  $('#l-filial', form).addEventListener('change', (e) => {
+    const f = filiais[Number(e.target.value)];
+    if (!f) return;
+    form.elements.branchId.value = f.branchId; form.elements.branchCode.value = String(f.codigo || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!form.elements.cidade.value) form.elements.cidade.value = f.cidade || '';
+    if (f.uf && !form.elements.uf.value) form.elements.uf.value = f.uf;
+    form.elements.tipo.value = /aero|airport/i.test(f.tipo || '') ? 'Aeroporto' : 'Cidade';
+    if (!form.elements.nome.value) form.elements.nome.value = `LocarX ${f.nome}`;
+  });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const d = dadosDoForm(form);
@@ -143,6 +164,7 @@ export async function detalhe(alvo, ctx) {
     <div class="cabecalho-pagina">
       <div class="titulos"><h1>${loja.nome}</h1><p>${loja.cidade} · ${loja.uf} · cadastrada em ${data(loja.criadaEm)}</p></div>
       ${ehAdmin ? html`<div class="filtros">
+        <button class="btn btn-contorno" id="testar-api">Testar API LocarX</button>
         <button class="btn btn-contorno" id="editar-loja">${icone('editar')}Editar</button>
         <button class="btn ${loja.ativa ? 'btn-perigo' : 'btn-primario'}" id="situacao-loja">${loja.ativa ? 'Desativar loja' : 'Reativar loja'}</button>
       </div>` : ''}
@@ -161,6 +183,18 @@ export async function detalhe(alvo, ctx) {
 
   painelEquipe($('#equipe-loja', alvo), { ctx, lojaId, podeGerir: ehAdmin, podeConvidarDono: ehAdmin, titulo: 'Equipe da loja' });
 
+  $('#testar-api', alvo)?.addEventListener('click', (e) => comBotao(e.currentTarget, async () => {
+    try {
+      const r = await api.testarLocarx(loja.filial.branchId);
+      abrirModal({
+        titulo: 'Teste da API LocarX',
+        corpo: html`<p class="sub">Filial ${loja.filial.branchId}. Mostra o que o portal respondeu em cada consulta, para conferir os campos.</p>
+          ${Object.entries(r).map(([nome, x]) => html`<div class="diag"><div class="filtros"><strong>${nome}</strong>${x.ok ? html`<span class="selo ok">OK</span>` : html`<span class="selo erro">Erro ${x.status || ''}</span>`}</div>
+            <pre class="pre-diag">${x.ok ? x.amostra : `${x.erro}\n${x.resposta || ''}`}</pre></div>`)}`,
+        rodape: html`<button class="btn btn-primario" data-fechar>Fechar</button>`,
+      });
+    } catch (err) { avisar(err.message, 'erro'); }
+  }));
   $('#editar-loja', alvo)?.addEventListener('click', () => abrirFormLoja(loja, () => ctx.navegar(`lojas/${lojaId}`)));
   $('#situacao-loja', alvo)?.addEventListener('click', async () => {
     if (loja.ativa && !(await confirmar({ titulo: 'Desativar loja', texto: `A equipe da ${loja.nome} perde o acesso ao Conecta e o assistente para de atender. Os dados ficam guardados e a loja pode ser reativada.`, botao: 'Desativar loja', perigo: true }))) return;

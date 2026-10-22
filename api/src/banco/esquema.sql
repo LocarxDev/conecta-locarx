@@ -216,3 +216,251 @@ BEGIN
 END $$;
 DROP POLICY IF EXISTS canais_rede ON canais;
 CREATE POLICY canais_rede ON canais FOR SELECT USING (ctx_perfil() IN ('admin', 'matriz'));
+
+-- =====================================================================
+-- ETAPA 3 — Assistente virtual e base de conhecimento
+-- =====================================================================
+
+-- Configuração da rede (uma linha só): orientações gerais e modelo padrão do assistente
+CREATE TABLE IF NOT EXISTS rede_config (
+  id                 boolean PRIMARY KEY DEFAULT true CHECK (id),
+  orientacoes_rede   text NOT NULL DEFAULT '',
+  modelo_assistente  jsonb NOT NULL DEFAULT '{}'::jsonb,
+  atualizado_em      timestamptz NOT NULL DEFAULT now()
+);
+INSERT INTO rede_config (id) VALUES (true) ON CONFLICT DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS assistentes (
+  loja_id              uuid PRIMARY KEY REFERENCES lojas(id) ON DELETE CASCADE,
+  ativo                boolean NOT NULL DEFAULT false,
+  nome                 text NOT NULL DEFAULT 'Assistente LocarX' CHECK (length(nome) BETWEEN 2 AND 60),
+  instrucoes           text NOT NULL DEFAULT '' CHECK (length(instrucoes) <= 8000),
+  boas_vindas          text NOT NULL DEFAULT '' CHECK (length(boas_vindas) <= 1000),
+  msg_ausencia         text NOT NULL DEFAULT '' CHECK (length(msg_ausencia) <= 1000),
+  msg_repasse          text NOT NULL DEFAULT '' CHECK (length(msg_repasse) <= 1000),
+  horario              jsonb NOT NULL DEFAULT '{}'::jsonb,
+  fora_horario         text NOT NULL DEFAULT 'assistente' CHECK (fora_horario IN ('assistente', 'mensagem')),
+  palavras_atendente   text[] NOT NULL DEFAULT ARRAY['atendente', 'humano', 'pessoa', 'reclamação', 'reclamacao'],
+  retorno_horas        integer NOT NULL DEFAULT 2 CHECK (retorno_horas BETWEEN 0 AND 72),
+  provedor             text NOT NULL DEFAULT 'anthropic' CHECK (provedor IN ('anthropic', 'openai')),
+  modelo               text NOT NULL DEFAULT 'claude-haiku-5-5' CHECK (length(modelo) <= 80),
+  chave_cifrada        text,
+  chave_final          text,
+  chave_audio_cifrada  text,
+  limite_diario        integer NOT NULL DEFAULT 400 CHECK (limite_diario BETWEEN 0 AND 100000),
+  atualizado_em        timestamptz NOT NULL DEFAULT now()
+);
+
+-- busca em português ignorando acentos (caução = caucao)
+CREATE EXTENSION IF NOT EXISTS unaccent;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_ts_config WHERE cfgname = 'pt_sem_acento') THEN
+    CREATE TEXT SEARCH CONFIGURATION pt_sem_acento (COPY = portuguese);
+    ALTER TEXT SEARCH CONFIGURATION pt_sem_acento ALTER MAPPING FOR hword, hword_part, word WITH unaccent, portuguese_stem;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS conhecimento (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  escopo        text NOT NULL CHECK (escopo IN ('rede', 'loja')),
+  loja_id       uuid REFERENCES lojas(id) ON DELETE CASCADE,
+  titulo        text NOT NULL CHECK (length(titulo) BETWEEN 2 AND 200),
+  conteudo      text NOT NULL CHECK (length(conteudo) BETWEEN 2 AND 6000),
+  status        text NOT NULL DEFAULT 'pendente' CHECK (status IN ('pendente', 'aprovado', 'arquivado')),
+  criado_por    uuid REFERENCES usuarios(id) ON DELETE SET NULL,
+  aprovado_por  uuid REFERENCES usuarios(id) ON DELETE SET NULL,
+  criado_em     timestamptz NOT NULL DEFAULT now(),
+  atualizado_em timestamptz NOT NULL DEFAULT now(),
+  busca         tsvector GENERATED ALWAYS AS (
+                  setweight(to_tsvector('pt_sem_acento'::regconfig, coalesce(titulo, '')), 'A') ||
+                  setweight(to_tsvector('pt_sem_acento'::regconfig, coalesce(conteudo, '')), 'B')) STORED,
+  CHECK ((escopo = 'rede' AND loja_id IS NULL) OR (escopo = 'loja' AND loja_id IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS conhecimento_busca ON conhecimento USING gin (busca);
+CREATE INDEX IF NOT EXISTS conhecimento_loja ON conhecimento (loja_id, status);
+
+CREATE TABLE IF NOT EXISTS sinonimos (
+  id      uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  termos  text[] NOT NULL CHECK (array_length(termos, 1) BETWEEN 2 AND 20)
+);
+INSERT INTO sinonimos (termos)
+SELECT t FROM (VALUES
+  (ARRAY['caução', 'caucao', 'calção', 'depósito', 'deposito', 'garantia', 'pré-autorização']),
+  (ARRAY['cnh', 'carteira', 'habilitação', 'habilitacao', 'carteira de motorista']),
+  (ARRAY['condutor', 'motorista', 'quem vai dirigir']),
+  (ARRAY['proteção', 'protecao', 'seguro', 'cobertura']),
+  (ARRAY['retirada', 'retirar', 'pegar o carro', 'buscar o carro']),
+  (ARRAY['devolução', 'devolucao', 'devolver', 'entregar o carro']),
+  (ARRAY['diária', 'diaria', 'diárias', 'dia de aluguel']),
+  (ARRAY['quilometragem', 'km', 'quilômetros', 'kilometragem'])
+) AS v(t) WHERE NOT EXISTS (SELECT 1 FROM sinonimos);
+
+-- Perguntas que o assistente não soube responder (viram conteúdo da base)
+CREATE TABLE IF NOT EXISTS perguntas_sem_resposta (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  loja_id      uuid NOT NULL REFERENCES lojas(id) ON DELETE CASCADE,
+  conversa_id  uuid REFERENCES conversas(id) ON DELETE SET NULL,
+  pergunta     text NOT NULL CHECK (length(pergunta) <= 1000),
+  resolvida    boolean NOT NULL DEFAULT false,
+  criada_em    timestamptz NOT NULL DEFAULT now()
+);
+
+-- Uso da IA (custos e limite diário)
+CREATE TABLE IF NOT EXISTS uso_ia (
+  id           bigserial PRIMARY KEY,
+  loja_id      uuid NOT NULL REFERENCES lojas(id) ON DELETE CASCADE,
+  conversa_id  uuid REFERENCES conversas(id) ON DELETE SET NULL,
+  provedor     text NOT NULL,
+  modelo       text NOT NULL,
+  tokens_in    integer NOT NULL DEFAULT 0,
+  tokens_out   integer NOT NULL DEFAULT 0,
+  ferramentas  text[],
+  ok           boolean NOT NULL DEFAULT true,
+  criado_em    timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS uso_ia_loja ON uso_ia (loja_id, criado_em DESC);
+
+ALTER TABLE conversas ADD COLUMN IF NOT EXISTS bot_respondeu_em timestamptz;
+ALTER TABLE conversas ADD COLUMN IF NOT EXISTS humano_respondeu_em timestamptz;
+ALTER TABLE conversas ADD COLUMN IF NOT EXISTS ausencia_enviada_em timestamptz;
+ALTER TABLE mensagens ADD COLUMN IF NOT EXISTS transcricao text;
+
+-- =====================================================================
+-- ETAPA 4 — Reservas
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS reservas (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  loja_id       uuid NOT NULL REFERENCES lojas(id) ON DELETE CASCADE,
+  contato_id    uuid REFERENCES contatos(id) ON DELETE SET NULL,
+  conversa_id   uuid REFERENCES conversas(id) ON DELETE SET NULL,
+  codigo        text,
+  status        text NOT NULL DEFAULT 'confirmada',
+  retirada      timestamptz,
+  devolucao     timestamptz,
+  grupo         text,
+  valor         numeric(12, 2),
+  origem        text NOT NULL DEFAULT 'assistente' CHECK (origem IN ('assistente', 'equipe', 'portal')),
+  detalhes      jsonb,
+  criada_em     timestamptz NOT NULL DEFAULT now(),
+  atualizada_em timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS reservas_codigo ON reservas (loja_id, codigo) WHERE codigo IS NOT NULL;
+CREATE INDEX IF NOT EXISTS reservas_retirada ON reservas (loja_id, retirada);
+
+-- =====================================================================
+-- ETAPA 5 — CRM
+-- =====================================================================
+ALTER TABLE contatos ADD COLUMN IF NOT EXISTS email text CHECK (email IS NULL OR length(email) <= 254);
+ALTER TABLE contatos ADD COLUMN IF NOT EXISTS cpf_cifrado text;
+ALTER TABLE contatos ADD COLUMN IF NOT EXISTS cpf_final text;
+ALTER TABLE contatos ADD COLUMN IF NOT EXISTS etiquetas text[] NOT NULL DEFAULT '{}';
+ALTER TABLE contatos ADD COLUMN IF NOT EXISTS observacoes text CHECK (observacoes IS NULL OR length(observacoes) <= 4000);
+ALTER TABLE contatos ADD COLUMN IF NOT EXISTS optout boolean NOT NULL DEFAULT false;
+ALTER TABLE contatos ADD COLUMN IF NOT EXISTS optin_em timestamptz;
+ALTER TABLE contatos ADD COLUMN IF NOT EXISTS atualizado_em timestamptz NOT NULL DEFAULT now();
+
+CREATE TABLE IF NOT EXISTS oportunidades (
+  id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  loja_id        uuid NOT NULL REFERENCES lojas(id) ON DELETE CASCADE,
+  contato_id     uuid NOT NULL REFERENCES contatos(id) ON DELETE CASCADE,
+  conversa_id    uuid REFERENCES conversas(id) ON DELETE SET NULL,
+  reserva_id     uuid REFERENCES reservas(id) ON DELETE SET NULL,
+  etapa          text NOT NULL DEFAULT 'novo' CHECK (etapa IN ('novo', 'cotacao', 'reserva', 'retirada', 'concluido', 'perdido')),
+  valor_previsto numeric(12, 2),
+  motivo_perda   text CHECK (motivo_perda IS NULL OR length(motivo_perda) <= 200),
+  responsavel_id uuid REFERENCES usuarios(id) ON DELETE SET NULL,
+  criada_em      timestamptz NOT NULL DEFAULT now(),
+  atualizada_em  timestamptz NOT NULL DEFAULT now(),
+  fechada_em     timestamptz
+);
+CREATE INDEX IF NOT EXISTS oportunidades_loja ON oportunidades (loja_id, etapa);
+CREATE UNIQUE INDEX IF NOT EXISTS oportunidades_aberta ON oportunidades (contato_id) WHERE etapa NOT IN ('concluido', 'perdido');
+
+CREATE TABLE IF NOT EXISTS tarefas (
+  id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  loja_id        uuid NOT NULL REFERENCES lojas(id) ON DELETE CASCADE,
+  contato_id     uuid REFERENCES contatos(id) ON DELETE CASCADE,
+  conversa_id    uuid REFERENCES conversas(id) ON DELETE SET NULL,
+  titulo         text NOT NULL CHECK (length(titulo) BETWEEN 2 AND 200),
+  vence_em       timestamptz NOT NULL,
+  responsavel_id uuid REFERENCES usuarios(id) ON DELETE SET NULL,
+  feita_em       timestamptz,
+  automatica     boolean NOT NULL DEFAULT false,
+  criada_em      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS tarefas_loja ON tarefas (loja_id, feita_em, vence_em);
+
+-- Modelos de mensagem (mensagens ativas e automações)
+CREATE TABLE IF NOT EXISTS modelos_mensagem (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  loja_id     uuid NOT NULL REFERENCES lojas(id) ON DELETE CASCADE,
+  chave       text NOT NULL CHECK (chave ~ '^[a-z0-9_]{2,40}$'),
+  nome        text NOT NULL CHECK (length(nome) BETWEEN 2 AND 80),
+  texto       text NOT NULL CHECK (length(texto) BETWEEN 2 AND 1000),
+  automatico  boolean NOT NULL DEFAULT false,
+  ativo       boolean NOT NULL DEFAULT true,
+  UNIQUE (loja_id, chave)
+);
+
+CREATE TABLE IF NOT EXISTS automacoes_enviadas (
+  reserva_id  uuid NOT NULL REFERENCES reservas(id) ON DELETE CASCADE,
+  tipo        text NOT NULL,
+  enviada_em  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (reserva_id, tipo)
+);
+
+ALTER TABLE assistentes ADD COLUMN IF NOT EXISTS silencio_inicio smallint NOT NULL DEFAULT 21 CHECK (silencio_inicio BETWEEN 0 AND 23);
+ALTER TABLE assistentes ADD COLUMN IF NOT EXISTS silencio_fim smallint NOT NULL DEFAULT 8 CHECK (silencio_fim BETWEEN 0 AND 23);
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON assistentes, conhecimento, perguntas_sem_resposta, reservas, oportunidades, tarefas, modelos_mensagem, automacoes_enviadas TO conecta_app;
+GRANT SELECT, INSERT ON uso_ia TO conecta_app;
+GRANT USAGE ON SEQUENCE uso_ia_id_seq TO conecta_app;
+GRANT SELECT ON sinonimos, rede_config TO conecta_app;
+GRANT INSERT, UPDATE, DELETE ON sinonimos, rede_config TO conecta_app;
+
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['assistentes', 'perguntas_sem_resposta', 'uso_ia', 'reservas', 'oportunidades', 'tarefas', 'modelos_mensagem'] LOOP
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %I', t || '_loja', t);
+    EXECUTE format($p$CREATE POLICY %I ON %I FOR ALL
+      USING (ctx_perfil() = 'sistema' OR loja_id = ctx_loja())
+      WITH CHECK (ctx_perfil() = 'sistema' OR loja_id = ctx_loja())$p$, t || '_loja', t);
+  END LOOP;
+END $$;
+-- relatórios da rede: administração e matriz leem números (não o conteúdo das conversas)
+DROP POLICY IF EXISTS assistentes_rede ON assistentes;
+CREATE POLICY assistentes_rede ON assistentes FOR SELECT USING (ctx_perfil() IN ('admin', 'matriz'));
+DROP POLICY IF EXISTS reservas_rede ON reservas;
+CREATE POLICY reservas_rede ON reservas FOR SELECT USING (ctx_perfil() IN ('admin', 'matriz'));
+DROP POLICY IF EXISTS oportunidades_rede ON oportunidades;
+CREATE POLICY oportunidades_rede ON oportunidades FOR SELECT USING (ctx_perfil() IN ('admin', 'matriz'));
+DROP POLICY IF EXISTS uso_ia_rede ON uso_ia;
+CREATE POLICY uso_ia_rede ON uso_ia FOR SELECT USING (ctx_perfil() IN ('admin', 'matriz'));
+
+-- base de conhecimento: a da rede todos leem; só administração e matriz alteram. A da loja é da loja.
+ALTER TABLE conhecimento ENABLE ROW LEVEL SECURITY;
+ALTER TABLE conhecimento FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS conhecimento_ver ON conhecimento;
+CREATE POLICY conhecimento_ver ON conhecimento FOR SELECT
+  USING (ctx_perfil() = 'sistema' OR escopo = 'rede' OR loja_id = ctx_loja());
+DROP POLICY IF EXISTS conhecimento_alterar ON conhecimento;
+CREATE POLICY conhecimento_alterar ON conhecimento FOR ALL
+  USING (ctx_perfil() = 'sistema' OR (escopo = 'rede' AND ctx_perfil() IN ('admin', 'matriz')) OR (escopo = 'loja' AND loja_id = ctx_loja() AND ctx_perfil() IN ('dono', 'atendente')))
+  WITH CHECK (ctx_perfil() = 'sistema' OR (escopo = 'rede' AND ctx_perfil() IN ('admin', 'matriz')) OR (escopo = 'loja' AND loja_id = ctx_loja() AND ctx_perfil() IN ('dono', 'atendente')));
+
+ALTER TABLE rede_config ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rede_config FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS rede_config_ver ON rede_config;
+CREATE POLICY rede_config_ver ON rede_config FOR SELECT USING (true);
+DROP POLICY IF EXISTS rede_config_alterar ON rede_config;
+CREATE POLICY rede_config_alterar ON rede_config FOR UPDATE USING (ctx_perfil() IN ('admin', 'matriz', 'sistema')) WITH CHECK (ctx_perfil() IN ('admin', 'matriz', 'sistema'));
+
+ALTER TABLE sinonimos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sinonimos FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS sinonimos_ver ON sinonimos;
+CREATE POLICY sinonimos_ver ON sinonimos FOR SELECT USING (true);
+DROP POLICY IF EXISTS sinonimos_alterar ON sinonimos;
+CREATE POLICY sinonimos_alterar ON sinonimos FOR ALL USING (ctx_perfil() IN ('admin', 'matriz', 'sistema')) WITH CHECK (ctx_perfil() IN ('admin', 'matriz', 'sistema'));

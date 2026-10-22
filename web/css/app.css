@@ -481,3 +481,30 @@ fieldset.codigo-2fa { border: 0; padding: 0; margin: 0; min-width: 0; }
   .chat-cab .acoes-chat { width: 100%; }
   .balao { max-width: 88%; }
 }
+
+/* =====================================================================
+   ETAPAS 3 e 4 — assistente, base de conhecimento, rede e reservas
+   ===================================================================== */
+.barra-salvar { position: sticky; bottom: 0; display: flex; justify-content: flex-end; padding: 12px 0; background: linear-gradient(transparent, var(--fundo) 40%); }
+.horario-grade { display: grid; gap: 8px; }
+.horario-linha { display: grid; grid-template-columns: 130px auto auto auto; gap: 8px; align-items: center; }
+.horario-linha input[type="time"] { min-height: 38px; padding: 6px 8px; border-radius: var(--raio); border: 1px solid var(--borda-forte); background: var(--superficie); color: var(--texto); font: 400 14px var(--fonte-texto); }
+details summary { cursor: pointer; padding: 6px 0; }
+details[open] summary { margin-bottom: 10px; }
+.teste-chat { display: flex; flex-direction: column; height: 460px; background: var(--fundo); border-radius: 0 0 var(--raio-g) var(--raio-g); overflow: hidden; }
+.teste-chat .mensagens { padding: 14px; }
+.lista-base { display: grid; }
+.item-base { padding: 16px 20px; border-top: 1px solid var(--borda); display: grid; gap: 8px; }
+.item-base:first-child { border-top: 0; }
+.item-base-cab { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.item-base p { color: var(--texto-2); font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.item-base-rodape { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.lista-blocos { display: grid; gap: 12px; max-height: 50vh; overflow-y: auto; }
+.bloco-import { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--borda); border-radius: var(--raio); }
+.bloco-import input, .bloco-import textarea, .campo-inline { width: 100%; padding: 8px 10px; border-radius: var(--raio); border: 1px solid var(--borda-forte); background: var(--superficie); color: var(--texto); font: 400 14px var(--fonte-texto); }
+.campo-inline { flex: 1 1 260px; min-height: 40px; }
+.lista-sinonimos { display: flex; flex-wrap: wrap; gap: 8px; }
+.grupo-sin { display: inline-flex; align-items: center; gap: 4px; padding: 4px 4px 4px 12px; border-radius: 99px; background: var(--superficie-2); font-size: 13px; }
+.grupo-sin .btn { width: 28px; min-height: 28px; }
+.pre-diag { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 ui-monospace, Menlo, monospace; background: var(--superficie-2); padding: 10px; border-radius: var(--raio); max-height: 220px; overflow-y: auto; margin: 6px 0 12px; }
+@media (max-width: 480px) { .horario-linha { grid-template-columns: 1fr auto auto auto; } }
