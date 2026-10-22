@@ -1,0 +1,19 @@
+# Segredos — nunca sobem para o GitHub
+.env
+.env.*
+!.env.exemplo
+*.pem
+*.key
+
+# Dependências e builds
+node_modules/
+dist/
+coverage/
+.netlify/
+
+# Sistema / editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
