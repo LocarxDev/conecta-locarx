@@ -1,100 +1,106 @@
 # Conecta LocarX
 
-Plataforma de atendimento e CRM da rede LocarX: assistente virtual no WhatsApp, CRM por loja e reservas direto no portal LocarX.
+Plataforma de atendimento e CRM da rede LocarX: assistente virtual com IA no WhatsApp, CRM por loja e reservas direto no portal LocarX.
 
 | Pasta | O que é | Onde roda |
 | --- | --- | --- |
-| `web/` | Front-end (HTML, CSS, JS) | Netlify |
+| `web/` | Front-end (HTML, CSS, JS, sem build) | Netlify |
 | `api/` | Back-end (Node.js + Express) | Railway |
-| banco | PostgreSQL | Railway |
+| `evolution/` | Variáveis da Evolution API (WhatsApp) | Railway |
+| bancos | PostgreSQL do Conecta + PostgreSQL e Redis da Evolution | Railway |
 
-**Etapas prontas: 1 (base) e 2 (WhatsApp e caixa de conversas).** Lojas, acessos, login com verificação em 2 etapas, equipe, visual LocarX, conexão do WhatsApp pela Evolution API e atendimento das conversas.
+**Todas as 6 etapas estão prontas:** base (lojas, acessos, 2 etapas), WhatsApp e caixa de conversas, assistente virtual com IA e base de conhecimento, reservas pela API LocarX (LocarX Tools / MCP), CRM (clientes, funil, tarefas, mensagens ativas e automações) e relatórios da loja e da rede.
 
 ---
 
-## Como publicar (ordem obrigatória: Railway primeiro, Netlify depois)
+## Como publicar (ordem: Railway primeiro, Netlify depois)
 
-### 1. Banco de dados no Railway
-1. No Railway, crie um projeto novo: **+ New → Database → PostgreSQL**.
+Tudo fica num projeto só do Railway, com 5 serviços: `Postgres`, `conecta-api`, `Postgres-Evolution`, `Redis` e `evolution-api`.
 
-### 2. API no Railway
-1. No mesmo projeto: **+ New → GitHub Repo → LocarxDev/conecta-locarx**.
-2. Em **Settings → Source → Root Directory**, coloque: `api`
-3. Em **Variables**, cadastre:
+### 1. Banco do Conecta
+**+ New → Database → PostgreSQL** (nome `Postgres`).
+
+### 2. API do Conecta
+1. **+ New → GitHub Repo → LocarxDev/conecta-locarx** e renomeie o serviço para `conecta-api`.
+2. **Settings → Source → Root Directory:** `api`
+3. **Variables:**
 
 | Variável | Valor |
 | --- | --- |
-| `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (selecione na lista do Railway) |
+| `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` |
 | `PGSSL` | `disable` |
-| `CHAVE_CRIPTOGRAFIA` | gere uma chave nova (veja abaixo) — **guarde em lugar seguro; se perder, quem tem 2 etapas precisa reativar** |
+| `NODE_ENV` | `production` |
+| `PORT` | `3000` |
+| `CHAVE_CRIPTOGRAFIA` | gere com `openssl rand -base64 32` — **guarde num lugar seguro**; sem ela, as chaves de IA e as 2 etapas precisam ser cadastradas de novo |
 | `APP_URL` | `https://conecta.locarx.com.br` |
 | `FRONTEND_ORIGINS` | `https://conecta.locarx.com.br,https://adminconecta.locarx.com.br` |
 | `TRUST_PROXY` | `2` |
-| `NODE_ENV` | `production` |
-| `ADMIN_INICIAL_EMAIL` | seu e-mail de acesso |
-| `ADMIN_INICIAL_NOME` | seu nome |
-| `RESEND_API_KEY` | chave do Resend (pode ser a mesma conta do CEO Digital) |
+| `ADMIN_INICIAL_EMAIL` / `ADMIN_INICIAL_NOME` | seu e-mail e nome (cria o primeiro administrador) |
+| `RESEND_API_KEY` | chave do Resend |
 | `EMAIL_FROM` | `Conecta LocarX <nao-responder@send.locarx.com.br>` |
-| `PORT` | `3000` |
-| `EVOLUTION_URL` | `http://${{evolution-api.RAILWAY_PRIVATE_DOMAIN}}:8080` (só depois do passo 2B) |
-| `EVOLUTION_API_KEY` | a mesma chave do `AUTHENTICATION_API_KEY` da Evolution |
+| `EVOLUTION_URL` | `http://${{evolution-api.RAILWAY_PRIVATE_DOMAIN}}:8080` |
+| `EVOLUTION_API_KEY` | a mesma do `AUTHENTICATION_API_KEY` da Evolution |
 | `WEBHOOK_BASE_URL` | `http://${{RAILWAY_PRIVATE_DOMAIN}}:3000` |
-| `WEBHOOK_SEGREDO` | gere com `openssl rand -hex 32` (não precisa colar em nenhum outro lugar) |
+| `WEBHOOK_SEGREDO` | gere com `openssl rand -hex 32` |
+| `LOCARX_API_URL` | `https://api.locarx.com.br/api` (homologação: `https://portalhml.locarx.com.br/api`) |
+| `LOCARX_API_TOKEN` | token exclusivo do Conecta no portal LocarX |
+| `MCP_TOKEN` | opcional: gere com `openssl rand -hex 32` para outros sistemas (Lívia I.A., chat do site) consultarem o LocarX Tools |
 
-Para gerar a `CHAVE_CRIPTOGRAFIA`, rode no terminal: `openssl rand -base64 32`
-(ou no PowerShell: `[Convert]::ToBase64String((1..32 | % {[byte](Get-Random -Max 256)}))`)
+No PowerShell, sem openssl: `[Convert]::ToBase64String((1..32 | % {[byte](Get-Random -Max 256)}))`
 
-4. Em **Settings → Networking → Generate Domain**. Anote o endereço (ex.: `conecta-locarx-production.up.railway.app`).
-5. Abra `https://SEU-ENDERECO.up.railway.app/api/saude` — tem que aparecer `{"ok":true}`.
-6. Nos **Logs** do Railway aparece a linha *Administrador inicial criado*. Se o Resend estiver configurado, o convite chega no seu e-mail; senão, o link aparece no próprio log (vale 72 h, uso único).
+4. **Settings → Networking → Generate Domain** e anote o endereço (ex.: `conecta-api-production.up.railway.app`).
+5. Teste: `https://SEU-ENDERECO/api/saude` → `{"ok":true}`.
+6. Nos **Logs** aparece *Administrador inicial criado*. Com Resend configurado, o convite chega no e-mail; senão, o link aparece no log (vale 72 h, uso único).
 
-### 2B. Evolution API (WhatsApp) no Railway
-A Evolution fica **sem endereço público**: só a API do Conecta fala com ela, pela rede interna do Railway.
-1. No mesmo projeto: **+ New → Database → PostgreSQL** e renomeie o serviço para `Postgres-Evolution` (banco só da Evolution).
-2. **+ New → Database → Redis** (deixe o nome `Redis`).
-3. **+ New → Docker Image** → `evoapicloud/evolution-api:v2.3.7` e renomeie o serviço para `evolution-api`.
-4. Em **Variables → Raw Editor**, cole o conteúdo de `evolution/variaveis-railway.env` e troque `<CHAVE-GERADA>` por uma chave nova (`openssl rand -hex 32`).
-5. Em **Settings → Volumes**, adicione um volume em `/evolution/instances` (guarda a sessão do WhatsApp).
-6. **Não** clique em Generate Domain neste serviço.
-7. Volte na API do Conecta e preencha `EVOLUTION_URL`, `EVOLUTION_API_KEY`, `WEBHOOK_BASE_URL` e `WEBHOOK_SEGREDO` (tabela acima). A API reinicia sozinha.
-8. Teste: entre como dono de uma loja → **WhatsApp da loja → Conectar WhatsApp** → leia o QR code com o celular da loja.
+### 3. Evolution API (WhatsApp)
+Sem endereço público: só a API do Conecta fala com ela, pela rede interna do Railway.
+1. **+ New → Database → PostgreSQL**, renomeie para `Postgres-Evolution`.
+2. **+ New → Database → Redis** (nome `Redis`).
+3. **+ New → Docker Image** → `evoapicloud/evolution-api:v2.3.7`, renomeie para `evolution-api`.
+4. **Variables → Raw Editor:** cole `evolution/variaveis-railway.env` e troque `<CHAVE-GERADA>` (`openssl rand -hex 32`).
+5. **Settings → Volumes:** volume em `/evolution/instances`.
+6. **Não** gere domínio para este serviço.
 
-Se o QR code não aparecer e o log da API mostrar erro de conexão com a Evolution, a rede interna não está passando. Plano B: gere um domínio público na Evolution (a chave de 64 caracteres protege o acesso), use esse endereço `https://…` em `EVOLUTION_URL`, e em `WEBHOOK_BASE_URL` use o endereço público da API do Conecta.
+Se o QR code não aparecer e o log da API mostrar erro de conexão com a Evolution: gere um domínio público na Evolution (a chave protege o acesso), use `https://…` em `EVOLUTION_URL` e o domínio público da API em `WEBHOOK_BASE_URL`.
 
-### 3. Ligar o front à API
-No arquivo `web/netlify.toml`, tire o `#` do bloco `[[redirects]]` do `/api/*` e troque `SEU-BACKEND` pelo endereço do passo 2.4.
-Assim o navegador só enxerga `/api` — o endereço do Railway não aparece no código da página.
+### 4. Ligar o front à API
+Em `web/netlify.toml`, tire o `#` das 5 linhas do bloco `/api/*` e troque `SEU-BACKEND` pelo endereço do passo 2.4.
 
-### 4. Front no Netlify
-1. Arraste a **PASTA `web` inteira** (não os arquivos soltos) em **Netlify → Add new site → Deploy manually**.
-2. Em **Domain management**, adicione `conecta.locarx.com.br` (e depois `adminconecta.locarx.com.br`).
-3. Na Cloudflare, crie os CNAME apontando para o endereço `.netlify.app` do site.
+### 5. Front no Netlify
+1. Arraste a **PASTA `web` inteira** (não os arquivos soltos) em **Add new site → Deploy manually**.
+2. **Domain management:** `conecta.locarx.com.br` e `adminconecta.locarx.com.br`; na Cloudflare, CNAME para o `.netlify.app`.
 
-### 5. Primeiro acesso
-1. Abra o link do convite, crie a senha e entre.
-2. Em **Meu perfil**, ative a verificação em 2 etapas (obrigatória para administração, matriz e donos).
-3. Cadastre as lojas e convide o dono de cada uma.
+### 6. Primeiro uso
+1. Crie a senha pelo convite e ative as **2 etapas** em Meu perfil (obrigatório para administração, matriz e donos).
+2. **Lojas → Cadastrar loja → Buscar filiais no portal LocarX** para escolher a filial; depois **Testar API LocarX** na página da loja.
+3. Convide o dono. Ele conecta o **WhatsApp da loja**, cadastra a chave de IA em **Assistente virtual**, preenche a **Base de conhecimento** e testa o assistente antes de ligar.
+4. Em **Acessos da rede**, convide a Matriz LocarX e, se quiser, crie a **loja de demonstração**.
 
 ---
 
+## Antes de ligar as reservas em produção (importante)
+`GET /locality` e `GET /reservations` já foram validados com a API LocarX. Os formatos de **`/availabilities/external`**, **`/prices/calculate`**, **`/reservations/new`** e **`/reservations/cancel`** foram montados pelo padrão dos campos conhecidos e **precisam ser conferidos com um token de homologação**. Tudo fica em um arquivo: `api/src/servicos/locarx/api-locarx.js`. Use **Testar API LocarX** (página da loja, administração) para ver as respostas cruas. Até lá, deixe `LOCARX_API_URL` apontando para a homologação.
+
 ## Segurança (resumo)
-- Nenhum token ou chave no código: tudo em variáveis do Railway.
-- Login por cookie `httpOnly` + `Secure` + `SameSite=Strict` (o JavaScript da página não lê a sessão), token CSRF em toda ação que altera dados e checagem de origem.
-- Senhas com argon2id; bloqueio de 15 min após 5 senhas erradas; limite de requisições por IP.
-- Verificação em 2 etapas (TOTP) com o segredo criptografado (AES-256-GCM).
-- Isolamento entre lojas no próprio banco (Row-Level Security) e trava que impede alguém de mudar a própria função.
-- Consultas sempre parametrizadas (sem SQL injection) e validação de todas as entradas.
-- Todo texto exibido na tela é escapado (sem XSS); CSP rígida no Netlify.
-- Auditoria de logins, convites e alterações (o registro não pode ser apagado pela aplicação).
-- WhatsApp: a Evolution não fica exposta na internet; o webhook só aceita chamadas com o segredo de 64 caracteres; conversas isoladas por loja no banco (a administração não lê conversas); arquivos enviados conferidos pelo conteúdo real (só foto, PDF, Word e Excel, até 8 MB); arquivos recebidos não ficam guardados no Conecta (são buscados na hora).
+- Nenhum token ou chave no código: tudo em variáveis do Railway. Chaves de IA, segredo das 2 etapas e CPF de clientes ficam **criptografados** no banco (AES-256-GCM) e nunca voltam inteiros para a tela.
+- Login por cookie `httpOnly` + `Secure` + `SameSite=Strict`, token CSRF, checagem de origem e CORS restrito; F5 mantém o login.
+- Senhas argon2id; bloqueio de 15 min após 5 erros; limites de requisição; 2 etapas (TOTP).
+- **Isolamento entre lojas no próprio banco** (Row-Level Security em todas as tabelas de loja) + trava que impede alguém de mudar a própria função. A administração e a matriz não leem conversas nem clientes das lojas, só números.
+- Consultas parametrizadas (sem SQL injection), validação de todas as entradas, texto sempre escapado na tela (sem XSS), CSP rígida, exportação CSV protegida contra fórmulas.
+- WhatsApp: Evolution sem endereço público, webhook com segredo de 64 caracteres, arquivos conferidos pelo conteúdo real, mídia recebida não fica guardada.
+- Assistente: só fala com base na base de conhecimento e na API; reserva só com confirmação explícita do cliente e CPF válido; ignora pedidos para mudar de regra; limite diário de respostas.
+- Auditoria de logins, convites, alterações e exportações (a aplicação não consegue apagar o registro).
+
+## LocarX Tools (MCP)
+`POST /api/mcp` (JSON-RPC 2.0) com `Authorization: Bearer <MCP_TOKEN>` e `X-Conecta-Filial: <branchId>`. Métodos `initialize`, `tools/list` e `tools/call`. Só ferramentas de consulta: `buscar_informacoes`, `dados_da_loja`, `consultar_disponibilidade`, `calcular_preco`, `consultar_reserva`.
 
 ## Rodar no computador (desenvolvimento)
 ```bash
 cd api
-cp .env.exemplo .env     # preencha; para http://localhost use COOKIE_INSEGURO_LOCAL=1
+cp .env.exemplo .env       # preencha; para http://localhost use COOKIE_INSEGURO_LOCAL=1
 npm install
 node --env-file=.env src/servidor.js
 ```
-O front precisa estar no mesmo endereço da API (como no Netlify): use um proxy local que sirva `web/` e repasse `/api` para a porta 3000.
-
-Para ver o front sem back-end (demonstração), troque `USAR_EXEMPLO` para `true` em `web/js/api.js`.
+- `IA_SIMULADA=1` usa uma IA de mentira (só fora de produção), para testar sem gastar créditos.
+- O front precisa estar no mesmo endereço da API (como no Netlify): sirva `web/` com um proxy que repasse `/api` para a porta 3000.
+- Demonstração sem servidor: troque `USAR_EXEMPLO` para `true` em `web/js/api.js`.

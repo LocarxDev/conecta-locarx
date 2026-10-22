@@ -207,6 +207,7 @@ export async function montar(alvo, ctx) {
       <div class="quem"><strong>${nomeDe(c)}</strong><span>${telefoneBonito(c.contato.telefone)}${c.atendente ? ` · com ${c.atendente.nome}` : ''}</span></div>
       <div class="acoes-chat">
         ${ESTADO[c.estado]}
+        <a class="btn btn-texto" href="#/clientes/${c.contato.id}">Ficha do cliente</a>
         ${!minha && c.estado !== 'encerrada' ? html`<button class="btn btn-primario" data-acao="assumir">Assumir</button>` : ''}
         ${c.estado === 'humano' ? html`<button class="btn btn-contorno" data-acao="devolver" title="O assistente virtual entra na etapa 3">Devolver ao assistente</button>` : ''}
         ${eu.perfil === 'dono' && c.estado !== 'encerrada' ? html`<button class="btn btn-contorno" data-acao="transferir">Transferir</button>` : ''}

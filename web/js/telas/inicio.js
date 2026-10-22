@@ -49,9 +49,9 @@ export async function montar(alvo, ctx) {
         ${aviso2fa(u)}
         <div class="resumo">
           <div class="resumo-item"><span class="rotulo">Lojas ativas</span><span class="valor">${r.lojasAtivas}</span><span class="detalhe">de ${r.lojasTotal} cadastradas</span></div>
-          <div class="resumo-item"><span class="rotulo">WhatsApp conectado</span><span class="valor">${r.whatsappConectado}</span><span class="detalhe">liberado na etapa 2</span></div>
+          <div class="resumo-item"><span class="rotulo">WhatsApp conectado</span><span class="valor">${r.whatsappConectado}</span><span class="detalhe">lojas com número ligado</span></div>
           <div class="resumo-item"><span class="rotulo">Pessoas com acesso</span><span class="valor">${r.usuarios}</span><span class="detalhe">acessos ativos</span></div>
-          <div class="resumo-item"><span class="rotulo">Reservas pelo assistente</span><span class="valor">—</span><span class="detalhe">liberado na etapa 4</span></div>
+          <div class="resumo-item"><span class="rotulo">Relatórios</span><span class="valor">${icone('relatorios')}</span><span class="detalhe"><a href="#/relatorios-rede">ver desempenho das lojas</a></span></div>
         </div>
         <div class="duas-colunas">
           <section class="painel">
@@ -59,11 +59,11 @@ export async function montar(alvo, ctx) {
             <div class="painel-corpo">
               <ol class="passos">
                 <li class="feito"><div>Base do sistema<span class="sub">Lojas, acessos, login e visual LocarX</span></div></li>
-                <li><div>WhatsApp<span class="sub">Conexão do número de cada loja e caixa de conversas</span></div></li>
-                <li><div>Assistente virtual<span class="sub">Orientações, base de conhecimento e configuração por loja</span></div></li>
-                <li><div>Reservas pelo WhatsApp<span class="sub">Cotação e reserva direto no portal LocarX</span></div></li>
-                <li><div>CRM<span class="sub">Clientes, funil, mensagens e automações</span></div></li>
-                <li><div>Painel da rede<span class="sub">Relatórios e conta de demonstração</span></div></li>
+                <li class="feito"><div>WhatsApp<span class="sub">Conexão do número de cada loja e caixa de conversas</span></div></li>
+                <li class="feito"><div>Assistente virtual<span class="sub">Orientações, base de conhecimento e configuração por loja</span></div></li>
+                <li class="feito"><div>Reservas pelo WhatsApp<span class="sub">Cotação e reserva direto no portal LocarX</span></div></li>
+                <li class="feito"><div>CRM<span class="sub">Clientes, funil, mensagens e automações</span></div></li>
+                <li class="feito"><div>Painel da rede<span class="sub">Relatórios e conta de demonstração</span></div></li>
               </ol>
             </div>
           </section>
@@ -89,7 +89,7 @@ export async function montar(alvo, ctx) {
       <div class="resumo">
         <div class="resumo-item"><span class="rotulo">Clientes que escreveram hoje</span><span class="valor">${r.conversasHoje}</span><span class="detalhe">no WhatsApp da loja</span></div>
         <div class="resumo-item"><span class="rotulo">Aguardando atendente</span><span class="valor">${r.aguardando}</span><span class="detalhe">pediram atendimento humano</span></div>
-        <div class="resumo-item"><span class="rotulo">Reservas na semana</span><span class="valor">${r.reservasSemana}</span><span class="detalhe">feitas pelo assistente</span></div>
+        <div class="resumo-item"><span class="rotulo">Reservas na semana</span><span class="valor">${r.reservasSemana}</span><span class="detalhe">feitas pelo WhatsApp</span></div>
         <div class="resumo-item"><span class="rotulo">Valor reservado</span><span class="valor">${reais.format(r.valorSemana)}</span><span class="detalhe">nos últimos 7 dias</span></div>
       </div>
       <div class="duas-colunas">

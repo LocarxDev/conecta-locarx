@@ -103,6 +103,35 @@ const real = {
   atualizarReserva: (id) => chamar('POST', `/loja/reservas/${encodeURIComponent(id)}/atualizar`, {}),
   filiaisLocarx: () => chamar('GET', '/admin/locarx/filiais'),
   testarLocarx: (branchId) => chamar('GET', `/admin/locarx/teste?branchId=${encodeURIComponent(branchId)}`),
+
+  // etapa 5 — CRM
+  contatos: (q) => chamar('GET', '/crm/contatos?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
+  contato: (id) => chamar('GET', `/crm/contatos/${encodeURIComponent(id)}`),
+  novoContato: (d) => chamar('POST', '/crm/contatos', d),
+  salvarContato: (id, d) => chamar('PATCH', `/crm/contatos/${encodeURIComponent(id)}`, d),
+  urlExportarContatos: () => '/api/crm/contatos.csv',
+  funil: () => chamar('GET', '/crm/funil'),
+  novaOportunidade: (d) => chamar('POST', '/crm/oportunidades', d),
+  moverOportunidade: (id, d) => chamar('PATCH', `/crm/oportunidades/${encodeURIComponent(id)}`, d),
+  tarefas: (q) => chamar('GET', '/crm/tarefas?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
+  novaTarefa: (d) => chamar('POST', '/crm/tarefas', d),
+  marcarTarefa: (id, feita) => chamar('PATCH', `/crm/tarefas/${encodeURIComponent(id)}`, { feita }),
+  excluirTarefa: (id) => chamar('DELETE', `/crm/tarefas/${encodeURIComponent(id)}`),
+  modelos: () => chamar('GET', '/crm/modelos'),
+  salvarModelo: (chave, d) => chamar('PUT', `/crm/modelos/${encodeURIComponent(chave)}`, d),
+  mensagemAtiva: (id, d) => chamar('POST', `/crm/contatos/${encodeURIComponent(id)}/mensagem`, d),
+
+  // etapa 6 — relatórios e rede
+  relatorioLoja: (dias) => chamar('GET', `/loja/relatorio?dias=${dias}`),
+  relatorioRede: (dias) => chamar('GET', `/admin/relatorio?dias=${dias}`),
+  usuariosRede: () => chamar('GET', '/admin/usuarios'),
+  convidarRede: (d) => chamar('POST', '/admin/usuarios', d),
+  situacaoUsuarioRede: (id, status) => chamar('PATCH', `/admin/usuarios/${encodeURIComponent(id)}`, { status }),
+  criarDemonstracao: () => chamar('POST', '/admin/demonstracao', {}),
+  removerDemonstracao: () => chamar('DELETE', '/admin/demonstracao'),
 };
 
-export const api = USAR_EXEMPLO ? exemplo : real;
+// Na demonstração, telas que ainda não têm dados de exemplo avisam em vez de quebrar.
+export const api = USAR_EXEMPLO
+  ? new Proxy(exemplo, { get: (alvo, nome) => (nome in alvo ? alvo[nome] : async () => { const e = new Error('Esta tela mostra dados reais quando o Conecta estiver ligado ao servidor.'); e.status = 0; throw e; }) })
+  : real;

@@ -9,7 +9,6 @@ import * as inicio from './telas/inicio.js';
 import * as equipe from './telas/equipe.js';
 import * as lojas from './telas/lojas.js';
 import * as perfil from './telas/perfil.js';
-import * as emBreve from './telas/em-breve.js';
 import * as whatsapp from './telas/whatsapp.js';
 import * as respostasRapidas from './telas/respostas.js';
 import * as conversas from './telas/conversas.js';
@@ -17,13 +16,20 @@ import * as assistenteTela from './telas/assistente.js';
 import * as baseTela from './telas/base.js';
 import * as redeTela from './telas/rede.js';
 import * as reservasTela from './telas/reservas.js';
+import * as clientesTela from './telas/clientes.js';
+import * as funilTela from './telas/funil.js';
+import * as tarefasTela from './telas/tarefas.js';
+import * as modelosTela from './telas/modelos.js';
+import * as relatoriosTela from './telas/relatorios.js';
+import * as acessosTela from './telas/acessos.js';
 
 const app = document.getElementById('app');
 const estado = { usuario: null, destino: null };
 
 const MODULOS_LOJA = [
-  { rota: 'em-breve/clientes', rotulo: 'Clientes', icone: 'clientes', travado: true },
-  { rota: 'em-breve/funil', rotulo: 'Funil de vendas', icone: 'funil', travado: true },
+  { rota: 'clientes', rotulo: 'Clientes', icone: 'clientes' },
+  { rota: 'funil', rotulo: 'Funil de vendas', icone: 'funil' },
+  { rota: 'tarefas', rotulo: 'Tarefas', icone: 'ok' },
   { rota: 'reservas', rotulo: 'Reservas', icone: 'reservas' },
 ];
 
@@ -34,7 +40,8 @@ function menuDoPerfil(perfilUsuario) {
       { rota: 'inicio', rotulo: 'Visão da rede', icone: 'inicio' },
       { rota: 'lojas', rotulo: 'Lojas', icone: 'lojas' },
       { rota: 'rede', rotulo: 'Base da rede', icone: 'assistente' },
-      { rota: 'em-breve/relatorios-rede', rotulo: 'Relatórios', icone: 'relatorios', travado: true },
+      { rota: 'relatorios-rede', rotulo: 'Relatórios', icone: 'relatorios' },
+      ...(perfilUsuario === 'admin' ? [{ rota: 'acessos', rotulo: 'Acessos da rede', icone: 'escudo' }] : []),
     ];
   }
   const itens = [
@@ -48,9 +55,10 @@ function menuDoPerfil(perfilUsuario) {
       { grupo: 'Gestão da loja' },
       { rota: 'whatsapp', rotulo: 'WhatsApp da loja', icone: 'whatsapp' },
       { rota: 'respostas', rotulo: 'Respostas rápidas', icone: 'editar' },
+      { rota: 'modelos', rotulo: 'Mensagens automáticas', icone: 'email' },
       { rota: 'assistente', rotulo: 'Assistente virtual', icone: 'assistente' },
       { rota: 'base', rotulo: 'Base de conhecimento', icone: 'info' },
-      { rota: 'em-breve/relatorios', rotulo: 'Relatórios', icone: 'relatorios', travado: true },
+      { rota: 'relatorios', rotulo: 'Relatórios', icone: 'relatorios' },
       { rota: 'atendentes', rotulo: 'Atendentes', icone: 'atendentes' },
     );
   }
@@ -76,7 +84,13 @@ const ROTAS = [
   { padrao: /^base$/, tela: baseTela.montar, perfis: ['dono', 'atendente'] },
   { padrao: /^rede$/, tela: redeTela.montar, perfis: ['admin', 'matriz'] },
   { padrao: /^reservas$/, tela: reservasTela.montar, perfis: ['dono', 'atendente'] },
-  { padrao: /^em-breve\/([\w-]+)$/, tela: emBreve.montar },
+  { padrao: /^clientes(?:\/([\w-]+))?$/, tela: clientesTela.montar, perfis: ['dono', 'atendente'] },
+  { padrao: /^funil$/, tela: funilTela.montar, perfis: ['dono', 'atendente'], largo: true },
+  { padrao: /^tarefas$/, tela: tarefasTela.montar, perfis: ['dono', 'atendente'] },
+  { padrao: /^modelos$/, tela: modelosTela.montar, perfis: ['dono'] },
+  { padrao: /^relatorios$/, tela: relatoriosTela.loja, perfis: ['dono'] },
+  { padrao: /^relatorios-rede$/, tela: relatoriosTela.rede, perfis: ['admin', 'matriz'] },
+  { padrao: /^acessos$/, tela: acessosTela.montar, perfis: ['admin'] },
 ];
 
 function lerRota() {
@@ -137,7 +151,8 @@ async function despachar() {
     desenharEstrutura(caminho);
     if (['dono', 'atendente'].includes(estado.usuario.perfil)) { conversas.iniciarVigia(ctx); conversas.atualizarContadores(); }
     const area = $('#conteudo');
-    area.classList.toggle('conteudo-largo', !!achada.largo || /^conversas/.test(caminho));
+    area.classList.toggle('conteudo-largo', /^conversas/.test(caminho));
+    area.classList.toggle('conteudo-amplo', !!achada.largo);
     guardar(await achada.tela(area, ctx));
     area.focus({ preventScroll: true });
     window.scrollTo(0, 0);

@@ -338,8 +338,82 @@ export const exemplo = {
   },
   async excluirResposta(rid) { await espera(); const b = carregar(); b.respostas = (b.respostas || []).filter((r) => r.id !== rid); salvar(); },
 
+  // ---- etapas 3 a 6 (demonstração, somente leitura na maior parte) ----
+  async assistente() { await espera(); return { ativo: true, nome: 'Lia', instrucoes: 'Seja simpática e objetiva. Sempre ofereça a proteção Super X.', boasVindas: 'Olá! Eu sou a Lia, assistente da LocarX Salvador Aeroporto.', msgAusencia: '', msgRepasse: 'Vou chamar um atendente da loja, é só aguardar um instante.', horario: {}, foraHorario: 'assistente', palavrasAtendente: ['atendente', 'humano', 'reclamação'], retornoHoras: 2, provedor: 'anthropic', modelo: 'claude-haiku-5-5', temChave: true, chaveFinal: 'x9Qa', temChaveAudio: false, limiteDiario: 400, silencioInicio: 21, silencioFim: 8, iaSimulada: false, apiLocarx: true }; },
+  async salvarAssistente(d) { await espera(); return d; },
+  async testarAssistente(historico) {
+    await espera(900);
+    const t = historico[historico.length - 1].texto.toLowerCase();
+    if (/cau[cç][aã]o|calção/.test(t)) return { resposta: 'A caução é de R$ 700, bloqueada no cartão de crédito do condutor e liberada em até 5 dias úteis após a devolução.', ferramentas: ['buscar_informacoes'] };
+    if (/carro|alugar|reserv/.test(t)) return { resposta: 'Para quais datas e horários você precisa do carro? A retirada e a devolução são aqui no Aeroporto de Salvador.', ferramentas: [] };
+    return { resposta: 'Olá! Eu sou a Lia, assistente da LocarX Salvador Aeroporto. Posso ajudar com reservas e dúvidas sobre a locação.', ferramentas: [] };
+  },
+  async perguntasSemResposta() { await espera(); return [{ id: 'p1', pergunta: 'Vocês aceitam pet no carro?', conversaId: null, criadaEm: horasAtras(5) }]; },
+  async resolverPergunta() { await espera(); },
+  async conhecimento({ escopo }) {
+    await espera();
+    return escopo === 'rede'
+      ? [{ id: 'r1', escopo: 'rede', titulo: 'Idade mínima e CNH', conteudo: 'O condutor precisa ter 21 anos ou mais e CNH definitiva há pelo menos 2 anos.', status: 'aprovado', autor: 'Matriz LocarX', atualizadoEm: horasAtras(48) }]
+      : [{ id: 'l1', escopo: 'loja', titulo: 'Caução', conteudo: 'A caução é de R$ 700, bloqueada no cartão de crédito do condutor e liberada em até 5 dias úteis após a devolução.', status: 'aprovado', autor: 'Carla Menezes', atualizadoEm: horasAtras(20) },
+         { id: 'l2', escopo: 'loja', titulo: 'Lavagem', conteudo: 'Carro devolvido muito sujo paga taxa de lavagem de R$ 50.', status: 'pendente', autor: 'Rafael Souza', atualizadoEm: horasAtras(3) }];
+  },
+  async reservas() {
+    await espera();
+    const d = (h) => new Date(agora + h * 3600e3).toISOString();
+    return [
+      { id: 'r1', codigo: 'SSA586587', status: 'confirmada', retirada: d(20), devolucao: d(92), grupo: 'C - COMPACTO ESPECIAL', valor: 345.5, origem: 'assistente', contato: { id: 'k1', nome: 'Cliente exemplo 1', telefone: '5571988887771' }, conversaId: null },
+      { id: 'r2', codigo: 'SSA586601', status: 'confirmada', retirada: d(70), devolucao: d(140), grupo: 'B - ECONÔMICO', valor: 279.8, origem: 'assistente', contato: { id: 'k2', nome: 'Cliente exemplo 2', telefone: '5571988887772' }, conversaId: null },
+    ];
+  },
+  async contatos() {
+    await espera();
+    const c = (id, nome, tel, etapa, etiquetas, reservas, h) => ({ id, nome, telefone: tel, email: null, etiquetas, observacoes: '', cpf: null, optout: false, criadoEm: horasAtras(h * 3), ultimaConversa: horasAtras(h), conversaId: null, etapa, reservas });
+    return { contatos: [c('k1', 'Cliente exemplo 1', '5571988887771', 'reserva', ['aeroporto'], 1, 1), c('k2', 'Cliente exemplo 2', '5571988887772', 'reserva', ['recorrente'], 3, 4), c('k3', 'Cliente exemplo 3', '5575999991234', 'cotacao', [], 0, 6), c('k4', 'Cliente exemplo 4', '5571988887774', 'concluido', ['empresa'], 2, 30)], total: 4, etiquetas: ['aeroporto', 'empresa', 'recorrente'] };
+  },
+  async contato(cid) {
+    await espera();
+    const k = (await this.contatos()).contatos.find((x) => x.id === cid) || (await this.contatos()).contatos[0];
+    return { ...k, janelaAbertaAte: new Date(agora + 20 * 3600e3).toISOString(), reservas: k.reservas ? [{ id: 'r1', codigo: 'SSA586587', status: 'confirmada', retirada: new Date(agora + 20 * 3600e3).toISOString(), grupo: 'C - COMPACTO ESPECIAL', valor: 345.5 }] : [], oportunidades: [{ id: 'o1', etapa: k.etapa, valor: 345.5, criadaEm: horasAtras(10) }], tarefas: [] };
+  },
+  async funil() {
+    await espera();
+    const o = (id, etapa, nome, valor, motivo) => ({ id, etapa, valor, motivoPerda: motivo || null, contato: { id: 'k' + id, nome, telefone: '5571900000000' }, atualizadaEm: horasAtras(Number(id.slice(1)) * 2) });
+    return (b0.funil ||= [o('o1', 'novo', 'Cliente exemplo 5', null), o('o2', 'cotacao', 'Cliente exemplo 3', 290), o('o3', 'cotacao', 'Cliente exemplo 6', 610), o('o4', 'reserva', 'Cliente exemplo 1', 345.5), o('o5', 'retirada', 'Cliente exemplo 2', 279.8), o('o6', 'concluido', 'Cliente exemplo 4', 520), o('o7', 'perdido', 'Cliente exemplo 7', 450, 'Preço acima do esperado')]);
+  },
+  async moverOportunidade(oid, d) { await espera(); const o = b0.funil.find((x) => x.id === oid); o.etapa = d.etapa; o.motivoPerda = d.motivoPerda || null; return o; },
+  async tarefas({ situacao }) {
+    await espera();
+    if (situacao === 'feitas') return [];
+    return [{ id: 't1', titulo: 'Retomar cotação de Cliente exemplo 3', venceEm: horasAtras(2), feitaEm: null, automatica: true, contatoId: 'k3', contatoNome: 'Cliente exemplo 3', responsavel: null },
+      { id: 't2', titulo: 'Ligar para confirmar a retirada', venceEm: new Date(agora + 5 * 3600e3).toISOString(), feitaEm: null, automatica: false, contatoId: 'k1', contatoNome: 'Cliente exemplo 1', responsavel: { nome: 'Rafael Souza' } }];
+  },
+  async marcarTarefa() { await espera(); },
+  async modelos() {
+    await espera();
+    const m = (chave, nome, automatico, quando, texto) => ({ chave, nome, automatico, quando, texto, ativo: true });
+    return [m('lembrete_retirada', 'Lembrete de retirada', true, 'Na véspera da retirada', 'Olá, {nome}! Sua reserva {codigo} na {loja} tem retirada em {data_retirada} às {hora_retirada}.'),
+      m('aviso_devolucao', 'Aviso de devolução', true, 'No dia da devolução', 'Olá, {nome}! Hoje é o dia da devolução do carro da reserva {codigo}, às {hora_devolucao}.'),
+      m('pesquisa_satisfacao', 'Pesquisa de satisfação', true, 'No dia seguinte à devolução', 'Olá, {nome}! De 0 a 10, quanto você recomendaria a LocarX para um amigo?'),
+      m('retomar_cotacao', 'Retomar cotação', false, 'Enviar manualmente', 'Olá, {nome}! Ainda posso ajudar com a sua locação na {loja}?')];
+  },
+  async relatorioLoja(dias) {
+    await espera();
+    const porDia = [...Array(dias).keys()].map((i) => { const d = new Date(agora - (dias - 1 - i) * 86400e3); const s = Math.sin(i * 1.3) + 1; return { dia: d.toISOString().slice(0, 10), conversas: Math.round(12 + s * 8 + (i % 7 === 5 ? 9 : 0)), reservas: Math.round(2 + s * 2) }; });
+    const conv = porDia.reduce((t, d) => t + d.conversas, 0), res = porDia.reduce((t, d) => t + d.reservas, 0);
+    return { dias, conversas: conv, soAssistente: Math.round(conv * 0.62), comEquipe: Math.round(conv * 0.38), clientesNovos: Math.round(conv * 0.7), oportunidades: Math.round(conv * 0.5), cotacoes: Math.round(conv * 0.45), reservas: res, valor: res * 312, reservasAssistente: Math.round(res * 0.7), valorAssistente: Math.round(res * 0.7) * 312, respostasIa: conv * 4, tokensIa: 0, respostaMedianaMin: 7, porDia,
+      perdas: [{ motivo: 'Preço acima do esperado', n: 9 }, { motivo: 'Sem carro disponível', n: 4 }, { motivo: 'Não respondeu mais', n: 3 }], semResposta: [{ pergunta: 'Vocês aceitam pet no carro?' }], equipe: [{ nome: 'Rafael Souza', conversas: 41, mensagens: 230 }, { nome: 'Juliana Prado', conversas: 33, mensagens: 188 }] };
+  },
+  async relatorioRede(dias) {
+    await espera();
+    const l = (nome, cidade, uf, conversas, reservas, whatsapp, assistente) => ({ id: nome, nome, cidade, uf, ativa: true, whatsapp, assistente, conversas: conversas * dias / 30, reservas: reservas * dias / 30, valor: reservas * 312 * dias / 30, reservasAssistente: Math.round(reservas * 0.7), conversao: Math.round(reservas / conversas * 1000) / 10, respostaMedianaMin: 5 + reservas % 9 });
+    const lojas = [l('LocarX Salvador Aeroporto', 'Salvador', 'BA', 540, 96, 'conectado', true), l('LocarX Salvador Centro', 'Salvador', 'BA', 310, 41, 'conectado', true), l('LocarX Natal Aeroporto', 'Natal', 'RN', 220, 35, 'conectado', false), l('LocarX Feira de Santana', 'Feira de Santana', 'BA', 0, 0, 'desconectado', false)];
+    return { dias, lojas, total: lojas.reduce((t, x) => ({ conversas: t.conversas + x.conversas, reservas: t.reservas + x.reservas, valor: t.valor + x.valor, reservasAssistente: t.reservasAssistente + x.reservasAssistente }), { conversas: 0, reservas: 0, valor: 0, reservasAssistente: 0 }) };
+  },
+  urlExportarContatos: () => '#/clientes',
+
   restaurarExemplo() { banco = base(); salvar(); },
 };
+const b0 = {};
 
 function respostasBase() {
   return [
