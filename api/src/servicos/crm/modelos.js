@@ -37,18 +37,24 @@ function emSilencio(a) {
 // automações: lembrete, aviso de devolução, pesquisa; etapas do funil; cotação esquecida
 export async function rodarAutomacoes() {
   const tarefas = await comoSistema(async (c) => {
-    // funil acompanha a reserva
-    await c.query(`UPDATE oportunidades o SET etapa = 'retirada', atualizada_em = now() FROM reservas r
-      WHERE o.reserva_id = r.id AND o.etapa = 'reserva' AND r.status <> 'cancelada' AND r.retirada < now()`);
-    await c.query(`UPDATE oportunidades o SET etapa = 'concluido', fechada_em = now(), atualizada_em = now() FROM reservas r
-      WHERE o.reserva_id = r.id AND o.etapa = 'retirada' AND r.devolucao < now() - interval '2 hours'`);
-    await c.query(`UPDATE oportunidades o SET etapa = 'perdido', motivo_perda = 'Reserva cancelada', fechada_em = now(), atualizada_em = now() FROM reservas r
-      WHERE o.reserva_id = r.id AND o.etapa IN ('reserva', 'retirada') AND r.status = 'cancelada'`);
+    // funil acompanha a reserva (nas etapas que a loja configurou para cada acontecimento)
+    await c.query(`UPDATE oportunidades o SET etapa_id = er.id, atualizada_em = now()
+      FROM reservas r, etapas_funil ea, etapas_funil er
+      WHERE o.reserva_id = r.id AND o.fechada_em IS NULL AND r.status <> 'cancelada' AND r.retirada < now()
+        AND ea.id = o.etapa_id AND ea.tipo = 'aberta' AND er.funil_id = o.funil_id AND er.evento = 'retirada' AND er.ordem > ea.ordem`);
+    await c.query(`UPDATE oportunidades o SET etapa_id = eg.id, resultado = 'ganho', fechada_em = now(), atualizada_em = now()
+      FROM reservas r, etapas_funil eg
+      WHERE o.reserva_id = r.id AND o.fechada_em IS NULL AND r.status <> 'cancelada' AND r.devolucao < now() - interval '2 hours'
+        AND eg.funil_id = o.funil_id AND eg.tipo = 'ganho'`);
+    await c.query(`UPDATE oportunidades o SET etapa_id = ep.id, resultado = 'perdido', motivo_perda = 'Reserva cancelada', fechada_em = now(), atualizada_em = now()
+      FROM reservas r, etapas_funil ep
+      WHERE o.reserva_id = r.id AND o.fechada_em IS NULL AND r.status = 'cancelada'
+        AND ep.funil_id = o.funil_id AND ep.tipo = 'perdido'`);
     // cotação sem resposta há 24 h vira tarefa para a equipe
     await c.query(`INSERT INTO tarefas (loja_id, contato_id, conversa_id, titulo, vence_em, automatica)
       SELECT o.loja_id, o.contato_id, o.conversa_id, 'Retomar cotação de ' || coalesce(k.nome, '+' || k.telefone), now(), true
-        FROM oportunidades o JOIN contatos k ON k.id = o.contato_id
-       WHERE o.etapa = 'cotacao' AND o.atualizada_em < now() - interval '24 hours' AND o.atualizada_em > now() - interval '7 days'
+        FROM oportunidades o JOIN contatos k ON k.id = o.contato_id JOIN etapas_funil e ON e.id = o.etapa_id AND e.evento = 'cotacao'
+       WHERE o.fechada_em IS NULL AND o.atualizada_em < now() - interval '24 hours' AND o.atualizada_em > now() - interval '7 days'
          AND NOT EXISTS (SELECT 1 FROM tarefas t WHERE t.contato_id = o.contato_id AND t.automatica AND t.criada_em > o.atualizada_em)`);
     // mensagens automáticas devidas
     return (await c.query(`

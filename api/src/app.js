@@ -14,6 +14,7 @@ import { conversas, respostas } from './rotas/conversas.js';
 import { assistente, conhecimento, rede } from './rotas/assistente.js';
 import { reservas, locarxAdmin, mcp } from './rotas/reservas.js';
 import { crm } from './rotas/crm.js';
+import { personalizacaoLoja, personalizacaoRede } from './rotas/personalizacao.js';
 import { relatorioLoja, relatorioRede } from './rotas/relatorios.js';
 
 export function criarApp() {
@@ -51,9 +52,9 @@ export function criarApp() {
 
   // daqui para baixo: precisa estar logado e mandar o token CSRF nas ações que alteram dados
   app.use('/api', exigirLogin, exigirCsrf);
-  app.use('/api/admin', admin, equipeAdmin, rede, locarxAdmin, relatorioRede);
+  app.use('/api/admin', admin, equipeAdmin, rede, locarxAdmin, relatorioRede, personalizacaoRede);
   app.use('/api/loja', loja, equipeLoja, canal, respostas, assistente, reservas, relatorioLoja);
-  app.use('/api/crm', crm);
+  app.use('/api/crm', crm, personalizacaoLoja);
   app.use('/api/conhecimento', conhecimento);
   app.use('/api/conversas', conversas);
   app.use('/api/usuarios', usuarios);

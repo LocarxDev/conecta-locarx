@@ -19,8 +19,9 @@ function conversaPublica(r) {
   return {
     id: r.id, estado: r.estado, naoLidas: r.nao_lidas, previa: r.ultima_previa,
     ultimaMensagemEm: r.ultima_mensagem_em, ultimaDoCliente: r.ultima_do_cliente,
-    atendente: r.atendente_id ? { id: r.atendente_id, nome: r.atendente_nome } : null,
+    atendente: r.atendente_id ? { id: r.atendente_id, nome: r.atendente_nome } : null, atribuidaEm: r.atribuida_em || null,
     contato: { id: r.contato_id, nome: r.contato_nome, telefone: r.telefone },
+    etiquetas: r.etiquetas || [],
     cursor: r.cursor,
   };
 }
@@ -34,7 +35,9 @@ function mensagemPublica(m) {
 }
 
 const SQL_CONVERSA = `
-  SELECT cv.*, ct.nome AS contato_nome, ct.telefone, u.nome AS atendente_nome, ${cursor('cv.atualizada_em')} AS cursor
+  SELECT cv.*, ct.nome AS contato_nome, ct.telefone, u.nome AS atendente_nome, ${cursor('cv.atualizada_em')} AS cursor,
+         (SELECT coalesce(json_agg(json_build_object('id', e.id, 'nome', e.nome, 'cor', e.cor) ORDER BY lower(e.nome)), '[]')
+            FROM contato_etiquetas ce JOIN etiquetas e ON e.id = ce.etiqueta_id WHERE ce.contato_id = cv.contato_id) AS etiquetas
     FROM conversas cv JOIN contatos ct ON ct.id = cv.contato_id LEFT JOIN usuarios u ON u.id = cv.atendente_id`;
 
 // ---------- lista (com "desde" para atualizar a cada poucos segundos) ----------
@@ -242,7 +245,7 @@ conversas.post('/:id/transferir', exigirPerfil('dono'), rota(async (req, res) =>
   res.json(await mudarEstado(req, uuid(req.params.id), async (c, cv) => {
     const alvo = (await c.query(`SELECT id, nome FROM usuarios WHERE id = $1 AND loja_id = $2 AND status = 'ativo'`, [atendenteId, req.usuario.loja_id])).rows[0];
     if (!alvo) throw erro(422, 'Escolha uma pessoa ativa da sua equipe.');
-    await c.query(`UPDATE conversas SET estado = 'humano', atendente_id = $2 WHERE id = $1`, [cv.id, alvo.id]);
+    await c.query(`UPDATE conversas SET estado = 'humano', atendente_id = $2, atribuida_em = now() WHERE id = $1`, [cv.id, alvo.id]);
     await evento(c, cv, req, `${req.usuario.nome} transferiu a conversa para ${alvo.nome}`);
     await registrar(c, req, 'transferiu_conversa', { alvo: cv.id, detalhes: { para: alvo.id } });
   }));

@@ -122,7 +122,10 @@ auth.get('/sessao', (req, res) => {
 
 // ---------- sair ----------
 auth.post('/sair', exigirLogin, exigirCsrf, rota(async (req, res) => {
-  await comoSistema((c) => c.query('DELETE FROM sessoes WHERE id = $1', [req.sessao.id]));
+  await comoSistema(async (c) => {
+    await c.query('DELETE FROM sessoes WHERE id = $1', [req.sessao.id]);
+    await c.query('UPDATE usuarios SET disponivel = false WHERE id = $1', [req.usuario.id]); // saiu: sai da roleta
+  });
   res.clearCookie(COOKIE_SESSAO, opcoesCookie());
   res.status(204).end();
 }));
@@ -130,6 +133,7 @@ auth.post('/sair', exigirLogin, exigirCsrf, rota(async (req, res) => {
 auth.post('/sair-de-todos', exigirLogin, exigirCsrf, rota(async (req, res) => {
   await comoSistema(async (c) => {
     await c.query('DELETE FROM sessoes WHERE usuario_id = $1', [req.usuario.id]);
+    await c.query('UPDATE usuarios SET disponivel = false WHERE id = $1', [req.usuario.id]);
     await registrar(c, req, 'sair_de_todos');
   });
   res.clearCookie(COOKIE_SESSAO, opcoesCookie());

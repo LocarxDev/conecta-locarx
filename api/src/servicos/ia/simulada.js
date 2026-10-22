@@ -5,6 +5,9 @@ export async function simularIa({ historico, ferramentas }) {
   const usar = async (nome, args) => { usadas.push(nome); const f = ferramentas.find((x) => x.nome === nome); return f ? f.executar(args) : 'sem ferramenta'; };
   const ultima = [...historico].reverse().find((h) => h.papel === 'cliente')?.texto || '';
   const t = ultima.toLowerCase();
+  // anota informações e etiquetas como a IA de verdade faria
+  if (/\bsuv\b/.test(t) && ferramentas.some((f) => f.nome === 'salvar_informacoes')) await usar('salvar_informacoes', { informacoes: { carro_desejado: 'SUV', motivo: /uber|99/.test(t) ? 'aplicativo' : undefined } });
+  if (/\buber\b|\b99\b/.test(t) && ferramentas.some((f) => f.nome === 'aplicar_etiqueta')) await usar('aplicar_etiqueta', { etiquetas: ['Aplicativo'] });
   let texto;
   if (/confirmo/.test(t) && ferramentas.some((f) => f.nome === 'criar_reserva')) {
     const d = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10), e = new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10);

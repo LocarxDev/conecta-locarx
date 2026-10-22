@@ -1,7 +1,8 @@
 // Caixa de conversas do WhatsApp da loja.
 // A lista se atualiza sozinha a cada poucos segundos (o "vigia" roda enquanto alguém da loja está logado).
 import { api } from '../api.js';
-import { html, render, $, $$, icone, iniciais, avisar, abrirModal, comBotao } from '../util.js';
+import { html, render, $, $$, icone, iniciais, avisar, abrirModal, comBotao, chipEtiqueta, preferencia } from '../util.js';
+import { montarPainelCliente } from './painel-cliente.js';
 
 // ---------------------------------------------------------------------
 // Vigia: busca só o que mudou e avisa as telas, o contador do menu e o navegador
@@ -28,16 +29,23 @@ export function pararVigia() {
 async function sincronizar() {
   try {
     const r = await api.listarConversas({ desde: store.cursor || undefined });
-    const novidades = [];
+    const novidades = [], paraMim = [];
+    const eu = store.ctx?.usuario?.id;
     for (const c of r.conversas) {
       const antes = store.mapa.get(c.id);
       if (store.carregado && c.naoLidas > (antes?.naoLidas || 0)) novidades.push(c);
+      // roleta: conversa que acabou de ser entregue para mim
+      if (store.carregado && eu && c.estado === 'humano' && c.atendente?.id === eu && antes?.atendente?.id !== eu && c.atribuidaEm && Date.now() - new Date(c.atribuidaEm) < 120_000) paraMim.push(c);
       store.mapa.set(c.id, c);
     }
     store.cursor = r.cursor;
     store.carregado = true;
     atualizarContadores();
     novidades.forEach(notificar);
+    paraMim.forEach((c) => {
+      avisar(`Nova conversa para você: ${nomeDe(c)}`);
+      notificar({ ...c, previa: 'A roleta entregou esta conversa para você' });
+    });
     store.ouvintes.forEach((f) => f(r.conversas));
   } catch (err) {
     if (err.status === 401) { pararVigia(); store.ctx?.sessaoExpirou(); }
@@ -128,9 +136,35 @@ export async function montar(alvo, ctx) {
         <div class="lista-conversas" id="lista-conversas"><div class="painel-corpo"><div class="esqueleto"></div></div></div>
       </section>
       <section class="chat" id="chat" aria-label="Conversa"></section>
+      <aside class="lateral" id="lateral" aria-label="Dados do cliente" hidden></aside>
     </div>`);
 
-  const caixa = $('#caixa', alvo), listaEl = $('#lista-conversas', alvo), chatEl = $('#chat', alvo);
+  const caixa = $('#caixa', alvo), listaEl = $('#lista-conversas', alvo), chatEl = $('#chat', alvo), lateralEl = $('#lateral', alvo);
+  const telaLarga = () => matchMedia('(min-width: 1280px)').matches;
+  let lateralAberta = telaLarga() && preferencia.ler('painel-cliente') !== 'fechado';
+  let painel = null;
+
+  // ---------- painel do cliente (funil, etiquetas, informações) ----------
+  function desenharLateral() {
+    painel?.destruir(); painel = null;
+    const mostrar = !!aberta && lateralAberta;
+    lateralEl.hidden = !mostrar;
+    caixa.classList.toggle('com-lateral', mostrar);
+    $('[data-lateral]', chatEl)?.setAttribute('aria-pressed', String(mostrar));
+    if (!mostrar) return render(lateralEl, '');
+    render(lateralEl, html`<div class="lateral-cab"><strong>Dados do cliente</strong>
+      <span><a class="btn btn-texto" href="#/clientes/${aberta.contato.id}">Ficha</a>
+      <button class="btn btn-texto btn-icone" data-fechar-lateral aria-label="Fechar dados do cliente">${icone('fechar')}</button></span></div>
+      <div class="lateral-corpo" id="lateral-corpo"></div>`);
+    painel = montarPainelCliente($('#lateral-corpo', lateralEl), aberta.contato.id, { comLinkFicha: false });
+    $('[data-fechar-lateral]', lateralEl).addEventListener('click', () => alternarLateral(false));
+  }
+  function alternarLateral(abrirPainel = !lateralAberta) {
+    lateralAberta = abrirPainel;
+    if (telaLarga()) preferencia.gravar('painel-cliente', abrirPainel ? 'aberto' : 'fechado');
+    desenharLateral();
+    if (abrirPainel) $('#lateral-corpo', lateralEl)?.focus?.();
+  }
 
   $('#ativar-avisos', alvo)?.addEventListener('click', async (e) => {
     const r = await Notification.requestPermission().catch(() => 'denied');
@@ -169,7 +203,8 @@ export async function montar(alvo, ctx) {
     render(listaEl, html`${lista.map((c) => html`
       <a class="item-conversa${c.naoLidas ? ' nao-lida' : ''}${aberta?.id === c.id ? ' ativa' : ''}" href="#/conversas/${c.id}" data-id="${c.id}">
         <span class="avatar">${c.contato.nome ? iniciais(c.contato.nome) : '#'}</span>
-        <span class="meio"><span class="nome">${nomeDe(c)}</span><span class="previa">${c.previa || ''}</span></span>
+        <span class="meio"><span class="nome">${nomeDe(c)}</span><span class="previa">${c.previa || ''}</span>
+          ${c.etiquetas?.length ? html`<span class="etiquetas-conversa">${c.etiquetas.slice(0, 3).map((e) => chipEtiqueta(e))}${c.etiquetas.length > 3 ? html`<span class="sub">+${c.etiquetas.length - 3}</span>` : ''}</span>` : ''}</span>
         <span class="lado"><span class="hora">${quandoCurto(c.ultimaMensagemEm)}</span>
           ${c.naoLidas ? html`<span class="bolinha">${c.naoLidas > 99 ? '99+' : c.naoLidas}</span>` : html`<span class="marca-estado ${c.estado}" title="${c.estado}"></span>`}</span>
       </a>`)}`);
@@ -184,6 +219,7 @@ export async function montar(alvo, ctx) {
         aberta = nova;
         if (mudouEstado) desenharCabecalho();
         if (nova.naoLidas && !document.hidden) marcarLida();
+        painel?.recarregar();
       }
     }
   };
@@ -194,6 +230,7 @@ export async function montar(alvo, ctx) {
   // ---------- conversa aberta ----------
   function chatVazio() {
     caixa.classList.remove('com-conversa');
+    painel?.destruir(); painel = null; lateralEl.hidden = true; caixa.classList.remove('com-lateral');
     render(chatEl, html`<div class="chat-vazio">${icone('conversas')}<h3>Escolha uma conversa</h3><p>As mensagens do WhatsApp da loja aparecem aqui.</p></div>`);
   }
 
@@ -207,13 +244,14 @@ export async function montar(alvo, ctx) {
       <div class="quem"><strong>${nomeDe(c)}</strong><span>${telefoneBonito(c.contato.telefone)}${c.atendente ? ` · com ${c.atendente.nome}` : ''}</span></div>
       <div class="acoes-chat">
         ${ESTADO[c.estado]}
-        <a class="btn btn-texto" href="#/clientes/${c.contato.id}">Ficha do cliente</a>
+        <button class="btn btn-contorno" data-lateral aria-pressed="${lateralAberta}" title="Funil, etiquetas e informações do cliente">${icone('painel')}<span class="rotulo-lateral">Dados do cliente</span></button>
         ${!minha && c.estado !== 'encerrada' ? html`<button class="btn btn-primario" data-acao="assumir">Assumir</button>` : ''}
         ${c.estado === 'humano' ? html`<button class="btn btn-contorno" data-acao="devolver" title="O assistente virtual entra na etapa 3">Devolver ao assistente</button>` : ''}
         ${eu.perfil === 'dono' && c.estado !== 'encerrada' ? html`<button class="btn btn-contorno" data-acao="transferir">Transferir</button>` : ''}
         ${c.estado !== 'encerrada' ? html`<button class="btn btn-contorno" data-acao="encerrar">Encerrar</button>` : ''}
       </div>`);
     $$('[data-acao]', cab).forEach((b) => b.addEventListener('click', () => acao(b.dataset.acao, b)));
+    $('[data-lateral]', cab).addEventListener('click', () => alternarLateral());
   }
 
   async function acao(nome, botao) {
@@ -326,6 +364,8 @@ export async function montar(alvo, ctx) {
         <div class="mensagens" id="mensagens" role="log" aria-live="polite"></div>
         ${compositor()}`);
       desenharCabecalho();
+      if (!telaLarga()) lateralAberta = false;
+      desenharLateral();
       anexarMensagens(r.mensagens, true);
       ligarCompositor();
       desenharLista();
@@ -467,6 +507,6 @@ export async function montar(alvo, ctx) {
       if (!id) { clearTimeout(timerMsgs); aberta = null; store.ativa = null; chatVazio(); desenharLista(); return; }
       if (id !== aberta?.id) abrir(id);
     },
-    limpar: () => { clearTimeout(timerMsgs); store.ouvintes.delete(aoMudarLista); store.ativa = null; },
+    limpar: () => { clearTimeout(timerMsgs); store.ouvintes.delete(aoMudarLista); store.ativa = null; painel?.destruir(); },
   };
 }

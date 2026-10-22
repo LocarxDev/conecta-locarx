@@ -4,6 +4,8 @@ import { comoSistema } from '../../banco/conexao.js';
 import { buscarConhecimento } from '../ia/conhecimento.js';
 import * as locarx from './api-locarx.js';
 import { cifrar } from '../seguranca.js';
+import { registrarEvento } from '../crm/funis.js';
+import { normalizarValor } from '../crm/personalizacao.js';
 
 export function cpfValido(cpf) {
   const d = String(cpf || '').replace(/\D/g, '');
@@ -140,6 +142,56 @@ export function ferramentasDaLoja(ctx) {
       },
     },
     {
+      nome: 'salvar_informacoes',
+      descricao: 'Guarda na ficha do cliente as informações que ele contou na conversa (veja a lista INFORMAÇÕES PARA ANOTAR). Use assim que o cliente informar, sem interromper o atendimento. Só as chaves da lista.',
+      parametros: {
+        type: 'object',
+        properties: { informacoes: { type: 'object', description: 'chave → valor, ex.: {"periodo": "12/11 10h a 15/11 18h"}', additionalProperties: { type: 'string' } } },
+        required: ['informacoes'],
+      },
+      executar: async ({ informacoes }) => {
+        const campos = (ctx.campos || []).filter((x) => x.instrucao_bot);
+        const salvos = [], problemas = [];
+        const valores = [];
+        for (const [chave, bruto] of Object.entries(informacoes && typeof informacoes === 'object' ? informacoes : {}).slice(0, 20)) {
+          const campo = campos.find((x) => x.chave === chave);
+          if (!campo) { problemas.push(`"${chave}" não está na lista`); continue; }
+          try { const v = normalizarValor(campo, bruto); if (v != null) { valores.push([campo, v]); salvos.push(campo.nome); } } catch (e) { problemas.push(e.message); }
+        }
+        if (valores.length && !ctx.simulacao && ctx.contatoId) {
+          await comoSistema(async (c) => {
+            for (const [campo, v] of valores) {
+              await c.query(
+                `INSERT INTO valores_campos (contato_id, campo_id, loja_id, valor, pelo_assistente) VALUES ($1, $2, $3, $4, true)
+                 ON CONFLICT (contato_id, campo_id) DO UPDATE SET valor = EXCLUDED.valor, pelo_assistente = true, atualizado_em = now()`,
+                [ctx.contatoId, campo.id, ctx.lojaId, v]);
+            }
+            if (ctx.conversaId) await c.query('UPDATE conversas SET atualizada_em = now() WHERE id = $1', [ctx.conversaId]);
+          });
+        }
+        return `Anotado: ${salvos.join(', ') || 'nada'}.${problemas.length ? ' Não anotado: ' + problemas.join('; ') + '.' : ''} Continue o atendimento normalmente (não comente que anotou).`;
+      },
+    },
+    {
+      nome: 'aplicar_etiqueta',
+      descricao: 'Marca o cliente com etiquetas da loja (veja a lista ETIQUETAS). Use quando a situação da etiqueta acontecer. Não comente com o cliente.',
+      parametros: { type: 'object', properties: { etiquetas: { type: 'array', items: { type: 'string' }, description: 'nomes exatos das etiquetas da lista' } }, required: ['etiquetas'] },
+      executar: async ({ etiquetas }) => {
+        const permitidas = (ctx.etiquetas || []).filter((e) => e.descricao_bot);
+        const nomes = (Array.isArray(etiquetas) ? etiquetas : [etiquetas]).map((x) => String(x || '').trim().toLowerCase()).slice(0, 10);
+        const achadas = permitidas.filter((e) => nomes.includes(e.nome.toLowerCase()));
+        if (achadas.length && !ctx.simulacao && ctx.contatoId) {
+          await comoSistema(async (c) => {
+            for (const e of achadas) {
+              await c.query(`INSERT INTO contato_etiquetas (contato_id, etiqueta_id, loja_id, pelo_assistente) VALUES ($1, $2, $3, true) ON CONFLICT DO NOTHING`, [ctx.contatoId, e.id, ctx.lojaId]);
+            }
+            if (ctx.conversaId) await c.query('UPDATE conversas SET atualizada_em = now() WHERE id = $1', [ctx.conversaId]);
+          });
+        }
+        return achadas.length ? `Etiqueta(s) aplicada(s): ${achadas.map((e) => e.nome).join(', ')}. Continue o atendimento normalmente.` : 'Nenhuma etiqueta da lista corresponde. Use só os nomes da lista ETIQUETAS.';
+      },
+    },
+    {
       nome: 'chamar_atendente',
       descricao: 'Passa a conversa para um atendente humano da loja. Use quando o cliente pedir, quando não houver informação oficial, em reclamações, multas, acidentes, cobranças, contratos, ou depois de criar uma reserva.',
       parametros: { type: 'object', properties: { motivo: { type: 'string' }, sem_resposta: { type: 'boolean', description: 'true se for porque a informação não estava na base' }, pergunta: { type: 'string', description: 'a pergunta que ficou sem resposta' } }, required: ['motivo'] },
@@ -149,9 +201,14 @@ export function ferramentasDaLoja(ctx) {
       },
     },
   ];
+  // ferramentas de CRM só aparecem quando a loja/rede cadastrou o que o assistente deve anotar ou etiquetar
+  const semCrm = new Set();
+  if (!(ctx.campos || []).some((x) => x.instrucao_bot)) semCrm.add('salvar_informacoes');
+  if (!(ctx.etiquetas || []).some((e) => e.descricao_bot)) semCrm.add('aplicar_etiqueta');
+  const disponiveis = lista.filter((f) => !semCrm.has(f.nome));
   // sem API LocarX configurada, as ferramentas de reserva não são oferecidas ao assistente
-  if (!ctx.locarxDisponivel) return lista.filter((f) => ['buscar_informacoes', 'dados_da_loja', 'chamar_atendente'].includes(f.nome));
-  return lista;
+  if (!ctx.locarxDisponivel) return disponiveis.filter((f) => ['buscar_informacoes', 'dados_da_loja', 'salvar_informacoes', 'aplicar_etiqueta', 'chamar_atendente'].includes(f.nome));
+  return disponiveis;
 }
 
 function normalizarProtecoes(lista) {
@@ -163,17 +220,9 @@ function normalizarProtecoes(lista) {
   return p;
 }
 
-async function marcarEtapa(ctx, etapa, valor) {
+async function marcarEtapa(ctx, evento, valor) {
   if (ctx.simulacao || !ctx.contatoId) return;
-  const ordem = ['novo', 'cotacao', 'reserva', 'retirada', 'concluido'];
-  await comoSistema(async (c) => {
-    const o = (await c.query(`SELECT * FROM oportunidades WHERE contato_id = $1 AND etapa NOT IN ('concluido', 'perdido')`, [ctx.contatoId])).rows[0];
-    if (!o) {
-      await c.query(`INSERT INTO oportunidades (loja_id, contato_id, conversa_id, etapa, valor_previsto) VALUES ($1, $2, $3, $4, $5)`, [ctx.lojaId, ctx.contatoId, ctx.conversaId, etapa, valor ?? null]);
-    } else if (ordem.indexOf(etapa) >= ordem.indexOf(o.etapa)) {
-      await c.query(`UPDATE oportunidades SET etapa = $2, valor_previsto = coalesce($3, valor_previsto), atualizada_em = now() WHERE id = $1`, [o.id, etapa, valor ?? null]);
-    }
-  });
+  await comoSistema((c) => registrarEvento(c, { lojaId: ctx.lojaId, contatoId: ctx.contatoId, conversaId: ctx.conversaId, evento, valor: valor ?? null }));
 }
 
 async function registrarReserva(ctx, reserva, p, cliente, extra) {
@@ -187,9 +236,7 @@ async function registrarReserva(ctx, reserva, p, cliente, extra) {
       await c.query(
         `UPDATE contatos SET nome = coalesce(nome, $2), email = coalesce(email, $3), cpf_cifrado = coalesce(cpf_cifrado, $4), cpf_final = coalesce(cpf_final, $5), atualizado_em = now() WHERE id = $1`,
         [ctx.contatoId, cliente.nome, cliente.email, cifrar(cliente.cpf), cliente.cpf.slice(-2)]);
-      const o = (await c.query(`SELECT id FROM oportunidades WHERE contato_id = $1 AND etapa NOT IN ('concluido', 'perdido')`, [ctx.contatoId])).rows[0];
-      if (o) await c.query(`UPDATE oportunidades SET etapa = 'reserva', reserva_id = $2, valor_previsto = coalesce($3, valor_previsto), atualizada_em = now() WHERE id = $1`, [o.id, r.id, reserva.valor]);
-      else await c.query(`INSERT INTO oportunidades (loja_id, contato_id, conversa_id, reserva_id, etapa, valor_previsto) VALUES ($1, $2, $3, $4, 'reserva', $5)`, [ctx.lojaId, ctx.contatoId, ctx.conversaId, r.id, reserva.valor]);
+      await registrarEvento(c, { lojaId: ctx.lojaId, contatoId: ctx.contatoId, conversaId: ctx.conversaId, evento: 'reserva', valor: reserva.valor, reservaId: r.id });
     }
   });
 }

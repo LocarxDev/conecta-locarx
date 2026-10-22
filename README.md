@@ -9,7 +9,14 @@ Plataforma de atendimento e CRM da rede LocarX: assistente virtual com IA no Wha
 | `evolution/` | Variáveis da Evolution API (WhatsApp) | Railway |
 | bancos | PostgreSQL do Conecta + PostgreSQL e Redis da Evolution | Railway |
 
-**Todas as 6 etapas estão prontas:** base (lojas, acessos, 2 etapas), WhatsApp e caixa de conversas, assistente virtual com IA e base de conhecimento, reservas pela API LocarX (LocarX Tools / MCP), CRM (clientes, funil, tarefas, mensagens ativas e automações) e relatórios da loja e da rede.
+**Todas as 7 etapas estão prontas:** base (lojas, acessos, 2 etapas), WhatsApp e caixa de conversas, assistente virtual com IA e base de conhecimento, reservas pela API LocarX (LocarX Tools / MCP), CRM (clientes, funil, tarefas, mensagens ativas e automações), relatórios da loja e da rede e personalização do CRM (funis, etiquetas, campos e roleta de atendimento).
+
+### Etapa 7 — personalização do CRM
+- **Funis:** a rede monta o funil padrão em **Padrões do CRM** (administração/matriz). Cada loja recebe uma cópia na primeira vez que usa; o dono cria, renomeia, reordena e arquiva os próprios funis em **Funis, etiquetas e campos**. Lojas que ainda não personalizaram acompanham as mudanças do padrão. O funil **principal** é o que o assistente usa: conversa nova entra na 1ª etapa e o cliente anda sozinho nas etapas marcadas como automáticas (cotou preço, reserva criada, carro retirado); devolução conclui e cancelamento marca como perdido.
+- **Etiquetas:** da rede (valem para todas as lojas) e da loja (dono e atendentes criam). Etiquetas com instrução o assistente aplica sozinho; a equipe coloca e tira no painel do cliente.
+- **Informações do cliente (campos personalizados):** texto, número, data, lista ou sim/não. Com instrução, o assistente anota durante a conversa (ex.: período, carro desejado). Aparecem no **painel ao lado da conversa** e na ficha do cliente, editáveis.
+- **Roleta de atendimento:** quando o assistente chama um atendente (ou a conversa chega sem assistente), ela vai para quem está **Disponível** (botão no topo), em rodízio ou para quem tem menos conversas, com limite opcional por pessoa. Configuração em **Atendentes**. Quem sai do sistema fica em pausa; quem fecha o Conecta deixa de receber depois de 5 minutos.
+- **Janelas:** clicar fora não fecha mais; o Esc só fecha se nada foi digitado.
 
 ---
 

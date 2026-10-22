@@ -568,3 +568,140 @@ details[open] summary { margin-bottom: 10px; }
 .conteudo > * { min-width: 0; }
 .cabecalho-pagina .filtros { max-width: 100%; }
 @media (max-width: 480px) { .cabecalho-pagina .filtros { width: 100%; } }
+.modal.chamar-atencao { animation: chamar-atencao .3s ease; }
+@keyframes chamar-atencao { 0%, 100% { transform: none; } 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
+
+/* =====================================================================
+   ETAPA 7 — funis personalizáveis, etiquetas, campos, painel do cliente e roleta
+   ===================================================================== */
+/* cores escolhidas pela loja chegam em --cor (aplicadas pelo JS, por causa da CSP) */
+.etiqueta.cor { --cor: #64748b; background: color-mix(in srgb, var(--cor) 14%, var(--superficie)); color: color-mix(in srgb, var(--cor) 72%, var(--texto)); border: 1px solid color-mix(in srgb, var(--cor) 30%, transparent); font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
+.ponto-cor { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--cor, #64748b); flex: none; }
+.ponto-cor.grande { width: 14px; height: 14px; }
+.etapa-chip { --cor: #64748b; display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 99px; font-size: 12.5px; font-weight: 600; background: color-mix(in srgb, var(--cor) 12%, var(--superficie)); color: color-mix(in srgb, var(--cor) 70%, var(--texto)); white-space: nowrap; }
+.trilha-etapas { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.pc-robo { display: inline-flex; color: var(--texto-3); }
+.pc-robo .ic { width: 13px; height: 13px; }
+.com-robo { display: inline-flex; gap: 6px; align-items: flex-start; color: var(--texto-2); font-size: 13.5px; }
+.com-robo .ic { width: 15px; height: 15px; flex: none; margin-top: 2px; color: var(--texto-3); }
+.rotulo-campo { font-weight: 600; font-size: 13px; color: var(--texto-2); }
+.campo-curto { max-width: 340px; }
+
+/* seletor de cor */
+.cores { display: flex; flex-wrap: wrap; gap: 8px; }
+.cor-opcao { --cor: #64748b; position: relative; width: 32px; height: 32px; cursor: pointer; }
+.cor-opcao input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.cor-opcao span { display: block; width: 100%; height: 100%; border-radius: 50%; background: var(--cor); border: 3px solid var(--superficie); box-shadow: 0 0 0 1px var(--borda-forte); }
+.cor-opcao input:checked + span { box-shadow: 0 0 0 2px var(--texto); }
+.cor-opcao input:focus-visible + span { outline: 2px solid var(--vermelho); outline-offset: 3px; }
+
+/* abas da página de personalização */
+.abas-pagina { align-self: flex-start; }
+.lista-funis { display: grid; gap: 12px; }
+.lista-funis .painel-cab h2 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tabela tr.inativo td { opacity: .6; }
+
+/* editor de etapas */
+.etapas-ed { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 6px; }
+.etapa-ed { display: grid; grid-template-columns: auto 110px minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px; border: 1px solid var(--borda); border-radius: var(--raio); background: var(--superficie); }
+.etapa-ed input, .etapa-ed select { min-height: 38px; padding: 6px 10px; border-radius: var(--raio); border: 1px solid var(--borda-forte); background: var(--superficie); color: var(--texto); font: 400 14px var(--fonte-texto); min-width: 0; width: 100%; }
+.etapa-ed .selo { justify-self: start; }
+.acoes-etapa { display: flex; gap: 2px; }
+.acoes-etapa .btn-icone { width: 34px; min-height: 34px; }
+@media (max-width: 640px) {
+  .etapa-ed { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .etapa-ed .sel-cor { grid-column: 2; grid-row: 2; }
+  .etapa-ed [data-c=nome] { grid-column: 2; grid-row: 1; }
+  .etapa-ed [data-c=evento], .etapa-ed > .selo { grid-column: 2; grid-row: 3; }
+  .etapa-ed .acoes-etapa { grid-column: 3; grid-row: 1 / span 3; flex-direction: column; }
+}
+
+/* quadro do funil */
+.coluna header { border-top: 3px solid var(--cor, transparent); padding-top: 6px; margin-top: -4px; }
+.coluna header h2 { display: flex; align-items: center; gap: 6px; }
+.card-etiquetas { display: flex; flex-wrap: wrap; gap: 4px; }
+.card-etiquetas .etiqueta { margin: 0; font-size: 11px; padding: 1px 7px; }
+
+/* painel do cliente (lateral da conversa e ficha) */
+.pc { display: grid; gap: 0; }
+.pc-cab { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--borda); }
+.pc-cab h3 { font-size: 15px; }
+.pc-bloco { padding: 12px 14px; border-bottom: 1px solid var(--borda); display: grid; gap: 8px; align-content: start; }
+.pc-bloco:last-child { border-bottom: 0; }
+.pc-bloco h4 { display: flex; align-items: center; gap: 6px; font: 600 12px var(--fonte-texto); letter-spacing: .06em; text-transform: uppercase; color: var(--texto-3); }
+.pc-bloco h4 .ic { width: 15px; height: 15px; }
+.pc-mini { margin-left: auto; min-height: 26px; padding: 0 8px; font-size: 12.5px; text-transform: none; letter-spacing: 0; }
+.pc-funil { display: grid; gap: 4px; }
+.pc-funil .sub { font-size: 12px; color: var(--texto-3); }
+.pc-etapa { --cor: #64748b; position: relative; }
+.pc-etapa select { width: 100%; min-height: 38px; padding: 6px 10px 6px 12px; border-radius: var(--raio); border: 1px solid color-mix(in srgb, var(--cor) 45%, var(--borda-forte)); border-left: 5px solid var(--cor); background: color-mix(in srgb, var(--cor) 7%, var(--superficie)); color: var(--texto); font: 600 14px var(--fonte-texto); }
+.pc-etiquetas, .pc-escolher { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
+.pc-etiquetas .etiqueta, .pc-escolher .etiqueta { margin: 0; }
+.etiqueta.alternar { cursor: pointer; font: 600 12px var(--fonte-texto); padding: 4px 10px; background: var(--superficie); opacity: .75; }
+.etiqueta.alternar.marcada { background: color-mix(in srgb, var(--cor) 18%, var(--superficie)); opacity: 1; border-color: var(--cor); }
+.etiqueta.alternar .ic { width: 12px; height: 12px; }
+.etiqueta.alternar:focus-visible { outline: 2px solid var(--vermelho); outline-offset: 2px; }
+.pc-nova-etiqueta { display: flex; gap: 6px; }
+.pc-nova-etiqueta input { flex: 1; min-width: 0; min-height: 34px; padding: 4px 10px; border-radius: var(--raio); border: 1px solid var(--borda-forte); background: var(--superficie); color: var(--texto); font: 400 13.5px var(--fonte-texto); }
+.pc-nova-etiqueta .btn { min-height: 34px; padding: 0 12px; font-size: 13px; }
+.pc-campos { display: grid; gap: 10px; }
+.pc-campo { gap: 4px; }
+.pc-campo label { display: flex; align-items: center; gap: 4px; font-size: 12.5px; }
+.pc-campo input, .pc-campo select { min-height: 36px; font-size: 14px; }
+.pc-campo.salvo input, .pc-campo.salvo select { border-color: var(--ok); box-shadow: 0 0 0 2px var(--ok-fundo); transition: box-shadow .2s, border-color .2s; }
+.ficha-painel { border: 1px solid var(--borda); border-radius: var(--raio-g); background: var(--superficie); }
+.ficha-painel .pc { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); align-items: start; }
+.ficha-painel .pc-bloco[aria-label="Informações do cliente"] { grid-column: 2; grid-row: 1 / span 3; border-left: 1px solid var(--borda); }
+.ficha-painel .pc-bloco[aria-label="Reservas"] { display: none; }
+@media (max-width: 640px) { .ficha-painel .pc { grid-template-columns: minmax(0, 1fr); } .ficha-painel .pc-bloco[aria-label="Informações do cliente"] { grid-column: auto; grid-row: auto; border-left: 0; } }
+.ficha-painel .pc-bloco { border-bottom: 0; }
+
+/* lateral da caixa de conversas */
+.caixa { position: relative; }
+.caixa.com-lateral { grid-template-columns: minmax(260px, 340px) minmax(0, 1fr) minmax(280px, 330px); }
+.lateral { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--superficie); border-left: 1px solid var(--borda); }
+.lateral[hidden] { display: none; }
+.lateral-cab { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 10px 10px 14px; min-height: 64px; border-bottom: 1px solid var(--borda); }
+.lateral-cab > span { display: flex; align-items: center; gap: 2px; }
+.lateral-corpo { flex: 1; overflow-y: auto; overscroll-behavior: contain; }
+.chat-cab [data-lateral][aria-pressed="true"] { background: var(--superficie-2); border-color: var(--texto-3); }
+.item-conversa .etiquetas-conversa { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; align-items: center; }
+.item-conversa .etiquetas-conversa .etiqueta { margin: 0; font-size: 10.5px; padding: 0 6px; line-height: 17px; }
+.item-conversa .etiquetas-conversa .sub { font-size: 11px; color: var(--texto-3); }
+@media (max-width: 1279px) {
+  .caixa.com-lateral { grid-template-columns: minmax(280px, 360px) minmax(0, 1fr); }
+  .lateral { position: absolute; top: 0; right: 0; bottom: 0; width: min(360px, 100%); z-index: 6; box-shadow: var(--sombra); }
+}
+@media (max-width: 860px) {
+  .caixa.com-lateral { grid-template-columns: minmax(0, 1fr); }
+  .lateral { width: 100%; }
+  .chat-cab .rotulo-lateral { display: none; }
+}
+
+/* Disponível / Em pausa (topo) */
+.disponibilidade { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 12px; border-radius: 99px; border: 1px solid var(--borda-forte); background: var(--superficie); color: var(--texto-2); font: 600 13px var(--fonte-texto); cursor: pointer; white-space: nowrap; }
+.disponibilidade .ponto { width: 9px; height: 9px; border-radius: 50%; background: var(--texto-3); }
+.disponibilidade.ligada { border-color: color-mix(in srgb, var(--ok) 50%, transparent); background: var(--ok-fundo); color: var(--ok); }
+.disponibilidade.ligada .ponto { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
+.disponibilidade:disabled { opacity: .6; cursor: wait; }
+.disponibilidade:focus-visible { outline: 2px solid var(--vermelho); outline-offset: 2px; }
+@media (max-width: 520px) { .disponibilidade .rotulo { display: none; } .disponibilidade { padding: 0 10px; } }
+
+/* roleta (tela de atendentes) */
+#roleta { display: contents; }
+.painel-cab h2 .ic { width: 18px; height: 18px; vertical-align: -3px; }
+.opcoes-modo { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; }
+.opcoes-modo legend { margin-bottom: 6px; }
+.opcao-modo { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--borda); border-radius: var(--raio); cursor: pointer; }
+.opcao-modo:has(input:checked) { border-color: var(--vermelho); background: var(--vermelho-suave); }
+.opcao-modo input { margin-top: 3px; accent-color: var(--vermelho); width: 16px; height: 16px; flex: none; }
+.opcao-modo > span { display: grid; gap: 2px; }
+.opcao-modo .sub { font-size: 13px; color: var(--texto-2); }
+.interruptor { position: relative; display: inline-flex; width: 42px; height: 24px; cursor: pointer; }
+.interruptor input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.interruptor .trilho { width: 100%; height: 100%; border-radius: 99px; background: var(--borda-forte); transition: background .15s; }
+.interruptor .trilho::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .15s; }
+.interruptor input:checked + .sr-only + .trilho { background: var(--ok); }
+.interruptor input:checked + .sr-only + .trilho::after { transform: translateX(18px); }
+.interruptor input:focus-visible + .sr-only + .trilho { outline: 2px solid var(--vermelho); outline-offset: 2px; }
+.filtros #escolher-funil { flex: 0 1 240px; }

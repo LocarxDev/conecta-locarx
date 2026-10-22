@@ -15,9 +15,51 @@ export async function montar(alvo, ctx) {
       <div class="titulos"><h1>Atendentes</h1><p>Quem atende os clientes da ${ctx.usuario.loja?.nome || 'sua loja'} no Conecta.</p></div>
       <button class="btn btn-primario" id="convidar-topo">${icone('mais')}Convidar atendente</button>
     </div>
+    <div id="roleta"></div>
     <div id="equipe"></div>`);
   const painel = painelEquipe($('#equipe', alvo), { ctx, lojaId: null, podeGerir: true, podeConvidarDono: false });
   $('#convidar-topo', alvo).addEventListener('click', painel.convidar);
+  painelRoleta($('#roleta', alvo), ctx);
+}
+
+// Roleta de atendimento: para quem vão as conversas quando o assistente chama um atendente.
+const MODOS = [
+  ['rodizio', 'Rodízio', 'Uma conversa para cada pessoa disponível, na ordem.'],
+  ['menos_ocupado', 'Quem está com menos conversas', 'Vai para quem tem menos atendimentos em andamento.'],
+  ['desligada', 'Desligada', 'A conversa fica em "Aguardando" e quem pegar primeiro atende.'],
+];
+async function painelRoleta(alvo, ctx) {
+  let r;
+  try { r = await api.roleta(); } catch (err) { return render(alvo, html`<div class="alerta-caixa erro">${icone('alerta')}<span>${err.message}</span></div>`); }
+  const situacao = (u) => (!u.marcouDisponivel ? html`<span class="selo neutro">Em pausa</span>`
+    : u.online ? html`<span class="selo ok">Disponível</span>` : html`<span class="selo alerta" title="Marcou disponível, mas está sem o Conecta aberto">Disponível, fora do Conecta</span>`);
+  render(alvo, html`<section class="painel">
+    <div class="painel-cab"><div><h2>${icone('roleta')} Roleta de atendimento</h2>
+      <span class="sub">Quando o assistente chama um atendente (ou a conversa chega sem assistente), ela vai para alguém que está <strong>Disponível</strong>. Cada pessoa liga e pausa no botão do topo da tela.${r.aguardando ? ` Agora: ${r.aguardando} conversa(s) aguardando.` : ''}</span></div></div>
+    <form class="painel-corpo form" id="form-roleta" novalidate>
+      <fieldset class="opcoes-modo"><legend class="rotulo-campo">Como distribuir</legend>
+        ${MODOS.map(([v, t, ajuda]) => html`<label class="opcao-modo"><input type="radio" name="modo" value="${v}" ${r.modo === v ? 'checked' : ''}><span><strong>${t}</strong><span class="sub">${ajuda}</span></span></label>`)}
+      </fieldset>
+      <div class="campo campo-curto"><label for="r-limite">Máximo de conversas em andamento por pessoa</label>
+        <input id="r-limite" name="limite" type="number" min="0" max="100" value="${r.limite}" inputmode="numeric"><p class="ajuda">0 = sem limite. Quem chegar no limite deixa de receber até encerrar alguma.</p></div>
+      <div class="tabela-caixa"><table class="tabela">
+        <thead><tr><th>Pessoa</th><th>Situação</th><th class="col-opcional">Em andamento</th><th>Participa da roleta</th></tr></thead>
+        <tbody>${r.equipe.map((u) => html`<tr><td><strong>${u.nome}</strong>${u.id === ctx.usuario.id ? html` <span class="sub">(você)</span>` : ''}<br><span class="sub">${u.perfil === 'dono' ? 'Dono da loja' : 'Atendente'}</span></td>
+          <td>${situacao(u)}</td><td class="col-opcional num">${u.emAndamento}</td>
+          <td><label class="interruptor"><input type="checkbox" data-participa="${u.id}" ${u.naRoleta ? 'checked' : ''}><span class="sr-only">${u.nome} participa da roleta</span><span class="trilho"></span></label></td></tr>`)}</tbody></table></div>
+      <div><button class="btn btn-primario" type="submit">Salvar roleta</button></div>
+    </form></section>`);
+  const f = $('#form-roleta', alvo);
+  f.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const limite = Number(f.elements.limite.value || 0);
+    if (!Number.isInteger(limite) || limite < 0 || limite > 100) return marcarErros(f, { limite: 'Use um número de 0 a 100.' });
+    const participantes = Object.fromEntries($$('[data-participa]', f).map((c) => [c.dataset.participa, c.checked]));
+    await comBotao($('[type=submit]', f), async () => {
+      try { await api.salvarRoleta({ modo: f.elements.modo.value, limite, participantes }); avisar('Roleta salva.'); painelRoleta(alvo, ctx); }
+      catch (err) { avisar(err.message, 'erro'); }
+    });
+  });
 }
 
 export function painelEquipe(alvo, { ctx, lojaId, podeGerir, podeConvidarDono, titulo = 'Equipe' }) {

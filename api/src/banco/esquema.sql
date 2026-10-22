@@ -353,7 +353,6 @@ CREATE INDEX IF NOT EXISTS reservas_retirada ON reservas (loja_id, retirada);
 ALTER TABLE contatos ADD COLUMN IF NOT EXISTS email text CHECK (email IS NULL OR length(email) <= 254);
 ALTER TABLE contatos ADD COLUMN IF NOT EXISTS cpf_cifrado text;
 ALTER TABLE contatos ADD COLUMN IF NOT EXISTS cpf_final text;
-ALTER TABLE contatos ADD COLUMN IF NOT EXISTS etiquetas text[] NOT NULL DEFAULT '{}';
 ALTER TABLE contatos ADD COLUMN IF NOT EXISTS observacoes text CHECK (observacoes IS NULL OR length(observacoes) <= 4000);
 ALTER TABLE contatos ADD COLUMN IF NOT EXISTS optout boolean NOT NULL DEFAULT false;
 ALTER TABLE contatos ADD COLUMN IF NOT EXISTS optin_em timestamptz;
@@ -365,7 +364,6 @@ CREATE TABLE IF NOT EXISTS oportunidades (
   contato_id     uuid NOT NULL REFERENCES contatos(id) ON DELETE CASCADE,
   conversa_id    uuid REFERENCES conversas(id) ON DELETE SET NULL,
   reserva_id     uuid REFERENCES reservas(id) ON DELETE SET NULL,
-  etapa          text NOT NULL DEFAULT 'novo' CHECK (etapa IN ('novo', 'cotacao', 'reserva', 'retirada', 'concluido', 'perdido')),
   valor_previsto numeric(12, 2),
   motivo_perda   text CHECK (motivo_perda IS NULL OR length(motivo_perda) <= 200),
   responsavel_id uuid REFERENCES usuarios(id) ON DELETE SET NULL,
@@ -373,8 +371,7 @@ CREATE TABLE IF NOT EXISTS oportunidades (
   atualizada_em  timestamptz NOT NULL DEFAULT now(),
   fechada_em     timestamptz
 );
-CREATE INDEX IF NOT EXISTS oportunidades_loja ON oportunidades (loja_id, etapa);
-CREATE UNIQUE INDEX IF NOT EXISTS oportunidades_aberta ON oportunidades (contato_id) WHERE etapa NOT IN ('concluido', 'perdido');
+-- funil, etapa e resultado: ver ETAPA 7 (funis personalizáveis)
 
 CREATE TABLE IF NOT EXISTS tarefas (
   id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -464,3 +461,234 @@ DROP POLICY IF EXISTS sinonimos_ver ON sinonimos;
 CREATE POLICY sinonimos_ver ON sinonimos FOR SELECT USING (true);
 DROP POLICY IF EXISTS sinonimos_alterar ON sinonimos;
 CREATE POLICY sinonimos_alterar ON sinonimos FOR ALL USING (ctx_perfil() IN ('admin', 'matriz', 'sistema')) WITH CHECK (ctx_perfil() IN ('admin', 'matriz', 'sistema'));
+
+-- =====================================================================
+-- ETAPA 7 — Funis personalizáveis, etiquetas, campos personalizados e roleta de atendimento
+-- Regra geral: loja_id NULL = padrão da rede (só administração e matriz alteram);
+--              loja_id preenchido = da loja (o dono personaliza).
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS funis (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  loja_id    uuid REFERENCES lojas(id) ON DELETE CASCADE,
+  nome       text NOT NULL CHECK (length(nome) BETWEEN 2 AND 60),
+  principal  boolean NOT NULL DEFAULT false,      -- o assistente trabalha no funil principal
+  arquivado  boolean NOT NULL DEFAULT false,
+  ordem      smallint NOT NULL DEFAULT 0,
+  criado_em  timestamptz NOT NULL DEFAULT now()
+);
+-- origem_id: de qual funil/etapa da rede veio a cópia. personalizado: o dono já mexeu (aí o padrão da rede não sobrescreve mais).
+ALTER TABLE funis ADD COLUMN IF NOT EXISTS origem_id uuid;
+ALTER TABLE funis ADD COLUMN IF NOT EXISTS personalizado boolean NOT NULL DEFAULT false;
+CREATE UNIQUE INDEX IF NOT EXISTS funis_principal ON funis (coalesce(loja_id, '00000000-0000-0000-0000-000000000000'::uuid)) WHERE principal;
+CREATE INDEX IF NOT EXISTS funis_loja ON funis (loja_id);
+
+CREATE TABLE IF NOT EXISTS etapas_funil (
+  id        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  funil_id  uuid NOT NULL REFERENCES funis(id) ON DELETE CASCADE,
+  loja_id   uuid REFERENCES lojas(id) ON DELETE CASCADE,   -- copiado do funil (preenchido por gatilho)
+  nome      text NOT NULL CHECK (length(nome) BETWEEN 2 AND 40),
+  ordem     smallint NOT NULL DEFAULT 0,
+  cor       text NOT NULL DEFAULT '#64748b' CHECK (cor ~ '^#[0-9a-f]{6}$'),
+  tipo      text NOT NULL DEFAULT 'aberta' CHECK (tipo IN ('aberta', 'ganho', 'perdido')),
+  -- o assistente e as automações movem o cliente para cá quando acontece:
+  evento    text CHECK (evento IS NULL OR evento IN ('cotacao', 'reserva', 'retirada')),
+  CHECK (evento IS NULL OR tipo = 'aberta')
+);
+ALTER TABLE etapas_funil ADD COLUMN IF NOT EXISTS origem_id uuid;
+CREATE UNIQUE INDEX IF NOT EXISTS etapas_funil_evento ON etapas_funil (funil_id, evento) WHERE evento IS NOT NULL;
+CREATE INDEX IF NOT EXISTS etapas_funil_funil ON etapas_funil (funil_id, ordem);
+
+CREATE OR REPLACE FUNCTION etapa_loja_do_funil() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  NEW.loja_id := (SELECT loja_id FROM funis WHERE id = NEW.funil_id);
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS etapas_funil_loja ON etapas_funil;
+CREATE TRIGGER etapas_funil_loja BEFORE INSERT OR UPDATE ON etapas_funil FOR EACH ROW EXECUTE FUNCTION etapa_loja_do_funil();
+
+-- funil padrão da rede (criado uma vez; depois a administração edita)
+DO $$
+DECLARE f uuid;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM funis WHERE loja_id IS NULL) THEN
+    INSERT INTO funis (loja_id, nome, principal) VALUES (NULL, 'Locação', true) RETURNING id INTO f;
+    INSERT INTO etapas_funil (funil_id, nome, ordem, cor, tipo, evento) VALUES
+      (f, 'Novo contato', 0, '#64748b', 'aberta', NULL),
+      (f, 'Em cotação', 1, '#2563eb', 'aberta', 'cotacao'),
+      (f, 'Reserva criada', 2, '#7c3aed', 'aberta', 'reserva'),
+      (f, 'Carro retirado', 3, '#d97706', 'aberta', 'retirada'),
+      (f, 'Concluído', 4, '#16a34a', 'ganho', NULL),
+      (f, 'Perdido', 5, '#dc2626', 'perdido', NULL);
+  END IF;
+END $$;
+
+-- Cópia do padrão da rede para a loja (na primeira vez que a loja usa o funil). Devolve o funil principal da loja.
+CREATE OR REPLACE FUNCTION garantir_funil_loja(p_loja uuid) RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE principal_id uuid; rf record; novo uuid;
+BEGIN
+  SELECT id INTO principal_id FROM funis WHERE loja_id = p_loja AND principal;
+  IF principal_id IS NOT NULL THEN RETURN principal_id; END IF;
+  PERFORM pg_advisory_xact_lock(hashtext('funil:' || p_loja::text));
+  SELECT id INTO principal_id FROM funis WHERE loja_id = p_loja AND principal;
+  IF principal_id IS NOT NULL THEN RETURN principal_id; END IF;
+  FOR rf IN SELECT * FROM funis WHERE loja_id IS NULL AND NOT arquivado ORDER BY principal DESC, ordem, criado_em LOOP
+    INSERT INTO funis (loja_id, nome, principal, ordem, origem_id) VALUES (p_loja, rf.nome, principal_id IS NULL, rf.ordem, rf.id) RETURNING id INTO novo;
+    INSERT INTO etapas_funil (funil_id, nome, ordem, cor, tipo, evento, origem_id)
+      SELECT novo, nome, ordem, cor, tipo, evento, id FROM etapas_funil WHERE funil_id = rf.id;
+    IF principal_id IS NULL THEN principal_id := novo; END IF;
+  END LOOP;
+  RETURN principal_id;
+END $$;
+
+ALTER TABLE oportunidades ADD COLUMN IF NOT EXISTS funil_id uuid REFERENCES funis(id) ON DELETE RESTRICT;
+ALTER TABLE oportunidades ADD COLUMN IF NOT EXISTS etapa_id uuid REFERENCES etapas_funil(id) ON DELETE RESTRICT;
+ALTER TABLE oportunidades ADD COLUMN IF NOT EXISTS resultado text CHECK (resultado IS NULL OR resultado IN ('ganho', 'perdido'));
+ALTER TABLE oportunidades ADD COLUMN IF NOT EXISTS cotou_em timestamptz;
+ALTER TABLE oportunidades ADD COLUMN IF NOT EXISTS reservou_em timestamptz;
+
+-- migração de bancos antigos (etapas fixas → funil da loja)
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'oportunidades' AND column_name = 'etapa') THEN
+    PERFORM set_config('app.perfil', 'sistema', true);
+    PERFORM garantir_funil_loja(l) FROM (SELECT DISTINCT loja_id AS l FROM oportunidades) x;
+    UPDATE oportunidades o SET funil_id = f.id,
+           etapa_id = (SELECT e.id FROM etapas_funil e WHERE e.funil_id = f.id AND CASE
+                         WHEN o.etapa = 'concluido' THEN e.tipo = 'ganho'
+                         WHEN o.etapa = 'perdido' THEN e.tipo = 'perdido'
+                         WHEN o.etapa IN ('cotacao', 'reserva', 'retirada') THEN e.evento = o.etapa
+                         ELSE e.tipo = 'aberta' END ORDER BY e.ordem LIMIT 1),
+           resultado = CASE o.etapa WHEN 'concluido' THEN 'ganho' WHEN 'perdido' THEN 'perdido' END,
+           fechada_em = CASE WHEN o.etapa IN ('concluido', 'perdido') THEN coalesce(o.fechada_em, o.atualizada_em) END,
+           cotou_em = CASE WHEN o.etapa <> 'novo' THEN o.atualizada_em END,
+           reservou_em = CASE WHEN o.etapa IN ('reserva', 'retirada', 'concluido') OR o.reserva_id IS NOT NULL THEN o.atualizada_em END
+      FROM funis f WHERE f.loja_id = o.loja_id AND f.principal AND o.funil_id IS NULL;
+    UPDATE oportunidades o SET etapa_id = (SELECT id FROM etapas_funil WHERE funil_id = o.funil_id AND tipo = 'aberta' ORDER BY ordem LIMIT 1) WHERE etapa_id IS NULL;
+    ALTER TABLE oportunidades DROP COLUMN etapa;
+  END IF;
+END $$;
+ALTER TABLE oportunidades ALTER COLUMN funil_id SET NOT NULL;
+ALTER TABLE oportunidades ALTER COLUMN etapa_id SET NOT NULL;
+CREATE INDEX IF NOT EXISTS oportunidades_funil ON oportunidades (loja_id, funil_id, etapa_id);
+CREATE UNIQUE INDEX IF NOT EXISTS oportunidades_aberta_funil ON oportunidades (contato_id, funil_id) WHERE fechada_em IS NULL;
+
+-- ---------- etiquetas ----------
+CREATE TABLE IF NOT EXISTS etiquetas (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  loja_id       uuid REFERENCES lojas(id) ON DELETE CASCADE,
+  nome          text NOT NULL CHECK (length(nome) BETWEEN 2 AND 30),
+  cor           text NOT NULL DEFAULT '#64748b' CHECK (cor ~ '^#[0-9a-f]{6}$'),
+  descricao_bot text CHECK (descricao_bot IS NULL OR length(descricao_bot) <= 300),  -- quando o assistente deve aplicar (vazio = só a equipe aplica)
+  criada_em     timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS etiquetas_nome ON etiquetas (coalesce(loja_id, '00000000-0000-0000-0000-000000000000'::uuid), lower(nome));
+
+CREATE TABLE IF NOT EXISTS contato_etiquetas (
+  contato_id      uuid NOT NULL REFERENCES contatos(id) ON DELETE CASCADE,
+  etiqueta_id     uuid NOT NULL REFERENCES etiquetas(id) ON DELETE CASCADE,
+  loja_id         uuid NOT NULL REFERENCES lojas(id) ON DELETE CASCADE,
+  pelo_assistente boolean NOT NULL DEFAULT false,
+  aplicada_por    uuid REFERENCES usuarios(id) ON DELETE SET NULL,
+  aplicada_em     timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (contato_id, etiqueta_id)
+);
+CREATE INDEX IF NOT EXISTS contato_etiquetas_etiqueta ON contato_etiquetas (loja_id, etiqueta_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM etiquetas WHERE loja_id IS NULL) THEN
+    INSERT INTO etiquetas (loja_id, nome, cor, descricao_bot) VALUES
+      (NULL, 'Urgente', '#dc2626', 'O cliente precisa do carro hoje ou amanhã.'),
+      (NULL, 'Mensal', '#7c3aed', 'Locação de 30 dias ou mais.'),
+      (NULL, 'Empresa', '#2563eb', 'O cliente aluga em nome de uma empresa ou pede nota fiscal para CNPJ.'),
+      (NULL, 'Aplicativo', '#d97706', 'O cliente vai usar o carro para trabalhar com Uber, 99 ou outro aplicativo.'),
+      (NULL, 'Turismo', '#0891b2', 'O cliente está viajando a passeio ou de férias.');
+  END IF;
+  -- migração: etiquetas em texto (versão antiga) → etiquetas cadastradas
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'contatos' AND column_name = 'etiquetas') THEN
+    INSERT INTO etiquetas (loja_id, nome)
+      SELECT DISTINCT k.loja_id, left(e, 30) FROM contatos k, unnest(k.etiquetas) e WHERE length(e) >= 2
+      ON CONFLICT DO NOTHING;
+    INSERT INTO contato_etiquetas (contato_id, etiqueta_id, loja_id)
+      SELECT k.id, t.id, k.loja_id FROM contatos k CROSS JOIN LATERAL unnest(k.etiquetas) e JOIN etiquetas t ON t.loja_id = k.loja_id AND lower(t.nome) = lower(left(e, 30))
+      ON CONFLICT DO NOTHING;
+    ALTER TABLE contatos DROP COLUMN etiquetas;
+  END IF;
+END $$;
+
+-- ---------- campos personalizados (informações que o assistente coleta) ----------
+CREATE TABLE IF NOT EXISTS campos_personalizados (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  loja_id       uuid REFERENCES lojas(id) ON DELETE CASCADE,
+  chave         text NOT NULL CHECK (chave ~ '^[a-z][a-z0-9_]{1,39}$'),
+  nome          text NOT NULL CHECK (length(nome) BETWEEN 2 AND 60),
+  tipo          text NOT NULL DEFAULT 'texto' CHECK (tipo IN ('texto', 'numero', 'data', 'lista', 'simnao')),
+  opcoes        text[] NOT NULL DEFAULT '{}',
+  instrucao_bot text CHECK (instrucao_bot IS NULL OR length(instrucao_bot) <= 300),  -- vazio = o assistente não coleta
+  ordem         smallint NOT NULL DEFAULT 0,
+  ativo         boolean NOT NULL DEFAULT true,
+  criado_em     timestamptz NOT NULL DEFAULT now(),
+  CHECK (tipo <> 'lista' OR cardinality(opcoes) BETWEEN 2 AND 20)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS campos_chave ON campos_personalizados (coalesce(loja_id, '00000000-0000-0000-0000-000000000000'::uuid), chave);
+
+CREATE TABLE IF NOT EXISTS valores_campos (
+  contato_id      uuid NOT NULL REFERENCES contatos(id) ON DELETE CASCADE,
+  campo_id        uuid NOT NULL REFERENCES campos_personalizados(id) ON DELETE CASCADE,
+  loja_id         uuid NOT NULL REFERENCES lojas(id) ON DELETE CASCADE,
+  valor           text NOT NULL CHECK (length(valor) BETWEEN 1 AND 500),
+  pelo_assistente boolean NOT NULL DEFAULT false,
+  atualizado_em   timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (contato_id, campo_id)
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM campos_personalizados WHERE loja_id IS NULL) THEN
+    INSERT INTO campos_personalizados (loja_id, chave, nome, tipo, opcoes, instrucao_bot, ordem) VALUES
+      (NULL, 'periodo', 'Período desejado', 'texto', '{}', 'Datas e horários de retirada e devolução que o cliente quer (ex.: 12/11 10h a 15/11 18h).', 0),
+      (NULL, 'carro_desejado', 'Carro ou grupo desejado', 'texto', '{}', 'Modelo, categoria ou grupo de carro que o cliente pediu ou escolheu.', 1),
+      (NULL, 'motivo', 'Motivo da locação', 'lista', '{Turismo,Trabalho,Aplicativo,Carro reserva,Outro}', 'Para que o cliente vai usar o carro, se ele disser.', 2),
+      (NULL, 'como_conheceu', 'Como conheceu a LocarX', 'lista', '{Google,Instagram,Indicação,Já é cliente,Outro}', NULL, 3);
+  END IF;
+END $$;
+
+-- ---------- roleta de atendimento ----------
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS disponivel boolean NOT NULL DEFAULT false;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS na_roleta boolean NOT NULL DEFAULT true;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS visto_em timestamptz;
+ALTER TABLE conversas ADD COLUMN IF NOT EXISTS atribuida_em timestamptz;
+
+CREATE TABLE IF NOT EXISTS distribuicao (
+  loja_id           uuid PRIMARY KEY REFERENCES lojas(id) ON DELETE CASCADE,
+  modo              text NOT NULL DEFAULT 'rodizio' CHECK (modo IN ('rodizio', 'menos_ocupado', 'desligada')),
+  limite            smallint NOT NULL DEFAULT 0 CHECK (limite BETWEEN 0 AND 100),   -- 0 = sem limite de conversas por pessoa
+  ultimo_usuario_id uuid REFERENCES usuarios(id) ON DELETE SET NULL,
+  atualizada_em     timestamptz NOT NULL DEFAULT now()
+);
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON funis, etapas_funil, etiquetas, contato_etiquetas, campos_personalizados, valores_campos, distribuicao TO conecta_app;
+
+DO $$
+DECLARE t text;
+BEGIN
+  -- catálogos: o padrão da rede todos leem; só administração/matriz alteram. O da loja é da loja.
+  FOREACH t IN ARRAY ARRAY['funis', 'etapas_funil', 'etiquetas', 'campos_personalizados'] LOOP
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %I', t || '_ver', t);
+    EXECUTE format($p$CREATE POLICY %I ON %I FOR SELECT USING (ctx_perfil() = 'sistema' OR loja_id IS NULL OR loja_id = ctx_loja())$p$, t || '_ver', t);
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %I', t || '_alterar', t);
+    EXECUTE format($p$CREATE POLICY %I ON %I FOR ALL
+      USING (ctx_perfil() = 'sistema' OR (loja_id IS NULL AND ctx_perfil() IN ('admin', 'matriz')) OR (loja_id = ctx_loja() AND ctx_perfil() IN ('dono', 'atendente')))
+      WITH CHECK (ctx_perfil() = 'sistema' OR (loja_id IS NULL AND ctx_perfil() IN ('admin', 'matriz')) OR (loja_id = ctx_loja() AND ctx_perfil() IN ('dono', 'atendente')))$p$, t || '_alterar', t);
+  END LOOP;
+  FOREACH t IN ARRAY ARRAY['contato_etiquetas', 'valores_campos', 'distribuicao'] LOOP
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %I', t || '_loja', t);
+    EXECUTE format($p$CREATE POLICY %I ON %I FOR ALL
+      USING (ctx_perfil() = 'sistema' OR loja_id = ctx_loja())
+      WITH CHECK (ctx_perfil() = 'sistema' OR loja_id = ctx_loja())$p$, t || '_loja', t);
+  END LOOP;
+END $$;

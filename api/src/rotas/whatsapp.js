@@ -6,6 +6,8 @@ import { evolution, lerMensagemEvolution } from '../servicos/canais/evolution.js
 import { iguais } from '../servicos/seguranca.js';
 import { rota, erro, exigirPerfil, registrar } from '../http.js';
 import { estadoInicial, agendar, dentroDoHorario } from '../servicos/ia/assistente.js';
+import { registrarEvento } from '../servicos/crm/funis.js';
+import { distribuir } from '../servicos/crm/roleta.js';
 
 export const canal = Router();
 export const webhooks = Router();
@@ -169,6 +171,10 @@ async function registrarRecebida(lojaId, m) {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
        ON CONFLICT (loja_id, externo_id) WHERE externo_id IS NOT NULL DO NOTHING`,
       [conversa.id, lojaId, entrada ? 'entrada' : 'saida', entrada ? 'cliente' : 'atendente', m.tipo, m.texto, m.midia, m.externoId]);
+    // conversa nova ou reaberta: o cliente entra (ou continua) no funil principal da loja
+    if (reabrir) await registrarEvento(c, { lojaId, contatoId: contato.id, conversaId: conversa.id, evento: null });
+    // esperando alguém da equipe: a roleta entrega para a próxima pessoa disponível
+    if (entrada && conversa.estado === 'aguardando' && await distribuir(c, conversa.id)) conversa.estado = 'humano';
     // cliente pediu para não receber mais mensagens ativas (lembretes, avisos)
     if (entrada && m.tipo === 'texto' && PALAVRAS_SAIR.test(m.texto || '') && !contato.optout) {
       await c.query('UPDATE contatos SET optout = true, atualizado_em = now() WHERE id = $1', [contato.id]);

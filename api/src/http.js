@@ -81,6 +81,10 @@ export async function carregarSessao(req, res, next) {
         await c.query('DELETE FROM sessoes WHERE id = $1', [r.sessao_id]);
         return null;
       }
+      // "visto agora": a roleta só entrega conversas para quem está com o Conecta aberto
+      if (['dono', 'atendente'].includes(r.perfil) && (!r.visto_em || Date.now() - new Date(r.visto_em) > 60_000)) {
+        await c.query('UPDATE usuarios SET visto_em = now() WHERE id = $1', [r.id]);
+      }
       if (Date.now() - new Date(r.ultimo_uso) > 5 * 60_000) {
         await c.query('UPDATE sessoes SET ultimo_uso = now() WHERE id = $1', [r.sessao_id]);
       }
@@ -118,6 +122,7 @@ export function usuarioPublico(u) {
   return {
     id: u.id, nome: u.nome, email: u.email, perfil: u.perfil, lojaId: u.loja_id, status: u.status,
     doisFatores: !!u.totp_ativo, ultimoAcesso: u.ultimo_acesso,
+    ...(u.loja_id ? { disponivel: !!u.disponivel, naRoleta: u.na_roleta !== false } : {}),
     ...(u.loja_nome !== undefined ? { loja: u.loja_id ? { id: u.loja_id, nome: u.loja_nome, cidade: u.loja_cidade, uf: u.loja_uf } : null } : {}),
   };
 }

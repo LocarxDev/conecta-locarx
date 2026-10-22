@@ -35,7 +35,18 @@ export const PERFIS = {
 export function $(seletor, raiz = document) { return raiz.querySelector(seletor); }
 export function $$(seletor, raiz = document) { return [...raiz.querySelectorAll(seletor)]; }
 
-export function render(alvo, conteudo) { alvo.innerHTML = String(conteudo); }
+export function render(alvo, conteudo) { alvo.innerHTML = String(conteudo); aplicarCores(alvo); }
+
+// Cores escolhidas pela loja (etiquetas, etapas do funil). A CSP não deixa usar style="" no HTML,
+// então a cor vai em data-cor e é aplicada aqui como variável CSS (--cor).
+export function aplicarCores(raiz) {
+  raiz.querySelectorAll?.('[data-cor]').forEach((el) => { if (/^#[0-9a-f]{6}$/i.test(el.dataset.cor)) el.style.setProperty('--cor', el.dataset.cor); });
+}
+export const CORES = [['#64748b', 'Cinza'], ['#2563eb', 'Azul'], ['#0891b2', 'Turquesa'], ['#16a34a', 'Verde'], ['#d97706', 'Laranja'], ['#dc2626', 'Vermelho'], ['#7c3aed', 'Roxo'], ['#db2777', 'Rosa']];
+export const chipEtiqueta = (e, extra = '') => html`<span class="etiqueta cor" data-cor="${e.cor}">${e.nome}${extra}</span>`;
+export function seletorCor(nome, atual) {
+  return html`<div class="cores" role="radiogroup" aria-label="Cor">${CORES.map(([c, n]) => html`<label class="cor-opcao" data-cor="${c}" title="${n}"><input type="radio" name="${nome}" value="${c}" ${c === atual ? 'checked' : ''} aria-label="${n}"><span></span></label>`)}</div>`;
+}
 
 // Armazenamento do navegador: só para preferências (tema). Nunca guarda senha ou token.
 export const preferencia = {
@@ -94,6 +105,13 @@ const caminhos = {
   vazio: '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M3.5 13h5l1.5 2h4l1.5-2h5"/>',
   copiar: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  etiqueta: '<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.5"/>',
+  ajustes: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
+  subir: '<path d="m6 15 6-6 6 6"/>',
+  descer: '<path d="m6 9 6 6 6-6"/>',
+  painel: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>',
+  roleta: '<path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v4h-4"/><circle cx="12" cy="12" r="2"/>',
+  robo: '<rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 4v4M9.5 13h.01M14.5 13h.01"/>',
 };
 export function icone(nome) {
   return new HtmlSeguro(`<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${caminhos[nome] || ''}</svg>`);
@@ -111,6 +129,10 @@ export function avisar(texto, tipo = 'ok') {
 }
 
 // ---------- janela (modal) ----------
+const janelasAbertas = new Set();
+// ao trocar de tela (ex.: link "Abrir conversa" dentro da ficha), as janelas da tela anterior fecham
+export function fecharJanelas() { [...janelasAbertas].forEach((f) => f()); }
+
 export function abrirModal({ titulo, corpo, rodape }) {
   const anterior = document.activeElement;
   const fundo = document.createElement('div');
@@ -125,10 +147,19 @@ export function abrirModal({ titulo, corpo, rodape }) {
       ${rodape ? html`<div class="modal-rodape">${rodape}</div>` : ''}
     </div>`);
   document.body.appendChild(fundo);
-  const fechar = () => { fundo.remove(); document.removeEventListener('keydown', tecla); anterior?.focus?.(); };
-  const tecla = (e) => { if (e.key === 'Escape') fechar(); };
+  // A janela só fecha pelo X, por "Cancelar"/"Fechar" ou pelo Esc — nunca com clique fora,
+  // para ninguém perder o que digitou. Se já digitou algo, o Esc também não fecha.
+  let sujo = false;
+  fundo.addEventListener('input', (e) => { if (!e.target.closest('[data-salva-sozinho]')) sujo = true; }); // painéis que salvam sozinhos não contam
+  const fechar = () => { janelasAbertas.delete(fechar); fundo.remove(); document.removeEventListener('keydown', tecla); anterior?.focus?.(); };
+  janelasAbertas.add(fechar);
+  const avisarQueFica = () => { const m = fundo.querySelector('.modal'); m.classList.remove('chamar-atencao'); void m.offsetWidth; m.classList.add('chamar-atencao'); };
+  const tecla = (e) => {
+    if (e.key !== 'Escape' || document.querySelector('.modal-fundo:last-of-type') !== fundo) return;
+    if (sujo) avisarQueFica(); else fechar();
+  };
   document.addEventListener('keydown', tecla);
-  fundo.addEventListener('mousedown', (e) => { if (e.target === fundo) fechar(); });
+  fundo.addEventListener('mousedown', (e) => { if (e.target === fundo) avisarQueFica(); });
   $$('[data-fechar]', fundo).forEach((b) => b.addEventListener('click', fechar));
   setTimeout(() => ($('input, select, textarea', fundo) || $('.modal-rodape .btn-primario, .modal-rodape .btn-perigo', fundo))?.focus(), 30);
   return { el: fundo, fechar };

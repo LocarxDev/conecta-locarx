@@ -1,7 +1,8 @@
 // Meu perfil: dados, senha e verificação em 2 etapas do próprio usuário.
 import { Router } from 'express';
 import { z } from 'zod';
-import { comContexto, contextoDoUsuario } from '../banco/conexao.js';
+import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js';
+import { distribuirPendentes } from '../servicos/crm/roleta.js';
 import { conferirSenha, hashSenha, problemasSenha, cifrar, decifrar, novoSegredo2fa, codigo2faValido, qrDo2fa, formatarChave } from '../servicos/seguranca.js';
 import { rota, erro, validar, zEmail, zNome, usuarioPublico, registrar } from '../http.js';
 
@@ -13,6 +14,16 @@ async function euComLoja(c, id) {
   return (await c.query(
     `SELECT u.*, l.nome AS loja_nome, l.cidade AS loja_cidade, l.uf AS loja_uf FROM usuarios u LEFT JOIN lojas l ON l.id = u.loja_id WHERE u.id = $1`, [id])).rows[0];
 }
+
+// Disponível / Em pausa (roleta de atendimento). Ao ficar disponível, recebe as conversas que estavam esperando.
+eu.patch('/disponibilidade', rota(async (req, res) => {
+  if (!['dono', 'atendente'].includes(req.usuario.perfil)) throw erro(403, 'Só a equipe da loja participa da roleta.');
+  const { disponivel } = validar(z.object({ disponivel: z.boolean() }), req.body);
+  await comContexto(ctx(req), (c) => c.query('UPDATE usuarios SET disponivel = $2, visto_em = now() WHERE id = $1', [req.usuario.id, disponivel]));
+  if (disponivel) await comoSistema((c) => distribuirPendentes(c, req.usuario.loja_id));
+  const u = await comContexto(ctx(req), (c) => euComLoja(c, req.usuario.id));
+  res.json(usuarioPublico(u));
+}));
 
 eu.patch('/', rota(async (req, res) => {
   const d = validar(z.object({ nome: zNome, email: zEmail, senhaAtual: z.string().max(200).optional() }), req.body);

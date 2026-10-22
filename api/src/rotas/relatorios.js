@@ -5,6 +5,7 @@ import { config } from '../config.js';
 import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js';
 import { novoToken, hashToken } from '../servicos/seguranca.js';
 import { emailConvite } from '../servicos/email.js';
+import { garantirFunil } from '../servicos/crm/funis.js';
 import { rota, erro, validar, zEmail, zNome, zUuid, exigirPerfil, registrar, usuarioPublico } from '../http.js';
 
 export const relatorioLoja = Router(); // /api/loja
@@ -23,7 +24,7 @@ async function indicadoresDaLoja(c, lojaId, dias) {
            (SELECT count(*) FROM cv WHERE id IN (SELECT conversa_id FROM humanos)) AS com_equipe,
            (SELECT count(*) FROM contatos WHERE loja_id = $1 AND criado_em >= now() - make_interval(days => $2)) AS clientes_novos,
            (SELECT count(*) FROM oportunidades WHERE loja_id = $1 AND criada_em >= now() - make_interval(days => $2)) AS oportunidades,
-           (SELECT count(*) FROM oportunidades WHERE loja_id = $1 AND criada_em >= now() - make_interval(days => $2) AND etapa <> 'novo') AS cotacoes,
+           (SELECT count(*) FROM oportunidades WHERE loja_id = $1 AND criada_em >= now() - make_interval(days => $2) AND cotou_em IS NOT NULL) AS cotacoes,
            (SELECT count(*) FROM reservas WHERE loja_id = $1 AND criada_em >= now() - make_interval(days => $2) AND status <> 'cancelada') AS reservas,
            (SELECT coalesce(sum(valor), 0) FROM reservas WHERE loja_id = $1 AND criada_em >= now() - make_interval(days => $2) AND status <> 'cancelada') AS valor,
            (SELECT count(*) FROM reservas WHERE loja_id = $1 AND criada_em >= now() - make_interval(days => $2) AND status <> 'cancelada' AND origem = 'assistente') AS reservas_assistente,
@@ -56,7 +57,7 @@ relatorioLoja.get('/relatorio', exigirPerfil('dono'), rota(async (req, res) => {
         (SELECT count(*) FROM conversas WHERE loja_id = $1 AND ultima_do_cliente::date = d::date) AS conversas,
         (SELECT count(*) FROM reservas WHERE loja_id = $1 AND criada_em::date = d::date AND status <> 'cancelada') AS reservas
       FROM generate_series((now() AT TIME ZONE 'America/Bahia')::date - ($2 - 1), (now() AT TIME ZONE 'America/Bahia')::date, interval '1 day') d`, [lojaId, dias])).rows,
-    perdas: (await c.query(`SELECT motivo_perda AS motivo, count(*)::int AS n FROM oportunidades WHERE loja_id = $1 AND etapa = 'perdido' AND fechada_em >= now() - make_interval(days => $2) GROUP BY 1 ORDER BY 2 DESC LIMIT 8`, [lojaId, dias])).rows,
+    perdas: (await c.query(`SELECT motivo_perda AS motivo, count(*)::int AS n FROM oportunidades WHERE loja_id = $1 AND resultado = 'perdido' AND fechada_em >= now() - make_interval(days => $2) GROUP BY 1 ORDER BY 2 DESC LIMIT 8`, [lojaId, dias])).rows,
     semResposta: (await c.query(`SELECT pergunta, criada_em FROM perguntas_sem_resposta WHERE loja_id = $1 AND criada_em >= now() - make_interval(days => $2) ORDER BY criada_em DESC LIMIT 10`, [lojaId, dias])).rows,
     equipe: (await c.query(`SELECT u.nome, count(DISTINCT m.conversa_id)::int AS conversas, count(*)::int AS mensagens
         FROM mensagens m JOIN usuarios u ON u.id = m.autor_id WHERE m.loja_id = $1 AND m.autor = 'atendente' AND m.direcao = 'saida' AND m.criada_em >= now() - make_interval(days => $2)
@@ -126,11 +127,16 @@ relatorioRede.post('/demonstracao', exigirPerfil('admin'), rota(async (req, res)
     await c.query(`INSERT INTO canais (loja_id, provedor, instancia, status, numero) VALUES ($1, 'evolution', $2, 'conectado', '5571900000000')`, [loja.id, `demo-${loja.id}`]);
     await c.query(`INSERT INTO assistentes (loja_id, ativo, nome, boas_vindas) VALUES ($1, false, 'Lia', 'Olá! Eu sou a Lia, assistente da LocarX.')`, [loja.id]);
     const clientes = [['Ana Paula Souza', '5571988880001', 'reserva', 380], ['Bruno Lima', '5571988880002', 'cotacao', 290], ['Carla Dias', '5571988880003', 'novo', null], ['Diego Alves', '5571988880004', 'perdido', 450], ['Elaine Rocha', '5571988880005', 'concluido', 520], ['Fábio Nunes', '5575988880006', 'cotacao', 610]];
+    const funilId = await garantirFunil(c, loja.id);
     let i = 0;
     for (const [nome, tel, etapa, valor] of clientes) {
       i++;
-      const k = (await c.query(`INSERT INTO contatos (loja_id, telefone, nome, etiquetas, optin_em, criado_em) VALUES ($1, $2, $3, $4, now(), now() - make_interval(days => $5)) RETURNING id`,
-        [loja.id, tel, nome, i % 2 ? ['aeroporto'] : ['recorrente'], i * 2])).rows[0];
+      const k = (await c.query(`INSERT INTO contatos (loja_id, telefone, nome, optin_em, criado_em) VALUES ($1, $2, $3, now(), now() - make_interval(days => $4)) RETURNING id`,
+        [loja.id, tel, nome, i * 2])).rows[0];
+      await c.query(`INSERT INTO contato_etiquetas (contato_id, etiqueta_id, loja_id, pelo_assistente) SELECT $1, id, $2, true FROM etiquetas WHERE loja_id IS NULL AND nome = $3`,
+        [k.id, loja.id, i % 2 ? 'Turismo' : 'Empresa']);
+      await c.query(`INSERT INTO valores_campos (contato_id, campo_id, loja_id, valor, pelo_assistente) SELECT $1, id, $2, $3, true FROM campos_personalizados WHERE loja_id IS NULL AND chave = 'carro_desejado'`,
+        [k.id, loja.id, i % 2 ? 'SUV' : 'Compacto']);
       const cv = (await c.query(`INSERT INTO conversas (loja_id, contato_id, estado, ultima_previa, ultima_mensagem_em, ultima_do_cliente, nao_lidas) VALUES ($1, $2, $3, $4, now() - make_interval(hours => $5), now() - make_interval(hours => $5), $6) RETURNING id`,
         [loja.id, k.id, etapa === 'novo' ? 'aguardando' : etapa === 'cotacao' ? 'assistente' : 'encerrada', 'Gostaria de alugar um carro', i * 3, etapa === 'novo' ? 1 : 0])).rows[0];
       await c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto, criada_em) VALUES
@@ -142,8 +148,11 @@ relatorioRede.post('/demonstracao', exigirPerfil('admin'), rota(async (req, res)
           VALUES ($1, $2, $3, $4, $5, now() + make_interval(days => $6), now() + make_interval(days => $6 + 3), 'C - COMPACTO ESPECIAL', $7, 'assistente') RETURNING id`,
           [loja.id, k.id, cv.id, 'DEMO' + (1000 + i), etapa === 'concluido' ? 'concluida' : 'confirmada', etapa === 'concluido' ? -6 : 2, valor])).rows[0].id;
       }
-      await c.query(`INSERT INTO oportunidades (loja_id, contato_id, conversa_id, reserva_id, etapa, valor_previsto, motivo_perda, fechada_em) VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $5 IN ('concluido', 'perdido') THEN now() END)`,
-        [loja.id, k.id, cv.id, reservaId, etapa, valor, etapa === 'perdido' ? 'Preço acima do esperado' : null]);
+      const e = (await c.query(`SELECT id, tipo FROM etapas_funil WHERE funil_id = $1 AND CASE $2::text WHEN 'concluido' THEN tipo = 'ganho' WHEN 'perdido' THEN tipo = 'perdido'
+          WHEN 'novo' THEN tipo = 'aberta' ELSE evento = $2::text END ORDER BY ordem LIMIT 1`, [funilId, etapa])).rows[0];
+      await c.query(`INSERT INTO oportunidades (loja_id, contato_id, conversa_id, reserva_id, funil_id, etapa_id, resultado, valor_previsto, motivo_perda, fechada_em, cotou_em, reservou_em)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $7::text IS NOT NULL THEN now() END, CASE WHEN $10 THEN now() END, CASE WHEN $4::uuid IS NOT NULL THEN now() END)`,
+        [loja.id, k.id, cv.id, reservaId, funilId, e.id, e.tipo === 'aberta' ? null : e.tipo, valor, etapa === 'perdido' ? 'Preço acima do esperado' : null, etapa !== 'novo']);
     }
     await c.query(`INSERT INTO tarefas (loja_id, titulo, vence_em, automatica) VALUES ($1, 'Retomar cotação de Bruno Lima', now(), true), ($1, 'Ligar para confirmar retirada da Ana Paula', now() + interval '1 day', false)`, [loja.id]);
     await c.query(`INSERT INTO conhecimento (escopo, loja_id, titulo, conteudo, status) VALUES ('loja', $1, 'Caução', 'A caução é bloqueada no cartão de crédito do condutor na retirada e liberada após a devolução.', 'aprovado')`, [loja.id]);

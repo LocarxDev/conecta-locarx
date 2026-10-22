@@ -3,7 +3,7 @@
 // e ao recarregar o sistema pergunta ao back-end quem está logado antes de mostrar qualquer coisa.
 
 import { api, USAR_EXEMPLO } from './api.js';
-import { html, render, $, $$, icone, iniciais, preferencia, avisar, PERFIS } from './util.js';
+import { html, render, $, $$, icone, iniciais, preferencia, avisar, PERFIS, fecharJanelas } from './util.js';
 import * as acesso from './telas/acesso.js';
 import * as inicio from './telas/inicio.js';
 import * as equipe from './telas/equipe.js';
@@ -22,6 +22,7 @@ import * as tarefasTela from './telas/tarefas.js';
 import * as modelosTela from './telas/modelos.js';
 import * as relatoriosTela from './telas/relatorios.js';
 import * as acessosTela from './telas/acessos.js';
+import * as personalizarTela from './telas/personalizar.js';
 
 const app = document.getElementById('app');
 const estado = { usuario: null, destino: null };
@@ -40,6 +41,7 @@ function menuDoPerfil(perfilUsuario) {
       { rota: 'inicio', rotulo: 'Visão da rede', icone: 'inicio' },
       { rota: 'lojas', rotulo: 'Lojas', icone: 'lojas' },
       { rota: 'rede', rotulo: 'Base da rede', icone: 'assistente' },
+      { rota: 'padroes', rotulo: 'Padrões do CRM', icone: 'ajustes' },
       { rota: 'relatorios-rede', rotulo: 'Relatórios', icone: 'relatorios' },
       ...(perfilUsuario === 'admin' ? [{ rota: 'acessos', rotulo: 'Acessos da rede', icone: 'escudo' }] : []),
     ];
@@ -56,6 +58,7 @@ function menuDoPerfil(perfilUsuario) {
       { rota: 'whatsapp', rotulo: 'WhatsApp da loja', icone: 'whatsapp' },
       { rota: 'respostas', rotulo: 'Respostas rápidas', icone: 'editar' },
       { rota: 'modelos', rotulo: 'Mensagens automáticas', icone: 'email' },
+      { rota: 'personalizar', rotulo: 'Funis, etiquetas e campos', icone: 'ajustes' },
       { rota: 'assistente', rotulo: 'Assistente virtual', icone: 'assistente' },
       { rota: 'base', rotulo: 'Base de conhecimento', icone: 'info' },
       { rota: 'relatorios', rotulo: 'Relatórios', icone: 'relatorios' },
@@ -91,6 +94,8 @@ const ROTAS = [
   { padrao: /^relatorios$/, tela: relatoriosTela.loja, perfis: ['dono'] },
   { padrao: /^relatorios-rede$/, tela: relatoriosTela.rede, perfis: ['admin', 'matriz'] },
   { padrao: /^acessos$/, tela: acessosTela.montar, perfis: ['admin'] },
+  { padrao: /^personalizar$/, tela: personalizarTela.montar, perfis: ['dono'] },
+  { padrao: /^padroes$/, tela: personalizarTela.montar, perfis: ['admin', 'matriz'] },
 ];
 
 function lerRota() {
@@ -123,6 +128,7 @@ async function despachar() {
     return navegar('inicio');
   }
 
+  fecharJanelas();
   const params = caminho.match(achada.padrao).slice(1);
   // mesma tela, só mudou o detalhe (ex.: outra conversa): atualiza sem redesenhar tudo
   if (achada.tela === telaAtiva && controleTela?.atualizar && estado.usuario) {
@@ -189,6 +195,9 @@ function desenharEstrutura(caminhoAtual) {
             <span>${PERFIS[u.perfil]}</span>
           </div>
           <div class="acoes">
+            ${ehRede ? '' : html`<button class="disponibilidade${u.disponivel ? ' ligada' : ''}" id="disponibilidade" aria-pressed="${!!u.disponivel}"
+              title="${u.disponivel ? 'Você está recebendo conversas da roleta. Clique para pausar.' : 'Você não recebe conversas da roleta. Clique para ficar disponível.'}">
+              <span class="ponto"></span><span class="rotulo">${u.disponivel ? 'Disponível' : 'Em pausa'}</span></button>`}
             <button class="btn btn-texto btn-icone" id="trocar-tema" aria-label="${escuro ? 'Usar modo claro' : 'Usar modo escuro'}" title="${escuro ? 'Modo claro' : 'Modo escuro'}">${icone(escuro ? 'sol' : 'lua')}</button>
             <div class="usuario-menu">
               <button class="usuario-btn" id="usuario-btn" aria-haspopup="menu" aria-expanded="false">
@@ -223,6 +232,22 @@ function desenharEstrutura(caminhoAtual) {
     render(botaoTema, icone(modoEscuro ? 'sol' : 'lua'));
     botaoTema.setAttribute('aria-label', modoEscuro ? 'Usar modo claro' : 'Usar modo escuro');
     botaoTema.title = modoEscuro ? 'Modo claro' : 'Modo escuro';
+  });
+
+  // Disponível / Em pausa (roleta de atendimento)
+  const disp = $('#disponibilidade');
+  disp?.addEventListener('click', async () => {
+    disp.disabled = true;
+    try {
+      const novo = await api.disponibilidade(!estado.usuario.disponivel);
+      estado.usuario = { ...estado.usuario, disponivel: novo.disponivel };
+      disp.classList.toggle('ligada', novo.disponivel);
+      disp.setAttribute('aria-pressed', String(novo.disponivel));
+      $('.rotulo', disp).textContent = novo.disponivel ? 'Disponível' : 'Em pausa';
+      disp.title = novo.disponivel ? 'Você está recebendo conversas da roleta. Clique para pausar.' : 'Você não recebe conversas da roleta. Clique para ficar disponível.';
+      avisar(novo.disponivel ? 'Você está disponível: as conversas da roleta chegam para você.' : 'Você está em pausa: a roleta não entrega novas conversas para você.');
+    } catch (err) { if (err.status === 401) return location.reload(); avisar(err.message, 'erro'); }
+    finally { disp.disabled = false; }
   });
 
   // menu do usuário

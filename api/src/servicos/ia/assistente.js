@@ -7,6 +7,8 @@ import { evolution } from '../canais/evolution.js';
 import { conversarComIa, transcreverAudio } from './provedores.js';
 import { simularIa } from './simulada.js';
 import { ferramentasDaLoja } from '../locarx/ferramentas.js';
+import { listarCampos, listarEtiquetas } from '../crm/personalizacao.js';
+import { distribuir } from '../crm/roleta.js';
 
 const provedoresCanal = { evolution };
 const ESPERA_MS = 4000;              // espera o cliente terminar de digitar várias mensagens seguidas
@@ -55,11 +57,41 @@ async function repassar(c, conversa, motivo, mensagemCliente) {
   await c.query(`UPDATE conversas SET estado = 'aguardando', atendente_id = NULL, bot_respondeu_em = now(), atualizada_em = now() WHERE id = $1`, [conversa.id]);
   await c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto) VALUES ($1, $2, 'interna', 'sistema', 'evento', $3)`,
     [conversa.id, conversa.loja_id, `Assistente chamou um atendente: ${String(motivo || 'pedido do cliente').slice(0, 200)}`]);
+  // roleta: entrega para a próxima pessoa disponível da equipe (se houver)
+  await distribuir(c, conversa.id);
   if (mensagemCliente) return mensagemCliente;
   return null;
 }
 
-function montarSistema({ loja, a, rede, contato, historicoReservas }) {
+// o que a loja/rede quer que o assistente anote e etiquete, e o que já foi anotado deste cliente
+async function crmDoAssistente(c, lojaId, contatoId) {
+  const campos = (await listarCampos(c, lojaId, { soAtivos: true })).filter((x) => x.instrucao_bot);
+  const etiquetas = (await listarEtiquetas(c, lojaId)).filter((e) => e.descricao_bot);
+  const valores = contatoId ? (await c.query('SELECT campo_id, valor FROM valores_campos WHERE contato_id = $1', [contatoId])).rows : [];
+  const aplicadas = contatoId ? (await c.query('SELECT etiqueta_id FROM contato_etiquetas WHERE contato_id = $1', [contatoId])).rows.map((x) => x.etiqueta_id) : [];
+  return { campos, etiquetas, valores, aplicadas };
+}
+
+function textoCrm({ campos, etiquetas, valores, aplicadas }) {
+  const partes = [];
+  if (campos.length) {
+    partes.push('INFORMAÇÕES PARA ANOTAR (use salvar_informacoes assim que o cliente contar; não faça interrogatório, pergunte só o que for natural no atendimento)\n'
+      + campos.map((x) => {
+        const v = valores.find((y) => y.campo_id === x.id)?.valor;
+        const fmt = x.tipo === 'lista' ? ` [uma destas: ${x.opcoes.join(' | ')}]` : x.tipo === 'data' ? ' [AAAA-MM-DD]' : x.tipo === 'numero' ? ' [número]' : x.tipo === 'simnao' ? ' [sim ou não]' : '';
+        // o valor veio da conversa com o cliente: vai em uma linha, curto e entre aspas (nunca como instrução)
+        const anotado = v ? String(v).replace(/[\r\n"]+/g, ' ').slice(0, 120) : '';
+        return `- ${x.chave} (${x.nome})${fmt}: ${x.instrucao_bot}${anotado ? ` — já anotado: "${anotado}"` : ''}`;
+      }).join('\n'));
+  }
+  if (etiquetas.length) {
+    partes.push('ETIQUETAS (use aplicar_etiqueta quando a situação acontecer)\n'
+      + etiquetas.map((e) => `- ${e.nome}: ${e.descricao_bot}${aplicadas.includes(e.id) ? ' (já aplicada)' : ''}`).join('\n'));
+  }
+  return partes.join('\n\n');
+}
+
+function montarSistema({ loja, a, rede, contato, historicoReservas, crm }) {
   const agora = agoraBahia();
   const recorrente = historicoReservas.length
     ? `Cliente recorrente: já alugou ${historicoReservas.length}x nesta loja; última vez grupo ${historicoReservas[0].grupo || 'não informado'} em ${new Date(historicoReservas[0].retirada).toLocaleDateString('pt-BR')}. Cumprimente pelo nome e, se fizer sentido, sugira o mesmo grupo.`
@@ -86,6 +118,8 @@ ORIENTAÇÕES DESTA LOJA
 ${a.instrucoes || '(nenhuma)'}
 
 ${a.boas_vindas ? `SAUDAÇÃO DO PRIMEIRO CONTATO: ${a.boas_vindas}` : ''}
+
+${crm ? textoCrm(crm) : ''}
 
 CLIENTE: ${contato.nome || 'nome não informado'}. ${recorrente}`;
 }
@@ -116,14 +150,15 @@ async function processarAgora(conversaId) {
     const msgs = (await c.query(
       `SELECT * FROM (SELECT * FROM mensagens WHERE conversa_id = $1 AND direcao <> 'interna' ORDER BY criada_em DESC LIMIT 30) x ORDER BY criada_em`, [conversaId])).rows;
     const historicoReservas = (await c.query(`SELECT grupo, retirada FROM reservas WHERE contato_id = $1 AND status <> 'cancelada' ORDER BY retirada DESC LIMIT 3`, [conversa.contato_id])).rows;
-    return { conversa, a, canal, loja, rede, msgs, historicoReservas };
+    const crm = await crmDoAssistente(c, conversa.loja_id, conversa.contato_id);
+    return { conversa, a, canal, loja, rede, msgs, historicoReservas, crm };
   });
   if (!prep) return;
   if (prep.repassar) {
     await comoSistema((c) => repassar(c, prep.conversa, prep.repassar));
     return;
   }
-  const { conversa, a, canal, loja, rede, msgs, historicoReservas } = prep;
+  const { conversa, a, canal, loja, rede, msgs, historicoReservas, crm } = prep;
   const ultimaDoCliente = [...msgs].reverse().find((m) => m.direcao === 'entrada');
 
   // 2) pedido de atendente por palavra-chave: repassa sem gastar IA
@@ -163,7 +198,7 @@ async function processarAgora(conversaId) {
   let pedidoAtendente = null;
   const ferramentas = ferramentasDaLoja({
     lojaId: loja.id, branchId: loja.branch_id, conversaId: conversa.id, contatoId: conversa.contato_id, telefone: conversa.telefone,
-    locarxDisponivel: !!config.locarx, simulacao: false,
+    locarxDisponivel: !!config.locarx, simulacao: false, campos: crm.campos, etiquetas: crm.etiquetas,
     aoChamarAtendente: async (args) => { pedidoAtendente = args; },
   });
 
@@ -172,7 +207,7 @@ async function processarAgora(conversaId) {
   try {
     const opcoes = {
       provedor: a.provedor, modelo: a.modelo, chave: a.chave_cifrada ? decifrar(a.chave_cifrada) : null,
-      sistema: montarSistema({ loja, a, rede, contato: { nome: conversa.contato_nome }, historicoReservas }), historico, ferramentas,
+      sistema: montarSistema({ loja, a, rede, contato: { nome: conversa.contato_nome }, historicoReservas, crm }), historico, ferramentas,
     };
     resposta = config.iaSimulada ? await simularIa(opcoes) : await conversarComIa(opcoes);
   } catch (e) { erroIa = e; console.error('[assistente] IA:', e.message); }
@@ -236,15 +271,16 @@ export function iniciarVarreduras() {
 
 // ---------- teste pelo painel (não envia nada ao cliente, não cria reserva) ----------
 export async function testarAssistente(lojaId, historico) {
-  const { a, loja, rede } = await comoSistema(async (c) => ({
+  const { a, loja, rede, crm } = await comoSistema(async (c) => ({
     a: (await c.query('SELECT * FROM assistentes WHERE loja_id = $1', [lojaId])).rows[0],
     loja: (await c.query('SELECT * FROM lojas WHERE id = $1', [lojaId])).rows[0],
     rede: (await c.query('SELECT * FROM rede_config LIMIT 1')).rows[0] || {},
+    crm: await crmDoAssistente(c, lojaId, null),
   }));
   if (!a?.chave_cifrada && !config.iaSimulada) { const e = new Error('Cadastre a chave da IA antes de testar.'); e.status = 400; throw e; }
   let chamou = null;
-  const ferramentas = ferramentasDaLoja({ lojaId, branchId: loja.branch_id, locarxDisponivel: !!config.locarx, simulacao: true, aoChamarAtendente: async (x) => { chamou = x; } });
-  const opcoes = { provedor: a.provedor, modelo: a.modelo, chave: a.chave_cifrada ? decifrar(a.chave_cifrada) : null, sistema: montarSistema({ loja, a, rede, contato: { nome: null }, historicoReservas: [] }), historico, ferramentas };
+  const ferramentas = ferramentasDaLoja({ lojaId, branchId: loja.branch_id, locarxDisponivel: !!config.locarx, simulacao: true, campos: crm.campos, etiquetas: crm.etiquetas, aoChamarAtendente: async (x) => { chamou = x; } });
+  const opcoes = { provedor: a.provedor, modelo: a.modelo, chave: a.chave_cifrada ? decifrar(a.chave_cifrada) : null, sistema: montarSistema({ loja, a, rede, contato: { nome: null }, historicoReservas: [], crm }), historico, ferramentas };
   const r = config.iaSimulada ? await simularIa(opcoes) : await conversarComIa(opcoes);
   return { resposta: r.texto, ferramentas: r.usadas, chamouAtendente: chamou };
 }

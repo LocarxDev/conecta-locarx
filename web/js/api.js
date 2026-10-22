@@ -37,6 +37,8 @@ async function chamar(metodo, caminho, corpo) {
   return dados;
 }
 
+const base = (escopo) => (escopo === 'rede' ? '/admin' : '/crm');
+
 const real = {
   entrar: (d) => chamar('POST', '/auth/entrar', d),
   verificar2fa: (d) => chamar('POST', '/auth/2fa', d),
@@ -110,7 +112,7 @@ const real = {
   novoContato: (d) => chamar('POST', '/crm/contatos', d),
   salvarContato: (id, d) => chamar('PATCH', `/crm/contatos/${encodeURIComponent(id)}`, d),
   urlExportarContatos: () => '/api/crm/contatos.csv',
-  funil: () => chamar('GET', '/crm/funil'),
+  funil: (funilId) => chamar('GET', '/crm/funil' + (funilId ? '?funil=' + encodeURIComponent(funilId) : '')),
   novaOportunidade: (d) => chamar('POST', '/crm/oportunidades', d),
   moverOportunidade: (id, d) => chamar('PATCH', `/crm/oportunidades/${encodeURIComponent(id)}`, d),
   tarefas: (q) => chamar('GET', '/crm/tarefas?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
@@ -120,6 +122,28 @@ const real = {
   modelos: () => chamar('GET', '/crm/modelos'),
   salvarModelo: (chave, d) => chamar('PUT', `/crm/modelos/${encodeURIComponent(chave)}`, d),
   mensagemAtiva: (id, d) => chamar('POST', `/crm/contatos/${encodeURIComponent(id)}/mensagem`, d),
+
+  // etapa 7 — funis, etiquetas, campos, painel do cliente e roleta
+  // escopo: 'loja' (o dono personaliza a loja) ou 'rede' (padrão da rede, administração/matriz)
+  funis: () => chamar('GET', '/crm/funis'),
+  criarFunil: (d) => chamar('POST', '/crm/funis', d),
+  salvarFunil: (id, d) => chamar('PUT', `/crm/funis/${encodeURIComponent(id)}`, d),
+  arquivarFunil: (id) => chamar('DELETE', `/crm/funis/${encodeURIComponent(id)}`),
+  funilPadrao: () => chamar('GET', '/admin/funil-padrao'),
+  salvarFunilPadrao: (d) => chamar('PUT', '/admin/funil-padrao', d),
+  etiquetas: (escopo = 'loja') => chamar('GET', `${base(escopo)}/etiquetas`),
+  salvarEtiqueta: (escopo, d) => (d.id ? chamar('PUT', `${base(escopo)}/etiquetas/${encodeURIComponent(d.id)}`, d) : chamar('POST', `${base(escopo)}/etiquetas`, d)),
+  excluirEtiqueta: (escopo, id) => chamar('DELETE', `${base(escopo)}/etiquetas/${encodeURIComponent(id)}`),
+  campos: (escopo = 'loja') => chamar('GET', `${base(escopo)}/campos`),
+  salvarCampo: (escopo, d) => (d.id ? chamar('PUT', `${base(escopo)}/campos/${encodeURIComponent(d.id)}`, d) : chamar('POST', `${base(escopo)}/campos`, d)),
+  excluirCampo: (escopo, id) => chamar('DELETE', `${base(escopo)}/campos/${encodeURIComponent(id)}`),
+  ordenarCampos: (escopo, ids) => chamar('POST', `${base(escopo)}/campos/ordem`, { ids }),
+  painelCliente: (id) => chamar('GET', `/crm/contatos/${encodeURIComponent(id)}/painel`),
+  salvarCamposCliente: (id, valores) => chamar('PUT', `/crm/contatos/${encodeURIComponent(id)}/campos`, { valores }),
+  salvarEtiquetasCliente: (id, etiquetas) => chamar('PUT', `/crm/contatos/${encodeURIComponent(id)}/etiquetas`, { etiquetas }),
+  roleta: () => chamar('GET', '/crm/roleta'),
+  salvarRoleta: (d) => chamar('PUT', '/crm/roleta', d),
+  disponibilidade: (disponivel) => chamar('PATCH', '/eu/disponibilidade', { disponivel }),
 
   // etapa 6 — relatórios e rede
   relatorioLoja: (dias) => chamar('GET', `/loja/relatorio?dias=${dias}`),

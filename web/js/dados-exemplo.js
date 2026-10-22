@@ -304,7 +304,8 @@ export const exemplo = {
     let lista = b.conversas;
     if (desde) lista = lista.filter((c) => c.cursor > desde);
     if (busca) { const t = busca.toLowerCase(); lista = lista.filter((c) => (c.contato.nome || '').toLowerCase().includes(t) || c.contato.telefone.includes(t.replace(/\D/g, '') || '¬')); }
-    return { conversas: [...lista].sort((a, z) => z.ultimaMensagemEm.localeCompare(a.ultimaMensagemEm)), cursor: new Date().toISOString() };
+    const crm = crmExemplo();
+    return { conversas: [...lista].map((c) => ({ ...c, etiquetas: crm.clientes[c.contato.id] ? etiquetasDe(crm, crm.clientes[c.contato.id]) : [] })).sort((a, z) => z.ultimaMensagemEm.localeCompare(a.ultimaMensagemEm)), cursor: new Date().toISOString() };
   },
   async mensagens(id, { depois } = {}) {
     await espera(120); const b = conversasExemplo();
@@ -365,22 +366,84 @@ export const exemplo = {
       { id: 'r2', codigo: 'SSA586601', status: 'confirmada', retirada: d(70), devolucao: d(140), grupo: 'B - ECONÔMICO', valor: 279.8, origem: 'assistente', contato: { id: 'k2', nome: 'Cliente exemplo 2', telefone: '5571988887772' }, conversaId: null },
     ];
   },
-  async contatos() {
-    await espera();
-    const c = (id, nome, tel, etapa, etiquetas, reservas, h) => ({ id, nome, telefone: tel, email: null, etiquetas, observacoes: '', cpf: null, optout: false, criadoEm: horasAtras(h * 3), ultimaConversa: horasAtras(h), conversaId: null, etapa, reservas });
-    return { contatos: [c('k1', 'Cliente exemplo 1', '5571988887771', 'reserva', ['aeroporto'], 1, 1), c('k2', 'Cliente exemplo 2', '5571988887772', 'reserva', ['recorrente'], 3, 4), c('k3', 'Cliente exemplo 3', '5575999991234', 'cotacao', [], 0, 6), c('k4', 'Cliente exemplo 4', '5571988887774', 'concluido', ['empresa'], 2, 30)], total: 4, etiquetas: ['aeroporto', 'empresa', 'recorrente'] };
+  async contatos({ busca, etiqueta } = {}) {
+    await espera(); const c = crmExemplo();
+    let lista = Object.values(c.clientes).map((k) => contatoDemo(c, k));
+    if (busca) { const t = busca.toLowerCase(); lista = lista.filter((k) => (k.nome || '').toLowerCase().includes(t) || k.telefone.includes(t.replace(/\D/g, '') || '¬')); }
+    if (etiqueta) lista = lista.filter((k) => k.etiquetas.some((e) => e.id === etiqueta));
+    return { contatos: lista, total: lista.length, etiquetas: c.etiquetas };
   },
   async contato(cid) {
-    await espera();
-    const k = (await this.contatos()).contatos.find((x) => x.id === cid) || (await this.contatos()).contatos[0];
-    return { ...k, janelaAbertaAte: new Date(agora + 20 * 3600e3).toISOString(), reservas: k.reservas ? [{ id: 'r1', codigo: 'SSA586587', status: 'confirmada', retirada: new Date(agora + 20 * 3600e3).toISOString(), grupo: 'C - COMPACTO ESPECIAL', valor: 345.5 }] : [], oportunidades: [{ id: 'o1', etapa: k.etapa, valor: 345.5, criadaEm: horasAtras(10) }], tarefas: [] };
+    await espera(); const c = crmExemplo();
+    const k = contatoDemo(c, c.clientes[cid] || Object.values(c.clientes)[0]);
+    const oportunidades = c.ops.filter((o) => o.contatoId === k.id).map((o) => { const f = c.funis.find((x) => x.id === o.funilId); const e = f.etapas.find((x) => x.id === o.etapaId); return { id: o.id, funil: f.nome, etapa: { nome: e.nome, cor: e.cor }, resultado: o.resultado || null, valor: o.valor, motivoPerda: o.motivoPerda || null, criadaEm: horasAtras(10) }; });
+    return { ...k, janelaAbertaAte: new Date(agora + 20 * 3600e3).toISOString(), reservas: k.reservas ? [{ id: 'r1', codigo: 'SSA586587', status: 'confirmada', retirada: new Date(agora + 20 * 3600e3).toISOString(), grupo: 'C - COMPACTO ESPECIAL', valor: 345.5 }] : [], oportunidades, tarefas: [] };
   },
-  async funil() {
-    await espera();
-    const o = (id, etapa, nome, valor, motivo) => ({ id, etapa, valor, motivoPerda: motivo || null, contato: { id: 'k' + id, nome, telefone: '5571900000000' }, atualizadaEm: horasAtras(Number(id.slice(1)) * 2) });
-    return (b0.funil ||= [o('o1', 'novo', 'Cliente exemplo 5', null), o('o2', 'cotacao', 'Cliente exemplo 3', 290), o('o3', 'cotacao', 'Cliente exemplo 6', 610), o('o4', 'reserva', 'Cliente exemplo 1', 345.5), o('o5', 'retirada', 'Cliente exemplo 2', 279.8), o('o6', 'concluido', 'Cliente exemplo 4', 520), o('o7', 'perdido', 'Cliente exemplo 7', 450, 'Preço acima do esperado')]);
+  async salvarContato(cid, d) { await espera(); const c = crmExemplo(); Object.assign(c.clientes[cid], { nome: d.nome || c.clientes[cid].nome, email: d.email || null, observacoes: d.observacoes || '', optout: !!d.optout }); salvar(); return contatoDemo(c, c.clientes[cid]); },
+  async funil(funilId) {
+    await espera(); const c = crmExemplo();
+    const f = c.funis.find((x) => x.id === funilId && !x.arquivado) || c.funis.find((x) => x.principal);
+    return { funilId: f.id, oportunidades: c.ops.filter((o) => o.funilId === f.id).map((o) => { const k = c.clientes[o.contatoId]; return { ...o, contato: { id: k.id, nome: k.nome, telefone: k.telefone, etiquetas: etiquetasDe(c, k) }, atualizadaEm: o.atualizadaEm || horasAtras(3) }; }) };
   },
-  async moverOportunidade(oid, d) { await espera(); const o = b0.funil.find((x) => x.id === oid); o.etapa = d.etapa; o.motivoPerda = d.motivoPerda || null; return o; },
+  async moverOportunidade(oid, d) {
+    await espera(); const c = crmExemplo(); const o = c.ops.find((x) => x.id === oid);
+    const f = c.funis.find((x) => x.etapas.some((e) => e.id === d.etapaId)); const e = f.etapas.find((x) => x.id === d.etapaId);
+    if (e.tipo === 'perdido' && !(d.motivoPerda || '').trim()) throw erro(422, 'Informe o motivo da perda.');
+    Object.assign(o, { funilId: f.id, etapaId: e.id, resultado: e.tipo === 'aberta' ? null : e.tipo, motivoPerda: e.tipo === 'perdido' ? d.motivoPerda : null, atualizadaEm: new Date().toISOString() });
+    salvar(); return o;
+  },
+  async novaOportunidade({ contatoId, funilId }) {
+    await espera(); const c = crmExemplo(); const f = c.funis.find((x) => x.id === funilId) || c.funis.find((x) => x.principal);
+    if (c.ops.some((o) => o.contatoId === contatoId && o.funilId === f.id && !o.resultado)) throw erro(409, 'Este cliente já está em andamento neste funil.');
+    const o = { id: id(), contatoId, funilId: f.id, etapaId: f.etapas.find((e) => e.tipo === 'aberta').id, valor: null, atualizadaEm: new Date().toISOString() };
+    c.ops.push(o); salvar(); return o;
+  },
+
+  // ---- etapa 7: funis, etiquetas, campos, painel do cliente e roleta (demonstração) ----
+  async funis() { await espera(); const c = crmExemplo(); return c.funis.filter((f) => !f.arquivado).map((f) => funilDemo(c, f)); },
+  async criarFunil(d) { await espera(); const c = crmExemplo(); const f = { id: id(), nome: d.nome, principal: false, personalizado: true, etapas: d.etapas.map((e, i) => ({ ...e, id: id(), ordem: i })) }; c.funis.push(f); salvar(); return funilDemo(c, f); },
+  async salvarFunil(fid, d) { await espera(); const c = crmExemplo(); const f = c.funis.find((x) => x.id === fid); aplicarEtapasDemo(c, f, d); if (d.principal) c.funis.forEach((x) => { x.principal = x.id === fid; }); f.personalizado = true; salvar(); return funilDemo(c, f); },
+  async arquivarFunil(fid) { await espera(); const c = crmExemplo(); const f = c.funis.find((x) => x.id === fid); if (f.principal) throw erro(409, 'Este é o funil principal. Escolha outro como principal antes.'); const n = c.ops.filter((o) => o.funilId === fid && !o.resultado).length; if (n) throw erro(409, `Há ${n} cliente(s) em andamento neste funil.`); f.arquivado = true; salvar(); },
+  async funilPadrao() { await espera(); const c = crmExemplo(); return { funil: funilDemo(c, c.padrao), lojas: { acompanham: 2, personalizaram: 1 } }; },
+  async salvarFunilPadrao(d) { await espera(); const c = crmExemplo(); aplicarEtapasDemo(c, c.padrao, d); salvar(); return { funil: funilDemo(c, c.padrao), lojasAtualizadas: 2 }; },
+  async etiquetas(escopo = 'loja') { await espera(150); const c = crmExemplo(); return c.etiquetas.filter((e) => escopo === 'loja' || e.daRede).map((e) => ({ ...e, uso: Object.values(c.clientes).filter((k) => k.aplicadas.some((a) => a.id === e.id)).length })); },
+  async salvarEtiqueta(escopo, d) {
+    await espera(); const c = crmExemplo();
+    if (c.etiquetas.some((e) => e.id !== d.id && e.nome.toLowerCase() === d.nome.toLowerCase())) throw erro(422, 'Já existe uma etiqueta com este nome.', { nome: 'Já existe uma etiqueta com este nome.' });
+    let e = c.etiquetas.find((x) => x.id === d.id);
+    if (e) Object.assign(e, { nome: d.nome, cor: d.cor, descricaoBot: d.descricaoBot || null });
+    else { e = { id: id(), nome: d.nome, cor: d.cor || '#64748b', descricaoBot: d.descricaoBot || null, daRede: escopo === 'rede' }; c.etiquetas.push(e); }
+    salvar(); return e;
+  },
+  async excluirEtiqueta(escopo, eid) { await espera(); const c = crmExemplo(); c.etiquetas = c.etiquetas.filter((e) => e.id !== eid); Object.values(c.clientes).forEach((k) => { k.aplicadas = k.aplicadas.filter((a) => a.id !== eid); }); salvar(); },
+  async campos(escopo = 'loja') { await espera(150); const c = crmExemplo(); return c.campos.filter((x) => escopo === 'loja' || x.daRede); },
+  async salvarCampo(escopo, d) {
+    await espera(); const c = crmExemplo(); let x = c.campos.find((y) => y.id === d.id);
+    if (x) Object.assign(x, { nome: d.nome, opcoes: d.opcoes, instrucaoBot: d.instrucaoBot, ativo: d.ativo });
+    else { x = { id: id(), chave: d.nome.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '_'), nome: d.nome, tipo: d.tipo, opcoes: d.opcoes, instrucaoBot: d.instrucaoBot, ativo: true, daRede: escopo === 'rede' }; c.campos.push(x); }
+    salvar(); return x;
+  },
+  async excluirCampo(escopo, cid) { await espera(); const c = crmExemplo(); c.campos = c.campos.filter((x) => x.id !== cid); salvar(); },
+  async ordenarCampos(escopo, ids) { await espera(); const c = crmExemplo(); c.campos.sort((a, z) => (ids.indexOf(a.id) + 1 || -99) - (ids.indexOf(z.id) + 1 || -99)); salvar(); },
+  async painelCliente(cid) { await espera(200); return painelDemo(crmExemplo(), cid); },
+  async salvarCamposCliente(cid, valores) {
+    await espera(200); const c = crmExemplo(); const k = c.clientes[cid];
+    for (const [campoId, v] of Object.entries(valores)) {
+      const campo = c.campos.find((x) => x.id === campoId);
+      if (campo.tipo === 'lista' && v && !campo.opcoes.some((o) => o.toLowerCase() === v.toLowerCase())) throw erro(422, `"${campo.nome}" aceita só: ${campo.opcoes.join(', ')}.`, { [campoId]: `"${campo.nome}" aceita só: ${campo.opcoes.join(', ')}.` });
+      if (campo.tipo === 'numero' && v && !Number.isFinite(Number(v.replace(',', '.')))) throw erro(422, `"${campo.nome}" precisa ser um número.`, { [campoId]: `"${campo.nome}" precisa ser um número.` });
+      if (v) k.valores[campoId] = { valor: campo.tipo === 'lista' ? campo.opcoes.find((o) => o.toLowerCase() === v.toLowerCase()) : v, peloAssistente: false }; else delete k.valores[campoId];
+    }
+    salvar(); return painelDemo(c, cid);
+  },
+  async salvarEtiquetasCliente(cid, ids) { await espera(200); const c = crmExemplo(); const k = c.clientes[cid]; k.aplicadas = ids.map((x) => k.aplicadas.find((a) => a.id === x) || { id: x, peloAssistente: false }); const cv = conversasExemplo().conversas.find((y) => y.contato.id === cid); if (cv) cv.cursor = new Date().toISOString(); salvar(); return painelDemo(c, cid); },
+  async roleta() {
+    await espera(); const c = crmExemplo(); const u = eu();
+    const equipe = carregar().usuarios.filter((x) => x.lojaId === u.lojaId && x.status === 'ativo').map((x, i) => ({ id: x.id, nome: x.nome, perfil: x.perfil, disponivel: !!x.disponivel, marcouDisponivel: !!x.disponivel, online: !!x.disponivel || i === 1, naRoleta: c.roleta.fora.indexOf(x.id) < 0, emAndamento: x.perfil === 'atendente' ? 2 - i % 2 : 0 }));
+    return { modo: c.roleta.modo, limite: c.roleta.limite, aguardando: conversasExemplo().conversas.filter((x) => x.estado === 'aguardando').length, equipe };
+  },
+  async salvarRoleta(d) { await espera(); const c = crmExemplo(); c.roleta.modo = d.modo; c.roleta.limite = d.limite; c.roleta.fora = Object.entries(d.participantes || {}).filter(([, v]) => !v).map(([k]) => k); salvar(); return this.roleta(); },
+  async disponibilidade(disponivel) { await espera(150); const u = eu(); u.disponivel = disponivel; salvar(); return comLoja(u); },
   async tarefas({ situacao }) {
     await espera();
     if (situacao === 'feitas') return [];
@@ -415,7 +478,75 @@ export const exemplo = {
 
   restaurarExemplo() { banco = base(); salvar(); },
 };
-const b0 = {};
+// ---------- CRM de demonstração (funis, etiquetas, campos) ----------
+function crmExemplo() {
+  const b = carregar();
+  if (b.crm) return b.crm;
+  const e = (id, nome, cor, tipo = 'aberta', evento = null) => ({ id, nome, cor, tipo, evento });
+  const padrao = { id: 'f-rede', nome: 'Locação', principal: true, etapas: [e('r1', 'Novo contato', '#64748b'), e('r2', 'Em cotação', '#2563eb', 'aberta', 'cotacao'), e('r3', 'Reserva criada', '#7c3aed', 'aberta', 'reserva'), e('r4', 'Carro retirado', '#d97706', 'aberta', 'retirada'), e('r5', 'Concluído', '#16a34a', 'ganho'), e('r6', 'Perdido', '#dc2626', 'perdido')] };
+  const funis = [
+    { id: 'f1', nome: 'Locação', principal: true, personalizado: false, etapas: padrao.etapas.map((x, i) => ({ ...x, id: 'e' + (i + 1) })) },
+    { id: 'f2', nome: 'Mensalistas', principal: false, personalizado: true, etapas: [e('m1', 'Interessado', '#64748b'), e('m2', 'Proposta enviada', '#0891b2'), e('m3', 'Contrato assinado', '#16a34a', 'ganho'), e('m4', 'Perdido', '#dc2626', 'perdido')] },
+  ];
+  const etiquetas = [
+    { id: 't1', nome: 'Urgente', cor: '#dc2626', descricaoBot: 'O cliente precisa do carro hoje ou amanhã.', daRede: true },
+    { id: 't2', nome: 'Mensal', cor: '#7c3aed', descricaoBot: 'Locação de 30 dias ou mais.', daRede: true },
+    { id: 't3', nome: 'Empresa', cor: '#2563eb', descricaoBot: 'O cliente aluga em nome de uma empresa ou pede nota para CNPJ.', daRede: true },
+    { id: 't4', nome: 'Aplicativo', cor: '#d97706', descricaoBot: 'O cliente vai usar o carro para Uber, 99 ou outro aplicativo.', daRede: true },
+    { id: 't5', nome: 'Turismo', cor: '#0891b2', descricaoBot: 'O cliente está viajando a passeio.', daRede: true },
+    { id: 't6', nome: 'Cliente VIP', cor: '#db2777', descricaoBot: null, daRede: false },
+  ];
+  const campos = [
+    { id: 'c1', chave: 'periodo', nome: 'Período desejado', tipo: 'texto', opcoes: [], instrucaoBot: 'Datas e horários de retirada e devolução.', ativo: true, daRede: true },
+    { id: 'c2', chave: 'carro_desejado', nome: 'Carro ou grupo desejado', tipo: 'texto', opcoes: [], instrucaoBot: 'Modelo, categoria ou grupo que o cliente pediu.', ativo: true, daRede: true },
+    { id: 'c3', chave: 'motivo', nome: 'Motivo da locação', tipo: 'lista', opcoes: ['Turismo', 'Trabalho', 'Aplicativo', 'Carro reserva', 'Outro'], instrucaoBot: 'Para que o cliente vai usar o carro.', ativo: true, daRede: true },
+    { id: 'c4', chave: 'como_conheceu', nome: 'Como conheceu a LocarX', tipo: 'lista', opcoes: ['Google', 'Instagram', 'Indicação', 'Já é cliente', 'Outro'], instrucaoBot: null, ativo: true, daRede: true },
+    { id: 'c5', chave: 'forma_de_pagamento', nome: 'Forma de pagamento', tipo: 'lista', opcoes: ['Pix', 'Cartão de crédito', 'Faturado'], instrucaoBot: 'Como o cliente pretende pagar.', ativo: true, daRede: false },
+  ];
+  const k = (n, nome, tel, aplicadas, valores, extra = {}) => ({ id: 'k' + n, nome, telefone: tel, email: null, observacoes: '', optout: false, aplicadas: aplicadas.map(([id, bot]) => ({ id, peloAssistente: !!bot })), valores: Object.fromEntries(valores.map(([c, v, bot]) => [c, { valor: v, peloAssistente: !!bot }])), ...extra });
+  const clientes = Object.fromEntries([
+    k(1, 'Cliente exemplo 1', '5571988887771', [['t5', 1], ['t1', 1]], [['c1', 'Sexta 10h a domingo 20h', 1], ['c2', 'SUV', 1], ['c3', 'Turismo', 1]], { reservas: 1, h: 1 }),
+    k(2, 'Cliente exemplo 2', '5571988887772', [['t3']], [['c2', 'Compacto', 1], ['c5', 'Faturado']], { reservas: 3, h: 4 }),
+    k(3, null, '5575999991234', [['t4', 1]], [['c3', 'Aplicativo', 1]], { reservas: 0, h: 6 }),
+    k(4, 'Cliente exemplo 4', '5571988887774', [['t6']], [], { reservas: 2, h: 30 }),
+    k(5, 'Cliente exemplo 5', '5571988887775', [], [], { reservas: 0, h: 2 }),
+    k(6, 'Cliente exemplo 6', '5571988887776', [['t2', 1]], [['c1', '30 dias a partir de 01/11', 1]], { reservas: 0, h: 9 }),
+    k(7, 'Cliente exemplo 7', '5571988887777', [], [], { reservas: 0, h: 50 }),
+  ].map((x) => [x.id, x]));
+  const o = (n, contatoId, funilId, etapaId, valor, extra = {}) => ({ id: 'o' + n, contatoId, funilId, etapaId, valor, atualizadaEm: horasAtras(n * 2), ...extra });
+  const ops = [o(1, 'k5', 'f1', 'e1', null), o(2, 'k3', 'f1', 'e2', 290), o(3, 'k6', 'f1', 'e2', 610), o(4, 'k1', 'f1', 'e3', 345.5), o(5, 'k2', 'f1', 'e4', 279.8),
+    o(6, 'k4', 'f1', 'e5', 520, { resultado: 'ganho' }), o(7, 'k7', 'f1', 'e6', 450, { resultado: 'perdido', motivoPerda: 'Preço acima do esperado' }), o(8, 'k6', 'f2', 'm2', 3900)];
+  b.crm = { padrao, funis, etiquetas, campos, clientes, ops, roleta: { modo: 'rodizio', limite: 0, fora: [] } };
+  salvar();
+  return b.crm;
+}
+const etiquetasDe = (c, k) => k.aplicadas.map((a) => c.etiquetas.find((e) => e.id === a.id)).filter(Boolean).map((e) => ({ id: e.id, nome: e.nome, cor: e.cor }));
+function contatoDemo(c, k) {
+  const op = c.ops.filter((o) => o.contatoId === k.id).sort((a, z) => (a.resultado ? 1 : 0) - (z.resultado ? 1 : 0))[0];
+  const f = op && c.funis.find((x) => x.id === op.funilId); const e = f?.etapas.find((x) => x.id === op.etapaId);
+  return { id: k.id, nome: k.nome, telefone: k.telefone, email: k.email, etiquetas: etiquetasDe(c, k), observacoes: k.observacoes, cpf: null, optout: k.optout, criadoEm: horasAtras((k.h || 1) * 3), ultimaConversa: horasAtras(k.h || 1), conversaId: null, etapa: e ? { nome: e.nome, cor: e.cor, tipo: e.tipo, funil: f.nome } : null, reservas: k.reservas || 0 };
+}
+function funilDemo(c, f) {
+  return { id: f.id, nome: f.nome, principal: f.principal, arquivado: !!f.arquivado, personalizado: !!f.personalizado, abertas: c.ops.filter((o) => o.funilId === f.id && !o.resultado).length,
+    etapas: f.etapas.map((e, i) => ({ ...e, ordem: i, abertas: c.ops.filter((o) => o.etapaId === e.id && !o.resultado).length })) };
+}
+function aplicarEtapasDemo(c, f, d) {
+  const antigas = f.etapas;
+  f.nome = d.nome;
+  f.etapas = d.etapas.map((e) => ({ ...antigas.find((a) => a.id === e.id), ...e, id: e.id || id() }));
+  for (const a of antigas) if (!f.etapas.some((e) => e.id === a.id)) { const destino = f.etapas.find((e) => e.tipo === a.tipo); c.ops.filter((o) => o.etapaId === a.id).forEach((o) => { o.etapaId = destino.id; }); }
+}
+function painelDemo(c, cid) {
+  const k = c.clientes[cid] || Object.values(c.clientes)[0];
+  return {
+    contato: { id: k.id, nome: k.nome, telefone: k.telefone, email: k.email, cpf: null, optout: k.optout },
+    campos: c.campos.filter((x) => x.ativo).map((x) => ({ ...x, valor: k.valores[x.id]?.valor ?? null, peloAssistente: !!k.valores[x.id]?.peloAssistente })),
+    etiquetas: c.etiquetas, aplicadas: k.aplicadas,
+    funis: c.funis.filter((f) => !f.arquivado).map((f) => ({ id: f.id, nome: f.nome, principal: f.principal, etapas: f.etapas })),
+    oportunidades: c.ops.filter((o) => o.contatoId === k.id && !o.resultado).map((o) => ({ id: o.id, funilId: o.funilId, etapaId: o.etapaId, valor: o.valor })),
+    reservas: k.reservas ? [{ id: 'r1', codigo: 'SSA586587', status: 'confirmada', retirada: new Date(agora + 20 * 3600e3).toISOString(), valor: 345.5 }] : [],
+  };
+}
 
 function respostasBase() {
   return [
