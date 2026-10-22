@@ -7,6 +7,8 @@ const ESTADOS = {
   assistente: html`<span class="selo neutro">Com o assistente</span>`,
   aguardando: html`<span class="selo alerta">Aguardando atendente</span>`,
   reserva: html`<span class="selo ok">Reserva criada</span>`,
+  humano: html`<span class="selo ok">Em atendimento</span>`,
+  encerrada: html`<span class="selo neutro">Encerrada</span>`,
 };
 
 function esqueleto() {
@@ -85,7 +87,7 @@ export async function montar(alvo, ctx) {
       ${aviso2fa(u)}
       ${USAR_EXEMPLO ? html`<div class="faixa-exemplo">${icone('info')}<span>Números de exemplo. Os dados reais aparecem quando o WhatsApp da loja for conectado.</span></div>` : ''}
       <div class="resumo">
-        <div class="resumo-item"><span class="rotulo">Conversas hoje</span><span class="valor">${r.conversasHoje}</span><span class="detalhe">no WhatsApp da loja</span></div>
+        <div class="resumo-item"><span class="rotulo">Clientes que escreveram hoje</span><span class="valor">${r.conversasHoje}</span><span class="detalhe">no WhatsApp da loja</span></div>
         <div class="resumo-item"><span class="rotulo">Aguardando atendente</span><span class="valor">${r.aguardando}</span><span class="detalhe">pediram atendimento humano</span></div>
         <div class="resumo-item"><span class="rotulo">Reservas na semana</span><span class="valor">${r.reservasSemana}</span><span class="detalhe">feitas pelo assistente</span></div>
         <div class="resumo-item"><span class="rotulo">Valor reservado</span><span class="valor">${reais.format(r.valorSemana)}</span><span class="detalhe">nos últimos 7 dias</span></div>
@@ -95,8 +97,8 @@ export async function montar(alvo, ctx) {
           <div class="painel-cab"><h2>Últimas conversas</h2>${USAR_EXEMPLO ? html`<span class="selo neutro sem-ponto">Exemplo</span>` : ''}</div>
           ${r.ultimas.length ? html`<div class="lista-simples">
             ${r.ultimas.map((c) => html`<div>
-              <div><strong>${c.cliente}</strong><div class="sub">${c.assunto} · ${quando(c.quando)}</div></div>
-              ${ESTADOS[c.estado]}
+              <div>${c.id ? html`<a href="#/conversas/${c.id}"><strong>${c.cliente}</strong></a>` : html`<strong>${c.cliente}</strong>`}<div class="sub">${c.assunto} · ${quando(c.quando)}</div></div>
+              ${ESTADOS[c.estado] || ''}
             </div>`)}
           </div>` : html`<div class="estado">${icone('conversas')}<h3>Nenhuma conversa ainda</h3><p>As conversas aparecem aqui quando o WhatsApp da loja for conectado.</p></div>`}
         </section>

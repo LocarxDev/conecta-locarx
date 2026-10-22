@@ -93,12 +93,24 @@ admin.patch('/lojas/:id', exigirPerfil('admin'), rota(async (req, res) => {
 
 // ---------- resumo da loja logada ----------
 loja.get('/resumo', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
-  const r = await comContexto(ctx(req), async (c) => (await c.query(
-    `SELECT count(*) FILTER (WHERE status = 'ativo') AS ativos, count(*) FILTER (WHERE status = 'convidado') AS convidados
-       FROM usuarios WHERE loja_id = $1`, [req.usuario.loja_id])).rows[0]);
-  // conversas e reservas entram nas próximas etapas (WhatsApp e reservas)
+  const r = await comContexto(ctx(req), async (c) => {
+    const lojaId = req.usuario.loja_id;
+    const equipe = (await c.query(
+      `SELECT count(*) FILTER (WHERE status = 'ativo') AS ativos, count(*) FILTER (WHERE status = 'convidado') AS convidados
+         FROM usuarios WHERE loja_id = $1`, [lojaId])).rows[0];
+    const atend = (await c.query(
+      `SELECT count(*) FILTER (WHERE ultima_do_cliente >= date_trunc('day', now() AT TIME ZONE 'America/Bahia') AT TIME ZONE 'America/Bahia') AS hoje,
+              count(*) FILTER (WHERE estado = 'aguardando') AS aguardando
+         FROM conversas WHERE loja_id = $1`, [lojaId])).rows[0];
+    const ultimas = (await c.query(
+      `SELECT cv.id, cv.estado, cv.ultima_previa, cv.ultima_mensagem_em, coalesce(ct.nome, '+' || ct.telefone) AS cliente
+         FROM conversas cv JOIN contatos ct ON ct.id = cv.contato_id WHERE cv.loja_id = $1 ORDER BY cv.ultima_mensagem_em DESC LIMIT 5`, [lojaId])).rows;
+    return { equipe, atend, ultimas };
+  });
   res.json({
-    conversasHoje: 0, aguardando: 0, reservasSemana: 0, valorSemana: 0,
-    equipeAtiva: Number(r.ativos), equipeConvidada: Number(r.convidados), ultimas: [],
+    conversasHoje: Number(r.atend.hoje), aguardando: Number(r.atend.aguardando),
+    reservasSemana: 0, valorSemana: 0, // reservas entram na etapa 4
+    equipeAtiva: Number(r.equipe.ativos), equipeConvidada: Number(r.equipe.convidados),
+    ultimas: r.ultimas.map((u) => ({ id: u.id, cliente: u.cliente, assunto: u.ultima_previa, quando: u.ultima_mensagem_em, estado: u.estado })),
   });
 }));

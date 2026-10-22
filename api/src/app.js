@@ -9,6 +9,8 @@ import { auth } from './rotas/auth.js';
 import { admin, loja } from './rotas/lojas.js';
 import { usuarios, equipeAdmin, equipeLoja } from './rotas/usuarios.js';
 import { eu } from './rotas/eu.js';
+import { canal, webhooks } from './rotas/whatsapp.js';
+import { conversas, respostas } from './rotas/conversas.js';
 
 export function criarApp() {
   const app = express();
@@ -25,9 +27,13 @@ export function criarApp() {
   // saúde (Railway healthcheck) — não revela nada
   app.get('/api/saude', (req, res) => res.json({ ok: true }));
 
+  // webhook da Evolution: chega servidor-a-servidor (sem navegador, sem login), protegido por segredo na URL
+  app.use('/api/webhooks', express.json({ limit: '2mb' }), webhooks);
+
   app.use('/api', cors);
-  app.use('/api', rateLimit({ windowMs: 60_000, limit: 300, standardHeaders: 'draft-7', legacyHeaders: false, message: { mensagem: 'Muitas requisições. Aguarde um minuto.' } }));
+  app.use('/api', rateLimit({ windowMs: 60_000, limit: 900, standardHeaders: 'draft-7', legacyHeaders: false, message: { mensagem: 'Muitas requisições. Aguarde um minuto.' } }));
   app.use('/api', verificarOrigem);
+  app.use('/api/conversas/:id/midia', express.json({ limit: '12mb' }));
   app.use(express.json({ limit: '50kb' }));
   app.use(cookieParser());
   app.use('/api', carregarSessao);
@@ -37,7 +43,8 @@ export function criarApp() {
   // daqui para baixo: precisa estar logado e mandar o token CSRF nas ações que alteram dados
   app.use('/api', exigirLogin, exigirCsrf);
   app.use('/api/admin', admin, equipeAdmin);
-  app.use('/api/loja', loja, equipeLoja);
+  app.use('/api/loja', loja, equipeLoja, canal, respostas);
+  app.use('/api/conversas', conversas);
   app.use('/api/usuarios', usuarios);
   app.use('/api/eu', eu);
 

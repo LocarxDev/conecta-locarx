@@ -61,6 +61,24 @@ const real = {
   iniciar2fa: () => chamar('POST', '/eu/2fa/iniciar', {}),
   ativar2fa: (d) => chamar('POST', '/eu/2fa/ativar', d),
   desativar2fa: () => chamar('POST', '/eu/2fa/desativar', {}),
+
+  // etapa 2 — WhatsApp e conversas
+  canal: () => chamar('GET', '/loja/canal'),
+  conectarCanal: () => chamar('POST', '/loja/canal/conectar', {}),
+  qrCanal: () => chamar('GET', '/loja/canal/qr'),
+  desconectarCanal: () => chamar('POST', '/loja/canal/desconectar', {}),
+  listarConversas: ({ desde, busca } = {}) => chamar('GET', '/conversas?' + new URLSearchParams(Object.entries({ desde, busca }).filter(([, v]) => v))),
+  mensagens: (id, { depois } = {}) => chamar('GET', `/conversas/${encodeURIComponent(id)}/mensagens` + (depois ? '?depois=' + encodeURIComponent(depois) : '')),
+  marcarLida: (id) => chamar('POST', `/conversas/${encodeURIComponent(id)}/lida`, {}),
+  enviarTexto: (id, texto) => chamar('POST', `/conversas/${encodeURIComponent(id)}/mensagens`, { texto }),
+  enviarMidia: (id, d) => chamar('POST', `/conversas/${encodeURIComponent(id)}/midia`, d),
+  nota: (id, texto) => chamar('POST', `/conversas/${encodeURIComponent(id)}/notas`, { texto }),
+  acaoConversa: (id, acao, corpo = {}) => chamar('POST', `/conversas/${encodeURIComponent(id)}/${acao}`, corpo),
+  equipeAtiva: () => chamar('GET', '/conversas/equipe/ativa'),
+  urlArquivo: (id, mid) => `/api/conversas/${encodeURIComponent(id)}/mensagens/${encodeURIComponent(mid)}/arquivo`,
+  respostas: () => chamar('GET', '/loja/respostas'),
+  salvarResposta: (d) => (d.id ? chamar('PUT', `/loja/respostas/${encodeURIComponent(d.id)}`, d) : chamar('POST', '/loja/respostas', d)),
+  excluirResposta: (id) => chamar('DELETE', `/loja/respostas/${encodeURIComponent(id)}`),
 };
 
 export const api = USAR_EXEMPLO ? exemplo : real;

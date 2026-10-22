@@ -10,12 +10,14 @@ import * as equipe from './telas/equipe.js';
 import * as lojas from './telas/lojas.js';
 import * as perfil from './telas/perfil.js';
 import * as emBreve from './telas/em-breve.js';
+import * as whatsapp from './telas/whatsapp.js';
+import * as respostasRapidas from './telas/respostas.js';
+import * as conversas from './telas/conversas.js';
 
 const app = document.getElementById('app');
 const estado = { usuario: null, destino: null };
 
 const MODULOS_LOJA = [
-  { rota: 'em-breve/conversas', rotulo: 'Conversas', icone: 'conversas' },
   { rota: 'em-breve/clientes', rotulo: 'Clientes', icone: 'clientes' },
   { rota: 'em-breve/funil', rotulo: 'Funil de vendas', icone: 'funil' },
   { rota: 'em-breve/reservas', rotulo: 'Reservas', icone: 'reservas' },
@@ -34,11 +36,14 @@ function menuDoPerfil(perfilUsuario) {
   const itens = [
     { grupo: 'Atendimento' },
     { rota: 'inicio', rotulo: 'Início', icone: 'inicio' },
+    { rota: 'conversas', rotulo: 'Conversas', icone: 'conversas', contador: true },
     ...MODULOS_LOJA.map((m) => ({ ...m, travado: true })),
   ];
   if (perfilUsuario === 'dono') {
     itens.push(
       { grupo: 'Gestão da loja' },
+      { rota: 'whatsapp', rotulo: 'WhatsApp da loja', icone: 'whatsapp' },
+      { rota: 'respostas', rotulo: 'Respostas rápidas', icone: 'editar' },
       { rota: 'em-breve/assistente', rotulo: 'Assistente virtual', icone: 'assistente', travado: true },
       { rota: 'em-breve/relatorios', rotulo: 'Relatórios', icone: 'relatorios', travado: true },
       { rota: 'atendentes', rotulo: 'Atendentes', icone: 'atendentes' },
@@ -58,6 +63,9 @@ const ROTAS = [
   { padrao: /^lojas$/, tela: lojas.lista, perfis: ['admin', 'matriz'] },
   { padrao: /^lojas\/([\w-]+)$/, tela: lojas.detalhe, perfis: ['admin', 'matriz'] },
   { padrao: /^perfil$/, tela: perfil.montar },
+  { padrao: /^conversas(?:\/([\w-]+))?$/, tela: conversas.montar, perfis: ['dono', 'atendente'] },
+  { padrao: /^whatsapp$/, tela: whatsapp.montar, perfis: ['dono'] },
+  { padrao: /^respostas$/, tela: respostasRapidas.montar, perfis: ['dono'] },
   { padrao: /^em-breve\/([\w-]+)$/, tela: emBreve.montar },
 ];
 
@@ -73,6 +81,8 @@ export function navegar(caminho) {
 }
 
 let limparTela = null;
+let telaAtiva = null;
+let controleTela = null;
 
 async function despachar() {
   const { caminho, query } = lerRota();
@@ -89,23 +99,36 @@ async function despachar() {
     return navegar('inicio');
   }
 
+  const params = caminho.match(achada.padrao).slice(1);
+  // mesma tela, só mudou o detalhe (ex.: outra conversa): atualiza sem redesenhar tudo
+  if (achada.tela === telaAtiva && controleTela?.atualizar && estado.usuario) {
+    controleTela.atualizar({ params, query });
+    return;
+  }
   limparTela?.();
   limparTela = null;
-  const params = caminho.match(achada.padrao).slice(1);
+  controleTela = null;
+  telaAtiva = achada.tela;
   const ctx = {
     usuario: estado.usuario, params, query, navegar,
     entrou: (usuario) => { estado.usuario = usuario; const d = estado.destino; estado.destino = null; navegar(d || 'inicio'); },
     atualizarUsuario: (usuario) => { estado.usuario = usuario; despachar(); },
-    sessaoExpirou: () => { estado.usuario = null; avisar('Sua sessão terminou. Entre novamente.', 'erro'); navegar('login'); },
+    sessaoExpirou: () => { conversas.pararVigia(); limparTela?.(); limparTela = null; telaAtiva = null; controleTela = null; estado.usuario = null; avisar('Sua sessão terminou. Entre novamente.', 'erro'); navegar('login'); },
   };
 
+  const guardar = (r) => {
+    if (typeof r === 'function') limparTela = r;
+    else if (r && typeof r === 'object') { controleTela = r; limparTela = r.limpar || null; }
+  };
   if (achada.publica) {
     app.className = '';
-    limparTela = (await achada.tela(app, ctx)) || null;
+    guardar(await achada.tela(app, ctx));
   } else {
     desenharEstrutura(caminho);
+    if (['dono', 'atendente'].includes(estado.usuario.perfil)) { conversas.iniciarVigia(ctx); conversas.atualizarContadores(); }
     const area = $('#conteudo');
-    limparTela = (await achada.tela(area, ctx)) || null;
+    area.classList.toggle('conteudo-largo', !!achada.largo || /^conversas/.test(caminho));
+    guardar(await achada.tela(area, ctx));
     area.focus({ preventScroll: true });
     window.scrollTo(0, 0);
   }
@@ -128,7 +151,7 @@ function desenharEstrutura(caminhoAtual) {
           ? html`<div class="menu-grupo">${item.grupo}</div>`
           : html`<a class="menu-item${caminhoAtual === item.rota || caminhoAtual.startsWith(item.rota + '/') ? ' ativo' : ''}${item.travado ? ' travado' : ''}"
                    href="#/${item.rota}" ${caminhoAtual === item.rota ? html`aria-current="page"` : ''}>
-                ${icone(item.icone)}<span>${item.rotulo}</span>${item.travado ? html`<span class="selo">Em breve</span>` : ''}
+                ${icone(item.icone)}<span>${item.rotulo}</span>${item.travado ? html`<span class="selo">Em breve</span>` : ''}${item.contador ? html`<span class="contador" id="contador-conversas" hidden></span>` : ''}
               </a>`)}
         <div class="menu-rodape">Conecta LocarX${USAR_EXEMPLO ? ' · modo demonstração' : ''}</div>
       </nav>
@@ -188,6 +211,8 @@ function desenharEstrutura(caminhoAtual) {
   });
   $('#sair').addEventListener('click', async () => {
     await api.sair().catch(() => {});
+    conversas.pararVigia();
+    limparTela?.(); limparTela = null; telaAtiva = null; controleTela = null;
     estado.usuario = null;
     navegar('login');
   });

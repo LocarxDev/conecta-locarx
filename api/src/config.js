@@ -28,6 +28,18 @@ export const config = {
   adminInicial: process.env.ADMIN_INICIAL_EMAIL
     ? { email: process.env.ADMIN_INICIAL_EMAIL.trim().toLowerCase(), nome: process.env.ADMIN_INICIAL_NOME?.trim() || 'Administrador' }
     : null,
+  // WhatsApp pela Evolution API (etapa 2). Sem EVOLUTION_URL, as telas de WhatsApp avisam que não está configurado.
+  evolution: process.env.EVOLUTION_URL ? {
+    url: process.env.EVOLUTION_URL.trim().replace(/\/+$/, ''),
+    chave: obrigatoria('EVOLUTION_API_KEY'),
+    // endereço pelo qual a Evolution enxerga esta API (rede interna do Railway)
+    webhookBase: obrigatoria('WEBHOOK_BASE_URL').replace(/\/+$/, ''),
+    segredoWebhook: (() => {
+      const s = obrigatoria('WEBHOOK_SEGREDO');
+      if (s.length < 32 || !/^[A-Za-z0-9_-]+$/.test(s)) throw new Error('WEBHOOK_SEGREDO precisa ter 32+ caracteres (letras, números, - ou _). Gere com: openssl rand -hex 32');
+      return s;
+    })(),
+  } : null,
   // Em desenvolvimento local (http://localhost) o cookie não pode ter o prefixo __Host- nem Secure.
   cookieSeguro: process.env.COOKIE_INSEGURO_LOCAL !== '1',
 };

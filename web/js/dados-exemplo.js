@@ -286,5 +286,106 @@ export const exemplo = {
     return comLoja(u);
   },
 
+  // ---- etapa 2: WhatsApp e conversas (demonstração) ----
+  async canal() { await espera(150); const b = carregar(); return { status: b.canal?.status || 'desconectado', numero: b.canal?.numero || null, configurado: true }; },
+  async conectarCanal() { await espera(); const b = carregar(); b.canal = { status: 'conectando', polls: 0 }; salvar(); return { status: 'conectando', qr: null }; },
+  async qrCanal() {
+    await espera(300); const b = carregar();
+    b.canal ||= { status: 'conectando', polls: 0 };
+    b.canal.polls = (b.canal.polls || 0) + 1;
+    if (b.canal.polls >= 4) { b.canal.status = 'conectado'; b.canal.numero = '5571999990000'; }
+    salvar();
+    return b.canal.status === 'conectado' ? { status: 'conectado' } : { status: 'conectando', qr: null };
+  },
+  async desconectarCanal() { await espera(); const b = carregar(); b.canal = { status: 'desconectado' }; salvar(); return { status: 'desconectado' }; },
+
+  async listarConversas({ desde, busca } = {}) {
+    await espera(120); const b = conversasExemplo();
+    let lista = b.conversas;
+    if (desde) lista = lista.filter((c) => c.cursor > desde);
+    if (busca) { const t = busca.toLowerCase(); lista = lista.filter((c) => (c.contato.nome || '').toLowerCase().includes(t) || c.contato.telefone.includes(t.replace(/\D/g, '') || '¬')); }
+    return { conversas: [...lista].sort((a, z) => z.ultimaMensagemEm.localeCompare(a.ultimaMensagemEm)), cursor: new Date().toISOString() };
+  },
+  async mensagens(id, { depois } = {}) {
+    await espera(120); const b = conversasExemplo();
+    const cv = b.conversas.find((c) => c.id === id);
+    if (!cv) throw erro(404, 'Conversa não encontrada.');
+    const ms = (b.mensagens[id] || []).filter((m) => !depois || m.cursor > depois);
+    return { conversa: cv, mensagens: ms };
+  },
+  async marcarLida(id) { const b = conversasExemplo(); const cv = b.conversas.find((c) => c.id === id); if (cv && cv.naoLidas) { cv.naoLidas = 0; cv.cursor = new Date().toISOString(); salvar(); } },
+  async enviarTexto(id, texto) { await espera(); return novaSaida(id, { tipo: 'texto', texto }); },
+  async enviarMidia(id, d) { await espera(600); return novaSaida(id, { tipo: d.mimetype.startsWith('image/') ? 'imagem' : 'documento', texto: d.legenda || null, midia: { mimetype: d.mimetype, nome: d.nomeArquivo } }); },
+  async nota(id, texto) { await espera(); const u = eu(); return addMensagem(id, { direcao: 'interna', autor: 'atendente', autorNome: u.nome, tipo: 'nota', texto }); },
+  async acaoConversa(id, acao, corpo = {}) {
+    await espera(); const u = eu(); const b = conversasExemplo(); const cv = b.conversas.find((c) => c.id === id);
+    if (acao === 'assumir') { cv.estado = 'humano'; cv.atendente = { id: u.id, nome: u.nome }; addMensagem(id, { direcao: 'interna', autor: 'sistema', tipo: 'evento', texto: `${u.nome} assumiu a conversa` }); }
+    if (acao === 'devolver') { cv.estado = 'assistente'; cv.atendente = null; addMensagem(id, { direcao: 'interna', autor: 'sistema', tipo: 'evento', texto: `${u.nome} devolveu a conversa ao assistente` }); }
+    if (acao === 'encerrar') { cv.estado = 'encerrada'; cv.naoLidas = 0; addMensagem(id, { direcao: 'interna', autor: 'sistema', tipo: 'evento', texto: `${u.nome} encerrou a conversa` }); }
+    if (acao === 'transferir') { const alvo = carregar().usuarios.find((x) => x.id === corpo.atendenteId); cv.estado = 'humano'; cv.atendente = { id: alvo.id, nome: alvo.nome }; addMensagem(id, { direcao: 'interna', autor: 'sistema', tipo: 'evento', texto: `${u.nome} transferiu a conversa para ${alvo.nome}` }); }
+    cv.cursor = new Date().toISOString(); salvar();
+    return cv;
+  },
+  async equipeAtiva() { await espera(100); const u = eu(); return carregar().usuarios.filter((x) => x.lojaId === u.lojaId && x.status === 'ativo').map((x) => ({ id: x.id, nome: x.nome, perfil: x.perfil })); },
+  urlArquivo: () => 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="320" height="200"><rect width="320" height="200" fill="#E4E1DD"/><text x="160" y="105" font-family="sans-serif" font-size="16" text-anchor="middle" fill="#5E5A55">Foto de exemplo</text></svg>'),
+  async respostas() { await espera(100); return carregar().respostas ||= respostasBase(); },
+  async salvarResposta(d) {
+    await espera(); const b = carregar(); b.respostas ||= respostasBase();
+    if (!/^[a-z0-9-]{2,30}$/.test(d.atalho || '')) throw erro(422, 'Confira os campos.', { atalho: 'Use de 2 a 30 letras minúsculas, números ou hífen.' });
+    if (b.respostas.some((r) => r.atalho === d.atalho && r.id !== d.id)) throw erro(422, 'Confira os campos.', { atalho: 'Já existe uma resposta com este atalho.' });
+    if (d.id) { Object.assign(b.respostas.find((r) => r.id === d.id), { atalho: d.atalho, texto: d.texto }); } else b.respostas.push({ id: id(), atalho: d.atalho, texto: d.texto });
+    salvar(); return d;
+  },
+  async excluirResposta(rid) { await espera(); const b = carregar(); b.respostas = (b.respostas || []).filter((r) => r.id !== rid); salvar(); },
+
   restaurarExemplo() { banco = base(); salvar(); },
 };
+
+function respostasBase() {
+  return [
+    { id: id(), atalho: 'caucao', texto: 'A caução é bloqueada no cartão de crédito do condutor no momento da retirada e liberada após a devolução do carro.' },
+    { id: id(), atalho: 'documentos', texto: 'Para retirar o carro: CNH válida há mais de 2 anos, documento com foto e cartão de crédito no nome do condutor.' },
+    { id: id(), atalho: 'endereco', texto: 'Estamos no Aeroporto de Salvador, no balcão de locadoras do desembarque.' },
+  ];
+}
+
+function conversasExemplo() {
+  const b = carregar();
+  if (b.conversas) return b;
+  const agoraMs = Date.now();
+  const t = (min) => new Date(agoraMs - min * 60000).toISOString();
+  const mk = (n, nome, tel, estado, naoLidas, msgs) => {
+    const cid = 'c0000000-0000-4000-8000-00000000000' + n;
+    b.mensagens ||= {};
+    b.mensagens[cid] = msgs.map(([min, direcao, autor, tipo, texto, extra], i) => ({ id: `${cid}-${i}`, direcao, autor, autorNome: autor === 'atendente' ? 'Rafael Souza' : null, tipo, texto, midia: extra || null, temArquivo: ['imagem', 'audio'].includes(tipo), status: 'ok', criadaEm: t(min), cursor: t(min) }));
+    const ult = msgs[msgs.length - 1];
+    return { id: cid, estado, naoLidas, previa: ult[4] || (ult[3] === 'audio' ? 'Áudio' : 'Foto'), ultimaMensagemEm: t(ult[0]), ultimaDoCliente: t(ult[0]), atendente: estado === 'humano' ? { id: 'x', nome: 'Rafael Souza' } : null, contato: { id: 'k' + n, nome, telefone: tel }, cursor: t(ult[0]) };
+  };
+  b.conversas = [
+    mk(1, 'Cliente exemplo 1', '5571988887771', 'aguardando', 2, [[14, 'entrada', 'cliente', 'texto', 'Boa tarde! Queria alugar um carro para o fim de semana.'], [13, 'entrada', 'cliente', 'texto', 'Retirada sexta às 10h no aeroporto, devolução domingo à noite.']]),
+    mk(2, 'Cliente exemplo 2', '5571988887772', 'humano', 0, [[50, 'entrada', 'cliente', 'texto', 'Vocês aceitam cartão de débito na caução?'], [48, 'interna', 'sistema', 'evento', 'Rafael Souza assumiu a conversa'], [47, 'saida', 'atendente', 'texto', 'Olá! A caução é feita só no cartão de crédito do condutor.'], [30, 'entrada', 'cliente', 'audio', null, { mimetype: 'audio/ogg', segundos: 9 }]]),
+    mk(3, null, '5575999991234', 'aguardando', 1, [[90, 'entrada', 'cliente', 'imagem', 'Essa é a minha CNH', { mimetype: 'image/png' }]]),
+    mk(4, 'Cliente exemplo 4', '5571988887774', 'encerrada', 0, [[600, 'entrada', 'cliente', 'texto', 'Obrigado, deu tudo certo na devolução!'], [598, 'saida', 'atendente', 'texto', 'Nós que agradecemos. Boa viagem!'], [597, 'interna', 'sistema', 'evento', 'Rafael Souza encerrou a conversa']]),
+  ];
+  salvar();
+  return b;
+}
+
+function addMensagem(cid, m) {
+  const b = conversasExemplo();
+  const agoraIso = new Date().toISOString();
+  const nova = { id: id(), autorNome: null, midia: null, temArquivo: false, status: 'ok', criadaEm: agoraIso, cursor: agoraIso, ...m };
+  (b.mensagens[cid] ||= []).push(nova);
+  const cv = b.conversas.find((c) => c.id === cid);
+  if (m.direcao !== 'interna') { cv.previa = m.texto || 'Arquivo'; cv.ultimaMensagemEm = agoraIso; }
+  cv.cursor = agoraIso;
+  salvar();
+  return nova;
+}
+
+function novaSaida(cid, m) {
+  const u = eu(); const b = conversasExemplo(); const cv = b.conversas.find((c) => c.id === cid);
+  if ((b.canal?.status || 'desconectado') !== 'conectado') throw erro(409, 'O WhatsApp da loja está desconectado. Conecte em "WhatsApp" antes de responder.');
+  if (cv.estado !== 'humano' || cv.atendente?.id !== u.id) { cv.estado = 'humano'; cv.atendente = { id: u.id, nome: u.nome }; addMensagem(cid, { direcao: 'interna', autor: 'sistema', tipo: 'evento', texto: `${u.nome} assumiu a conversa` }); }
+  return addMensagem(cid, { direcao: 'saida', autor: 'atendente', autorNome: u.nome, ...m });
+}

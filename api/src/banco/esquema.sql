@@ -133,3 +133,86 @@ BEGIN
 END $$;
 DROP TRIGGER IF EXISTS usuarios_proteger ON usuarios;
 CREATE TRIGGER usuarios_proteger BEFORE UPDATE ON usuarios FOR EACH ROW EXECUTE FUNCTION proteger_usuario();
+
+-- =====================================================================
+-- ETAPA 2 — WhatsApp e caixa de conversas
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS canais (
+  loja_id        uuid PRIMARY KEY REFERENCES lojas(id) ON DELETE CASCADE,
+  provedor       text NOT NULL DEFAULT 'evolution' CHECK (provedor IN ('evolution', 'oficial')),
+  instancia      text NOT NULL UNIQUE,
+  status         text NOT NULL DEFAULT 'desconectado' CHECK (status IN ('desconectado', 'conectando', 'conectado')),
+  numero         text,
+  atualizado_em  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS contatos (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  loja_id     uuid NOT NULL REFERENCES lojas(id) ON DELETE CASCADE,
+  telefone    text NOT NULL CHECK (telefone ~ '^[0-9]{8,15}$'),
+  nome        text,
+  criado_em   timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (loja_id, telefone)
+);
+
+CREATE TABLE IF NOT EXISTS conversas (
+  id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  loja_id             uuid NOT NULL REFERENCES lojas(id) ON DELETE CASCADE,
+  contato_id          uuid NOT NULL REFERENCES contatos(id) ON DELETE CASCADE,
+  estado              text NOT NULL DEFAULT 'aguardando' CHECK (estado IN ('assistente', 'aguardando', 'humano', 'encerrada')),
+  atendente_id        uuid REFERENCES usuarios(id) ON DELETE SET NULL,
+  nao_lidas           integer NOT NULL DEFAULT 0,
+  ultima_previa       text,
+  ultima_mensagem_em  timestamptz NOT NULL DEFAULT now(),
+  ultima_do_cliente   timestamptz,
+  criada_em           timestamptz NOT NULL DEFAULT now(),
+  atualizada_em       timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (loja_id, contato_id)
+);
+CREATE INDEX IF NOT EXISTS conversas_lista ON conversas (loja_id, ultima_mensagem_em DESC);
+CREATE INDEX IF NOT EXISTS conversas_atualizadas ON conversas (loja_id, atualizada_em);
+
+CREATE TABLE IF NOT EXISTS mensagens (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversa_id  uuid NOT NULL REFERENCES conversas(id) ON DELETE CASCADE,
+  loja_id      uuid NOT NULL REFERENCES lojas(id) ON DELETE CASCADE,
+  direcao      text NOT NULL CHECK (direcao IN ('entrada', 'saida', 'interna')),
+  autor        text NOT NULL CHECK (autor IN ('cliente', 'atendente', 'assistente', 'sistema')),
+  autor_id     uuid REFERENCES usuarios(id) ON DELETE SET NULL,
+  tipo         text NOT NULL CHECK (tipo IN ('texto', 'imagem', 'audio', 'video', 'documento', 'localizacao', 'figurinha', 'nota', 'evento', 'outro')),
+  texto        text CHECK (length(texto) <= 8000),
+  midia        jsonb,
+  externo_id   text,
+  status       text NOT NULL DEFAULT 'ok' CHECK (status IN ('ok', 'enviando', 'erro')),
+  criada_em    timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS mensagens_conversa ON mensagens (conversa_id, criada_em);
+CREATE UNIQUE INDEX IF NOT EXISTS mensagens_externo ON mensagens (loja_id, externo_id) WHERE externo_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS respostas_rapidas (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  loja_id    uuid NOT NULL REFERENCES lojas(id) ON DELETE CASCADE,
+  atalho     text NOT NULL CHECK (atalho ~ '^[a-z0-9-]{2,30}$'),
+  texto      text NOT NULL CHECK (length(texto) BETWEEN 1 AND 2000),
+  criada_em  timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (loja_id, atalho)
+);
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON canais, contatos, conversas, mensagens, respostas_rapidas TO conecta_app;
+
+-- RLS: tudo da etapa 2 é da loja. Matriz e administração só leem a situação do canal.
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['canais', 'contatos', 'conversas', 'mensagens', 'respostas_rapidas'] LOOP
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %I', t || '_loja', t);
+    EXECUTE format($p$CREATE POLICY %I ON %I FOR ALL
+      USING (ctx_perfil() = 'sistema' OR loja_id = ctx_loja())
+      WITH CHECK (ctx_perfil() = 'sistema' OR loja_id = ctx_loja())$p$, t || '_loja', t);
+  END LOOP;
+END $$;
+DROP POLICY IF EXISTS canais_rede ON canais;
+CREATE POLICY canais_rede ON canais FOR SELECT USING (ctx_perfil() IN ('admin', 'matriz'));
