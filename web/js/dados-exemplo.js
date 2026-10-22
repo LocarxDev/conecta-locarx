@@ -410,6 +410,8 @@ export const exemplo = {
     return { dias, lojas, total: lojas.reduce((t, x) => ({ conversas: t.conversas + x.conversas, reservas: t.reservas + x.reservas, valor: t.valor + x.valor, reservasAssistente: t.reservasAssistente + x.reservasAssistente }), { conversas: 0, reservas: 0, valor: 0, reservasAssistente: 0 }) };
   },
   urlExportarContatos: () => '#/clientes',
+  async rede() { await espera(); return { orientacoes: 'Nunca ofereça desconto. O pagamento é sempre feito na loja, na retirada.', modeloAssistente: { nome: 'Lia', boasVindas: 'Olá! Eu sou a Lia, assistente da LocarX.' }, sinonimos: [{ id: 's1', termos: ['caução', 'calção', 'depósito', 'garantia'] }, { id: 's2', termos: ['cnh', 'carteira', 'habilitação'] }] }; },
+  async usuariosRede() { await espera(); return carregar().usuarios.filter((u) => ['admin', 'matriz'].includes(u.perfil)).map(publico); },
 
   restaurarExemplo() { banco = base(); salvar(); },
 };
