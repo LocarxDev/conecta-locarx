@@ -92,13 +92,13 @@ export async function montar(alvo, ctx) {
       </div>
       <div class="duas-colunas">
         <section class="painel">
-          <div class="painel-cab"><h2>Últimas conversas</h2><span class="selo neutro sem-ponto">Exemplo</span></div>
-          <div class="lista-simples">
+          <div class="painel-cab"><h2>Últimas conversas</h2>${USAR_EXEMPLO ? html`<span class="selo neutro sem-ponto">Exemplo</span>` : ''}</div>
+          ${r.ultimas.length ? html`<div class="lista-simples">
             ${r.ultimas.map((c) => html`<div>
               <div><strong>${c.cliente}</strong><div class="sub">${c.assunto} · ${quando(c.quando)}</div></div>
               ${ESTADOS[c.estado]}
             </div>`)}
-          </div>
+          </div>` : html`<div class="estado">${icone('conversas')}<h3>Nenhuma conversa ainda</h3><p>As conversas aparecem aqui quando o WhatsApp da loja for conectado.</p></div>`}
         </section>
         <section class="painel">
           <div class="painel-cab"><h2>Sua equipe</h2></div>

@@ -1,0 +1,26 @@
+{
+  "name": "conecta-locarx-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "API do Conecta LocarX (Railway)",
+  "type": "module",
+  "main": "src/servidor.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/servidor.js",
+    "dev": "node --watch src/servidor.js"
+  },
+  "dependencies": {
+    "@node-rs/argon2": "2.0.2",
+    "cookie-parser": "1.4.7",
+    "express": "4.22.3",
+    "express-rate-limit": "7.5.0",
+    "helmet": "8.0.0",
+    "otplib": "12.0.1",
+    "pg": "8.13.1",
+    "qrcode": "1.5.4",
+    "zod": "3.24.1"
+  }
+}

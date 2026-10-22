@@ -93,9 +93,11 @@ export function painelEquipe(alvo, { ctx, lojaId, podeGerir, podeConvidarDono, t
     desenhar();
   }));
 
-  function mostrarLinkConvite(modal, pessoa, link) {
+  function mostrarLinkConvite(modal, pessoa, link, enviado) {
     render($('.modal-corpo', modal.el), html`
-      <div class="alerta-caixa ok">${icone('email')}<span>Convite enviado para ${pessoa.email}. O link vale por 72 horas.</span></div>
+      ${enviado === false
+        ? html`<div class="alerta-caixa erro">${icone('alerta')}<span>O acesso foi criado, mas o e-mail para ${pessoa.email} não saiu. Copie o link abaixo e mande para a pessoa. O link vale por 72 horas.</span></div>`
+        : html`<div class="alerta-caixa ok">${icone('email')}<span>Convite enviado para ${pessoa.email}. O link vale por 72 horas.</span></div>`}
       <div class="campo">
         <label for="link-convite">Se preferir, copie o link e mande pelo WhatsApp</label>
         <input id="link-convite" readonly value="${link}">
@@ -131,7 +133,7 @@ export function painelEquipe(alvo, { ctx, lojaId, podeGerir, podeConvidarDono, t
         try {
           const novo = await api.convidar({ ...d, perfil: d.perfil || 'atendente', lojaId });
           lista.push(novo); desenhar();
-          mostrarLinkConvite(modal, novo, novo.linkConvite);
+          mostrarLinkConvite(modal, novo, novo.linkConvite, novo.emailEnviado);
         } catch (err) {
           if (err.campos) marcarErros(form, err.campos); else avisar(err.message, 'erro');
         }
@@ -166,7 +168,7 @@ export function painelEquipe(alvo, { ctx, lojaId, podeGerir, podeConvidarDono, t
       });
     });
     $('[data-reenviar]', form)?.addEventListener('click', async () => {
-      try { const r = await api.reenviarConvite(p.id); mostrarLinkConvite(modal, p, r.linkConvite); } catch (err) { avisar(err.message, 'erro'); }
+      try { const r = await api.reenviarConvite(p.id); mostrarLinkConvite(modal, p, r.linkConvite, r.emailEnviado); } catch (err) { avisar(err.message, 'erro'); }
     });
     $('[data-situacao]', form)?.addEventListener('click', async (e) => {
       const novaSituacao = e.currentTarget.dataset.situacao;

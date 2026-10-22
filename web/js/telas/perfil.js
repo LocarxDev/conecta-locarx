@@ -27,6 +27,7 @@ export function montar(alvo, ctx) {
         <form class="form painel-corpo" id="form-dados" novalidate>
           <div class="campo"><label for="pf-nome">Nome</label><input id="pf-nome" name="nome" value="${u.nome}" autocomplete="name" required></div>
           <div class="campo"><label for="pf-email">E-mail de acesso</label><input id="pf-email" name="email" type="email" value="${u.email}" autocomplete="email" required></div>
+          <div class="campo" id="campo-senha-email" hidden><label for="pf-senha-email">Sua senha atual</label><input id="pf-senha-email" name="senhaAtual" type="password" autocomplete="current-password"><p class="ajuda">Para trocar o e-mail de acesso, confirme sua senha.</p></div>
           <div><button class="btn btn-primario" type="submit">Salvar dados</button></div>
         </form>
       </section>
@@ -63,15 +64,19 @@ export function montar(alvo, ctx) {
 
   // dados
   const fDados = $('#form-dados', alvo);
+  fDados.elements.email.addEventListener('input', (e) => {
+    $('#campo-senha-email', fDados).hidden = e.target.value.trim().toLowerCase() === u.email;
+  });
   fDados.addEventListener('submit', async (e) => {
     e.preventDefault();
     const d = dadosDoForm(fDados);
     const erros = {};
     if (!d.nome.trim()) erros.nome = 'Informe seu nome.';
     if (!emailValido(d.email)) erros.email = 'Informe um e-mail válido.';
+    else if (d.email.trim().toLowerCase() !== u.email && !d.senhaAtual) erros.senhaAtual = 'Confirme sua senha atual.';
     if (!marcarErros(fDados, erros)) return;
     await comBotao($('[type=submit]', fDados), async () => {
-      try { const novo = await api.atualizarPerfil(d); avisar('Dados salvos.'); ctx.atualizarUsuario(novo); montar(alvo, { ...ctx, usuario: novo }); } catch (err) { if (err.campos) marcarErros(fDados, err.campos); else avisar(err.message, 'erro'); }
+      try { const novo = await api.atualizarPerfil(d); avisar('Dados salvos.'); ctx.atualizarUsuario(novo); } catch (err) { if (err.campos) marcarErros(fDados, err.campos); else avisar(err.message, 'erro'); }
     });
   });
 
@@ -101,7 +106,7 @@ export function montar(alvo, ctx) {
           <li><div>Instale um app autenticador no celular<span class="sub">Google Authenticator, Microsoft Authenticator ou similar</span></div></li>
           <li><div>No app, leia o QR code abaixo<span class="sub">Ou digite a chave manualmente</span></div></li>
         </ol>
-        <div class="filtros">${qrIlustrativo()}<div class="form"><span class="sub">Chave</span><span class="chave-2fa">${dados.chave}</span></div></div>
+        <div class="filtros">${dados.qr ? html`<div class="qr-falso"><img src="${dados.qr}" alt="QR code para o app autenticador" width="132" height="132"></div>` : qrIlustrativo()}<div class="form"><span class="sub">Chave</span><span class="chave-2fa">${dados.chave}</span></div></div>
         <form class="form" id="form-ativar" novalidate>
           <div class="campo"><label for="cod-2fa">Código de 6 números que aparece no app</label><input id="cod-2fa" name="codigo" inputmode="numeric" autocomplete="one-time-code" maxlength="6"></div>
           ${dados.codigoExemplo ? html`<p class="ajuda">Modo demonstração: use ${dados.codigoExemplo}.</p>` : ''}
@@ -114,13 +119,13 @@ export function montar(alvo, ctx) {
       const codigo = f.elements.codigo.value.replace(/\D/g, '');
       if (!marcarErros(f, codigo.length === 6 ? {} : { codigo: 'Digite os 6 números.' })) return;
       await comBotao($('[type=submit]', modal.el), async () => {
-        try { const novo = await api.ativar2fa({ codigo }); modal.fechar(); avisar('Verificação em 2 etapas ativada.'); ctx.atualizarUsuario(novo); montar(alvo, { ...ctx, usuario: novo }); } catch (err) { if (err.campos) marcarErros(f, err.campos); else avisar(err.message, 'erro'); }
+        try { const novo = await api.ativar2fa({ codigo }); modal.fechar(); avisar('Verificação em 2 etapas ativada.'); ctx.atualizarUsuario(novo); } catch (err) { if (err.campos) marcarErros(f, err.campos); else avisar(err.message, 'erro'); }
       });
     });
   });
   $('#desligar-2fa', alvo)?.addEventListener('click', async () => {
     if (!(await confirmar({ titulo: 'Desativar verificação', texto: 'Seu acesso fica protegido só pela senha.', botao: 'Desativar', perigo: true }))) return;
-    try { const novo = await api.desativar2fa(); ctx.atualizarUsuario(novo); montar(alvo, { ...ctx, usuario: novo }); avisar('Verificação desativada.'); } catch (err) { avisar(err.message, 'erro'); }
+    try { const novo = await api.desativar2fa(); ctx.atualizarUsuario(novo); avisar('Verificação desativada.'); } catch (err) { avisar(err.message, 'erro'); }
   });
 
   // sair de todos

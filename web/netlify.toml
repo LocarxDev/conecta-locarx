@@ -4,7 +4,8 @@
 [build]
   publish = "."
 
-# Quando o back-end estiver no Railway, descomentar o bloco abaixo e trocar o endereço.
+# PASSO OBRIGATÓRIO antes de publicar: tirar o # das 5 linhas abaixo e trocar SEU-BACKEND
+# pelo endereço gerado no Railway (Settings → Networking). Veja o README.
 # Assim o navegador só enxerga /api — a URL do Railway não aparece no código da página.
 # [[redirects]]
 #   from = "/api/*"

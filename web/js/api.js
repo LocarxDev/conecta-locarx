@@ -1,12 +1,11 @@
 // Ponte entre as telas e o back-end.
-// Hoje usa os DADOS DE EXEMPLO. Quando o back-end estiver no Railway:
-//   1) trocar USAR_EXEMPLO para false
-//   2) apagar dados-exemplo.js
+// USAR_EXEMPLO = true liga os DADOS DE EXEMPLO (demonstração sem back-end).
+// Em produção fica false: tudo vai para /api, que o Netlify repassa ao Railway.
 // O front nunca guarda token: o login vira um cookie seguro (httpOnly) que o navegador envia sozinho.
 
 import { exemplo } from './dados-exemplo.js';
 
-export const USAR_EXEMPLO = true;
+export const USAR_EXEMPLO = false;
 
 let csrf = null; // vem do back-end junto com a sessão; vai no cabeçalho das ações que alteram dados
 

@@ -95,7 +95,7 @@ async function despachar() {
   const ctx = {
     usuario: estado.usuario, params, query, navegar,
     entrou: (usuario) => { estado.usuario = usuario; const d = estado.destino; estado.destino = null; navegar(d || 'inicio'); },
-    atualizarUsuario: (usuario) => { estado.usuario = usuario; desenharEstrutura(caminho); },
+    atualizarUsuario: (usuario) => { estado.usuario = usuario; despachar(); },
     sessaoExpirou: () => { estado.usuario = null; avisar('Sua sessão terminou. Entre novamente.', 'erro'); navegar('login'); },
   };
 
