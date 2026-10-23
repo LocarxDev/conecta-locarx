@@ -4,14 +4,12 @@
 [build]
   publish = "."
 
-# PASSO OBRIGATÓRIO antes de publicar: tirar o # das 5 linhas abaixo e trocar SEU-BACKEND
-# pelo endereço gerado no Railway (Settings → Networking). Veja o README.
-# Assim o navegador só enxerga /api — a URL do Railway não aparece no código da página.
-# [[redirects]]
-#   from = "/api/*"
-#   to = "https://SEU-BACKEND.up.railway.app/api/:splat"
-#   status = 200
-#   force = true
+# Proxy: o navegador só enxerga /api — a URL do Railway não aparece no código da página.
+[[redirects]]
+  from = "/api/*"
+  to = "https://conecta-locarx-production.up.railway.app/api/:splat"
+  status = 200
+  force = true
 
 # Qualquer endereço abre o sistema (F5 em qualquer tela funciona)
 [[redirects]]

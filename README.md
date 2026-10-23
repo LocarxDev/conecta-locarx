@@ -71,7 +71,7 @@ Sem endereço público: só a API do Conecta fala com ela, pela rede interna do 
 Se o QR code não aparecer e o log da API mostrar erro de conexão com a Evolution: gere um domínio público na Evolution (a chave protege o acesso), use `https://…` em `EVOLUTION_URL` e o domínio público da API em `WEBHOOK_BASE_URL`.
 
 ### 4. Ligar o front à API
-Em `web/netlify.toml`, tire o `#` das 5 linhas do bloco `/api/*` e troque `SEU-BACKEND` pelo endereço do passo 2.4.
+Em `web/netlify.toml`, o bloco `/api/*` aponta para o endereço do Railway (já configurado: `conecta-locarx-production.up.railway.app`).
 
 ### 5. Front no Netlify
 1. Arraste a **PASTA `web` inteira** (não os arquivos soltos) em **Add new site → Deploy manually**.
