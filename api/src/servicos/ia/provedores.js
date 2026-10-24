@@ -22,7 +22,12 @@ async function executar(ferramentas, nome, args, usadas) {
   const f = ferramentas.find((x) => x.nome === nome);
   usadas.push(nome);
   if (!f) return 'Ferramenta inexistente.';
-  try { return paraTexto(await f.executar(args || {})); } catch (e) { return `Erro ao executar ${nome}: ${e.message}`.slice(0, 500); }
+  try { return paraTexto(await f.executar(args || {})); } catch (e) {
+    // log para diagnóstico no Railway — sem dados pessoais
+    const seguros = Object.fromEntries(Object.entries(args || {}).filter(([k]) => !['cpf', 'cnh', 'email', 'nome', 'telefone'].includes(k)));
+    console.error(`[ferramenta] ${nome} falhou: ${e.message}`, JSON.stringify(seguros).slice(0, 500), e.resposta ? 'resposta da API: ' + JSON.stringify(e.resposta).slice(0, 800) : '');
+    return `Erro ao executar ${nome}: ${e.message}`.slice(0, 500);
+  }
 }
 
 async function anthropic({ chave, modelo, sistema, historico, ferramentas, maxTokens }) {

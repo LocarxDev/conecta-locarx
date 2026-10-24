@@ -65,71 +65,121 @@ export function ferramentasDaLoja(ctx) {
     },
     {
       nome: 'consultar_disponibilidade',
-      descricao: 'Lista os grupos de carros disponíveis nesta loja para o período. Retirada e devolução são sempre nesta loja.',
-      parametros: { type: 'object', properties: PERIODO, required: Object.keys(PERIODO) },
+      descricao: 'Lista os grupos de carros disponíveis nesta loja para o período, do mais barato para o mais caro (3 por vez). Retirada e devolução são sempre nesta loja. Devolve texto_para_cliente pronto: envie esse texto ao cliente.',
+      parametros: {
+        type: 'object',
+        properties: {
+          ...PERIODO,
+          cambio: { type: 'string', enum: ['qualquer', 'manual', 'automatico'], description: 'Só se o cliente pedir um tipo de câmbio' },
+          mais_opcoes: { type: 'boolean', description: 'true quando o cliente pedir para ver outras opções além das já mostradas' },
+        },
+        required: Object.keys(PERIODO),
+      },
       executar: async (a) => {
         // trava: no máximo 3 consultas por resposta (evita a IA "varrer" datas sozinha)
         ctx.consultas = (ctx.consultas || 0) + 1;
         if (ctx.consultas > 3) return 'Limite de consultas atingido. Não consulte mais: avise o cliente e use chamar_atendente com o motivo "sem disponibilidade".';
         const p = validarPeriodo(a);
-        const grupos = await locarx.disponibilidade({ branchId: ctx.branchId, ...p });
-        const periodo = `${a.data_retirada.split('-').reverse().join('/')} ${a.hora_retirada} a ${a.data_devolucao.split('-').reverse().join('/')} ${a.hora_devolucao}`;
+        let grupos = await locarx.disponibilidade({ branchId: ctx.branchId, ...p });
+        const periodo = periodoTexto(a);
         if (!grupos.length) {
           await etiquetarSemDisponibilidade(ctx);
           return `Nenhum carro disponível no sistema para ${periodo} nesta loja. NÃO procure outras datas por conta própria: avise o cliente em uma frase e use chamar_atendente com o motivo "sem disponibilidade para ${periodo}". Só consulte outra data se o próprio cliente pedir.`;
         }
+        if (a.cambio === 'automatico') grupos = grupos.filter((g) => /AUTO/i.test(g.cambio || ''));
+        if (a.cambio === 'manual') grupos = grupos.filter((g) => /MANUAL/i.test(g.cambio || ''));
+        if (!grupos.length) return `Não há carro com câmbio ${a.cambio} disponível para ${periodo}. Avise o cliente e ofereça as outras opções (consulte de novo sem o filtro de câmbio) ou chame um atendente.`;
+        grupos.sort((x, y) => (x.total ?? 1e9) - (y.total ?? 1e9));
+        const mostrar = a.mais_opcoes ? grupos.slice(3, 8) : grupos.slice(0, 3);
+        if (!mostrar.length) return 'Não há mais opções além das já mostradas. Pergunte qual das opções o cliente prefere ou chame um atendente.';
         await marcarEtapa(ctx, 'cotacao');
+        const linhas = mostrar.map((g, i) => {
+          const rotulo = rotuloGrupo(g, i + (a.mais_opcoes ? 4 : 1));
+          return `*${rotulo.letra} – ${rotulo.nome}*\n${[g.exemplos, g.cambio ? 'câmbio ' + String(g.cambio).toLowerCase().replace('automatic', 'automático') : null].filter(Boolean).join(' · ')}\n${reais(g.diaria)} por diária · *Total ${reais(g.total)}*`;
+        });
+        const letras = mostrar.map((g, i) => rotuloGrupo(g, i + (a.mais_opcoes ? 4 : 1)).letra);
+        const texto = `🚗 *Opções para ${periodo}:*\n\n${linhas.join('\n\n')}\n\nO total já inclui a Proteção X e as taxas. Pagamento na loja, na retirada.\nQual você prefere? É só responder com ${letras.length > 1 ? 'a letra (' + letras.slice(0, -1).join(', ') + ' ou ' + letras.at(-1) + ')' : 'a letra ' + letras[0]}.${grupos.length > 3 && !a.mais_opcoes ? '\nSe quiser, mostro outras opções.' : ''}`;
         return {
-          periodo,
-          grupos: grupos.slice(0, 12).map((g) => ({
-            fleet_id: g.fleetId, grupo: g.grupo, exemplos: g.exemplos, passageiros: g.passageiros, portas: g.portas, malas: g.malas, cambio: g.cambio,
-            diaria: reais(g.diaria), total_com_protecao_x: reais(g.total),
-          })),
-          protecoes_disponiveis: (grupos[0].protecoes || []).map((x) => ({ codigo: x.codigo, nome: x.nome, diaria: reais(x.diaria), obrigatoria_uma_das_basicas: x.base })),
-          km: grupos[0].km || null,
-          observacao: 'O total já inclui a Proteção X e a taxa administrativa. Pagamento na loja, na retirada.',
+          texto_para_cliente: texto,
+          grupos: mostrar.map((g, i) => ({ letra: rotuloGrupo(g, i + (a.mais_opcoes ? 4 : 1)).letra, fleet_id: g.fleetId, grupo: g.grupo, cambio: g.cambio, total: reais(g.total) })),
+          protecoes_disponiveis: (mostrar[0].protecoes || []).map((x) => ({ codigo: x.codigo, nome: x.nome, diaria: reais(x.diaria), basica: x.base })),
+          ha_mais_opcoes: !a.mais_opcoes && grupos.length > 3,
         };
       },
     },
     {
       nome: 'calcular_preco',
-      descricao: 'Calcula o valor total da locação de um grupo com as proteções escolhidas. Use o fleet_id que veio de consultar_disponibilidade. Proteções possíveis: PROTECAO_X ou PROTECAO_SUPER_X (uma das duas é obrigatória), TERCEIROS, VIDROS ou VIDROS_E_PNEUS (opcionais; VIDROS e VIDROS_E_PNEUS não podem ir juntas).',
+      descricao: 'Calcula o valor total da locação do grupo escolhido com as proteções. Use o fleet_id da opção que o cliente escolheu. Proteções: PROTECAO_X ou PROTECAO_SUPER_X (uma das duas é obrigatória), TERCEIROS, VIDROS ou VIDROS_E_PNEUS (opcionais; VIDROS e VIDROS_E_PNEUS não podem ir juntas). Esta cotação fica guardada e é a que será reservada.',
       parametros: { type: 'object', properties: { fleet_id: { type: ['integer', 'string'] }, ...PERIODO, protecoes: { type: 'array', items: { type: 'string' } } }, required: ['fleet_id', ...Object.keys(PERIODO)] },
       executar: async (a) => {
         const p = validarPeriodo(a);
         const protecoes = normalizarProtecoes(a.protecoes);
         const r = await locarx.calcularPreco({ branchId: ctx.branchId, fleetId: a.fleet_id, ...p, protecoes });
+        const cotacao = { fleetId: a.fleet_id, grupo: r.grupo, retirada: p.retirada, devolucao: p.devolucao, protecoes, nomesProtecoes: r.protecoes.map((x) => x.nome), total: r.total, diaria: r.diaria, diarias: r.diarias, em: new Date().toISOString() };
+        ctx.cotacao = cotacao;
+        if (!ctx.simulacao && ctx.conversaId) {
+          await comoSistema((c) => c.query('UPDATE conversas SET cotacao = $2, resumo_enviado_em = NULL WHERE id = $1', [ctx.conversaId, cotacao]));
+        }
         await marcarEtapa(ctx, 'cotacao', r.total);
-        return { total: reais(r.total), diaria: reais(r.diaria), diarias: r.diarias, protecoes: r.protecoes.length ? r.protecoes : protecoes, pagamento: 'na loja, na retirada' };
+        return { grupo: r.grupo, total: reais(r.total), diaria: reais(r.diaria), diarias: r.diarias, protecoes: r.protecoes.length ? r.protecoes.map((x) => x.nome) : protecoes, pagamento: 'na loja, na retirada' };
       },
     },
     {
       nome: 'criar_reserva',
-      descricao: 'Cria a reserva no portal LocarX com pagamento na loja. SÓ use depois de mostrar o resumo (datas, grupo, proteções e valor total) e o cliente confirmar claramente. Exige nome completo, CPF, CNH, telefone e e-mail do condutor.',
+      descricao: 'Reserva no portal LocarX a ÚLTIMA cotação calculada (calcular_preco), com pagamento na loja. Precisa de nome completo, CPF e e-mail; a CNH é opcional e o telefone é o do WhatsApp. Na primeira chamada devolve o RESUMO para você enviar ao cliente; só chame de novo depois que o cliente responder confirmando.',
       parametros: {
         type: 'object',
         properties: {
-          fleet_id: { type: ['integer', 'string'] }, ...PERIODO, protecoes: { type: 'array', items: { type: 'string' } },
-          nome: { type: 'string' }, cpf: { type: 'string' }, cnh: { type: 'string' }, email: { type: 'string' }, telefone: { type: 'string' },
-          cliente_confirmou: { type: 'boolean', description: 'true somente se o cliente confirmou o resumo explicitamente nesta conversa' },
+          nome: { type: 'string' }, cpf: { type: 'string' }, email: { type: 'string' },
+          cnh: { type: 'string', description: 'opcional' }, telefone: { type: 'string', description: 'opcional; só se o cliente pedir outro número' },
+          cliente_confirmou: { type: 'boolean', description: 'true somente se o cliente respondeu ao RESUMO confirmando' },
         },
-        required: ['fleet_id', ...Object.keys(PERIODO), 'nome', 'cpf', 'cnh', 'email', 'cliente_confirmou'],
+        required: ['nome', 'cpf', 'email'],
       },
       executar: async (a) => {
-        if (a.cliente_confirmou !== true) return 'Reserva NÃO criada: mostre o resumo e peça a confirmação do cliente antes.';
-        const p = validarPeriodo(a);
         if (!a.nome || String(a.nome).trim().split(/\s+/).length < 2) return 'Peça o nome completo do condutor.';
         if (!cpfValido(a.cpf)) return 'CPF inválido. Peça para o cliente conferir o CPF.';
-        if (!/^\d{9,11}$/.test(String(a.cnh || '').replace(/\D/g, ''))) return 'Número da CNH inválido. Peça para conferir (só números, 11 dígitos).';
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(a.email || ''))) return 'E-mail inválido. Peça para conferir.';
-        const protecoes = normalizarProtecoes(a.protecoes);
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(a.email || '').trim())) return 'E-mail inválido. Peça para o cliente conferir.';
+        const cnh = String(a.cnh || '').replace(/\D/g, '');
+        if (cnh && !/^\d{9,11}$/.test(cnh)) return 'O número da CNH parece incompleto. Peça para conferir ou siga sem a CNH (ela é opcional).';
         const telefone = String(a.telefone || ctx.telefone || '').replace(/\D/g, '');
-        const cliente = { nome: String(a.nome).trim().slice(0, 120), cpf: String(a.cpf).replace(/\D/g, ''), cnh: String(a.cnh).replace(/\D/g, ''), email: String(a.email).trim().toLowerCase(), telefone };
+        const cliente = { nome: String(a.nome).trim().slice(0, 120), cpf: String(a.cpf).replace(/\D/g, ''), cnh, email: String(a.email).trim().toLowerCase(), telefone };
+
+        // cotação guardada (o que o cliente viu) e controle do resumo
+        let cv = null;
+        if (!ctx.simulacao && ctx.conversaId) {
+          cv = await comoSistema(async (c) => (await c.query('SELECT cotacao, resumo_enviado_em, ultima_do_cliente FROM conversas WHERE id = $1', [ctx.conversaId])).rows[0]);
+        }
+        const cotacao = cv?.cotacao || ctx.cotacao;
+        if (!cotacao) return 'Ainda não há cotação. Calcule o preço do grupo escolhido com calcular_preco antes de reservar.';
+        const rg = rotuloGrupo({ grupo: cotacao.grupo }, 1);
+        const resumo = `*Resumo da reserva*\n🚗 ${cotacao.grupo ? `${rg.letra} – ${rg.nome}` : 'Grupo escolhido'}\n📅 Retirada: ${dataBr(cotacao.retirada)}\n📅 Devolução: ${dataBr(cotacao.devolucao)}\n🛡️ Proteção: ${(cotacao.nomesProtecoes?.length ? cotacao.nomesProtecoes : cotacao.protecoes).join(', ')}\n💰 Total: *${reais(cotacao.total)}* (pagamento na loja, na retirada)\n👤 ${cliente.nome} · CPF final ${cliente.cpf.slice(-2)} · ${cliente.email}`;
+        const assinatura = `${cliente.cpf}|${cliente.email}|${cotacao.em}`;
+
+        // passo 1: o resumo precisa ter sido enviado e o cliente precisa ter respondido depois dele
+        const respondeuDepois = cv?.resumo_enviado_em && cv?.ultima_do_cliente && new Date(cv.ultima_do_cliente) > new Date(cv.resumo_enviado_em);
+        const mesmoResumo = ctx.simulacao ? !!ctx.resumoAssinatura && ctx.resumoAssinatura === assinatura : cotacao.resumoAssinatura === assinatura;
+        if (!ctx.simulacao ? !(respondeuDepois && mesmoResumo) : !mesmoResumo) {
+          if (!ctx.simulacao && ctx.conversaId) {
+            await comoSistema((c) => c.query('UPDATE conversas SET resumo_enviado_em = now(), cotacao = cotacao || $2::jsonb WHERE id = $1', [ctx.conversaId, { resumoAssinatura: assinatura }]));
+          }
+          ctx.resumoAssinatura = assinatura;
+          return `RESERVA AINDA NÃO CRIADA. Envie ao cliente exatamente este resumo e pergunte: "Posso confirmar a reserva?". Só chame criar_reserva de novo depois que o cliente responder que sim.\n\n${resumo}`;
+        }
+        if (a.cliente_confirmou !== true) return 'O cliente ainda não confirmou o resumo. Pergunte se pode confirmar a reserva.';
+
+        // passo 2: reserva
+        const p = { retirada: cotacao.retirada, devolucao: cotacao.devolucao, ini: new Date(`${cotacao.retirada.date}T${cotacao.retirada.time}:00-03:00`), fim: new Date(`${cotacao.devolucao.date}T${cotacao.devolucao.time}:00-03:00`) };
         let reserva;
-        if (ctx.simulacao) reserva = { codigo: 'TESTE' + Math.floor(Math.random() * 1e5), status: 'SIMULACAO', grupo: null, valor: null };
-        else reserva = await locarx.criarReserva({ branchId: ctx.branchId, fleetId: a.fleet_id, ...p, protecoes, cliente });
-        if (!ctx.simulacao) await registrarReserva(ctx, reserva, p, cliente, { fleetId: a.fleet_id, protecoes });
-        return { reserva_criada: true, codigo: reserva.codigo, pagamento: 'na loja, na retirada', proximo_passo: 'Informe o código ao cliente e avise que um atendente da loja vai dar sequência.' };
+        if (ctx.simulacao) reserva = { codigo: 'TESTE' + Math.floor(Math.random() * 1e5), status: 'SIMULACAO', grupo: cotacao.grupo, valor: cotacao.total };
+        else {
+          reserva = await locarx.criarReserva({ branchId: ctx.branchId, fleetId: cotacao.fleetId, retirada: p.retirada, devolucao: p.devolucao, protecoes: cotacao.protecoes, cliente });
+          if (reserva.valor == null) reserva.valor = cotacao.total;
+          await registrarReserva(ctx, reserva, p, cliente, { fleetId: cotacao.fleetId, protecoes: cotacao.protecoes });
+          await comoSistema((c) => c.query('UPDATE conversas SET cotacao = NULL, resumo_enviado_em = NULL WHERE id = $1', [ctx.conversaId]));
+        }
+        const divergente = reserva.valor != null && cotacao.total != null && Math.abs(reserva.valor - cotacao.total) > 1;
+        return { reserva_criada: true, codigo: reserva.codigo, total: reais(reserva.valor ?? cotacao.total), ...(divergente ? { atencao: `O portal fechou a reserva em ${reais(reserva.valor)} (a cotação mostrava ${reais(cotacao.total)}). Informe o valor do portal ao cliente e avise a equipe.` } : {}), pagamento: 'na loja, na retirada', proximo_passo: 'Informe o código ao cliente e avise que um atendente da loja vai dar sequência.' };
       },
     },
     {
@@ -235,6 +285,15 @@ function normalizarProtecoes(lista) {
   if (p.includes('PROTECAO_X') && p.includes('PROTECAO_SUPER_X')) p = p.filter((x) => x !== 'PROTECAO_X');
   if (p.includes('VIDROS') && p.includes('VIDROS_E_PNEUS')) p = p.filter((x) => x !== 'VIDROS');
   return p;
+}
+
+const periodoTexto = (a) => `${a.data_retirada.split('-').reverse().slice(0, 2).join('/')} ${a.hora_retirada} até ${a.data_devolucao.split('-').reverse().slice(0, 2).join('/')} ${a.hora_devolucao}`;
+const dataBr = (x) => `${x.date.split('-').reverse().join('/')} às ${x.time}`;
+// "B - COMPACTO COM AR" → letra B, nome "Compacto com ar". Sem letra no nome, usa o número da opção.
+function rotuloGrupo(g, n) {
+  const m = String(g.grupo || '').match(/^\s*([A-Z0-9]{1,3})\s*[-–.]\s*(.+)$/i);
+  const cap = (t) => t.toLowerCase().replace(/^./, (c) => c.toUpperCase());
+  return m ? { letra: m[1].toUpperCase(), nome: cap(m[2].trim()) } : { letra: String(n), nome: cap(String(g.grupo || 'Grupo')) };
 }
 
 // cliente pediu e não havia carro: etiqueta "Sem disponibilidade" (o dono enxerga a demanda perdida)

@@ -697,3 +697,8 @@ END $$;
 INSERT INTO etiquetas (loja_id, nome, cor, descricao_bot)
   SELECT NULL, 'Sem disponibilidade', '#64748b', NULL
    WHERE NOT EXISTS (SELECT 1 FROM etiquetas WHERE loja_id IS NULL AND lower(nome) = 'sem disponibilidade');
+
+-- cotação em andamento na conversa (o que o cliente viu) e momento em que o resumo foi enviado.
+-- A reserva usa a cotação gravada e só sai se o cliente respondeu DEPOIS do resumo.
+ALTER TABLE conversas ADD COLUMN IF NOT EXISTS cotacao jsonb;
+ALTER TABLE conversas ADD COLUMN IF NOT EXISTS resumo_enviado_em timestamptz;
