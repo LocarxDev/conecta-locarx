@@ -19,7 +19,7 @@ export async function simularIa({ historico, ferramentas }) {
   } else if (!t.includes('?') && /reserv|carro|alugar/.test(t) && ferramentas.some((f) => f.nome === 'consultar_disponibilidade')) {
     const d = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10), e = new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10);
     const r = await usar('consultar_disponibilidade', { data_retirada: d, hora_retirada: '10:00', data_devolucao: e, hora_devolucao: '10:00' }).catch((x) => x.message);
-    texto = `Tenho estas opções: ${typeof r === 'string' ? r : r.map((g) => `${g.grupo} (${g.diaria}/dia)`).join(', ')}`;
+    texto = `Tenho estas opções: ${typeof r === 'string' ? r : r.grupos.map((g) => `${g.grupo} (${g.diaria}/dia)`).join(', ')}`;
   } else if (t.includes('?') || /cau[cç][aã]o|document|cnh|idade|km|quilometr/.test(t)) {
     const r = await usar('buscar_informacoes', { pergunta: ultima });
     if (String(r).startsWith('Nada encontrado')) {

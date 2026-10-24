@@ -692,3 +692,8 @@ BEGIN
       WITH CHECK (ctx_perfil() = 'sistema' OR loja_id = ctx_loja())$p$, t || '_loja', t);
   END LOOP;
 END $$;
+
+-- etiqueta da rede aplicada automaticamente quando o cliente pede um período sem carro disponível
+INSERT INTO etiquetas (loja_id, nome, cor, descricao_bot)
+  SELECT NULL, 'Sem disponibilidade', '#64748b', NULL
+   WHERE NOT EXISTS (SELECT 1 FROM etiquetas WHERE loja_id IS NULL AND lower(nome) = 'sem disponibilidade');

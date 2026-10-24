@@ -23,7 +23,8 @@ function validarPeriodo(a) {
   }
   // horário de Salvador (UTC-3, sem horário de verão)
   const ini = new Date(`${a.data_retirada}T${a.hora_retirada}:00-03:00`), fim = new Date(`${a.data_devolucao}T${a.hora_devolucao}:00-03:00`);
-  if (ini < new Date(Date.now() + 60 * 60_000)) throw new Error('A retirada precisa ser pelo menos 1 hora a partir de agora.');
+  // a API LocarX só mostra carros com pelo menos 24 h de antecedência
+  if (ini < new Date(Date.now() + 24 * 3_600_000)) throw new Error('Retirada com menos de 24 horas de antecedência não pode ser reservada pelo assistente. Avise o cliente e use chamar_atendente com o motivo "retirada em menos de 24 h".');
   if (fim <= ini) throw new Error('A devolução precisa ser depois da retirada.');
   if (fim - ini > 90 * 86_400_000) throw new Error('Períodos acima de 90 dias precisam ser tratados com um atendente.');
   return { retirada: { date: a.data_retirada, time: a.hora_retirada }, devolucao: { date: a.data_devolucao, time: a.hora_devolucao }, ini, fim };
@@ -67,11 +68,27 @@ export function ferramentasDaLoja(ctx) {
       descricao: 'Lista os grupos de carros disponíveis nesta loja para o período. Retirada e devolução são sempre nesta loja.',
       parametros: { type: 'object', properties: PERIODO, required: Object.keys(PERIODO) },
       executar: async (a) => {
+        // trava: no máximo 3 consultas por resposta (evita a IA "varrer" datas sozinha)
+        ctx.consultas = (ctx.consultas || 0) + 1;
+        if (ctx.consultas > 3) return 'Limite de consultas atingido. Não consulte mais: avise o cliente e use chamar_atendente com o motivo "sem disponibilidade".';
         const p = validarPeriodo(a);
         const grupos = await locarx.disponibilidade({ branchId: ctx.branchId, ...p });
-        if (!grupos.length) return 'Nenhum carro disponível neste período nesta loja. Ofereça outras datas ou chame um atendente.';
+        const periodo = `${a.data_retirada.split('-').reverse().join('/')} ${a.hora_retirada} a ${a.data_devolucao.split('-').reverse().join('/')} ${a.hora_devolucao}`;
+        if (!grupos.length) {
+          await etiquetarSemDisponibilidade(ctx);
+          return `Nenhum carro disponível no sistema para ${periodo} nesta loja. NÃO procure outras datas por conta própria: avise o cliente em uma frase e use chamar_atendente com o motivo "sem disponibilidade para ${periodo}". Só consulte outra data se o próprio cliente pedir.`;
+        }
         await marcarEtapa(ctx, 'cotacao');
-        return grupos.slice(0, 12).map((g) => ({ fleet_id: g.fleetId, grupo: g.grupo, exemplos: g.exemplos, passageiros: g.passageiros, cambio: g.cambio, diaria: reais(g.diaria), total_estimado: reais(g.total) }));
+        return {
+          periodo,
+          grupos: grupos.slice(0, 12).map((g) => ({
+            fleet_id: g.fleetId, grupo: g.grupo, exemplos: g.exemplos, passageiros: g.passageiros, portas: g.portas, malas: g.malas, cambio: g.cambio,
+            diaria: reais(g.diaria), total_com_protecao_x: reais(g.total),
+          })),
+          protecoes_disponiveis: (grupos[0].protecoes || []).map((x) => ({ codigo: x.codigo, nome: x.nome, diaria: reais(x.diaria), obrigatoria_uma_das_basicas: x.base })),
+          km: grupos[0].km || null,
+          observacao: 'O total já inclui a Proteção X e a taxa administrativa. Pagamento na loja, na retirada.',
+        };
       },
     },
     {
@@ -218,6 +235,14 @@ function normalizarProtecoes(lista) {
   if (p.includes('PROTECAO_X') && p.includes('PROTECAO_SUPER_X')) p = p.filter((x) => x !== 'PROTECAO_X');
   if (p.includes('VIDROS') && p.includes('VIDROS_E_PNEUS')) p = p.filter((x) => x !== 'VIDROS');
   return p;
+}
+
+// cliente pediu e não havia carro: etiqueta "Sem disponibilidade" (o dono enxerga a demanda perdida)
+async function etiquetarSemDisponibilidade(ctx) {
+  if (ctx.simulacao || !ctx.contatoId) return;
+  await comoSistema((c) => c.query(
+    `INSERT INTO contato_etiquetas (contato_id, etiqueta_id, loja_id, pelo_assistente)
+     SELECT $1, id, $2, true FROM etiquetas WHERE loja_id IS NULL AND nome = 'Sem disponibilidade' ON CONFLICT DO NOTHING`, [ctx.contatoId, ctx.lojaId])).catch(() => {});
 }
 
 async function marcarEtapa(ctx, evento, valor) {
