@@ -46,7 +46,8 @@ reservas.post('/reservas/:id/atualizar', exigirPerfil('dono', 'atendente'), rota
   let p;
   try { p = await locarx.buscarReserva(r.codigo); } catch (e) { throw erro(502, 'Não foi possível consultar o portal LocarX agora.'); }
   if (!p) throw erro(404, 'O portal LocarX não encontrou esta reserva.');
-  const status = /CANCEL/i.test(p.status || '') ? 'cancelada' : /FINISH|CLOSED|CONCLU/i.test(p.status || '') ? 'concluida' : /OPEN|PICKED|RETIR|IN_PROGRESS/i.test(p.status || '') ? 'em andamento' : 'confirmada';
+  // status do portal: CONFIRMED, PENDING, INPROGRESS (carro retirado), COMPLETED (devolvido), CANCELED
+  const status = /CANCEL/i.test(p.status || '') ? 'cancelada' : /COMPLETED|FINISH|CLOSED|CONCLU/i.test(p.status || '') ? 'concluida' : /INPROGRESS|IN_PROGRESS|OPEN|PICKED|RETIR/i.test(p.status || '') ? 'em andamento' : 'confirmada';
   const atual = await comContexto(ctx(req), async (c) => (await c.query(
     `UPDATE reservas SET status = $2, valor = coalesce($3, valor), grupo = coalesce($4, grupo), atualizada_em = now() WHERE id = $1 RETURNING *`,
     [r.id, status, p.valor, p.grupo])).rows[0]);
@@ -73,20 +74,15 @@ async function lojaDoUsuario(req) {
   return loja;
 }
 
-// Transforma qualquer falha da API LocarX numa mensagem clara para a tela (com o motivo que o portal deu, se houver).
-function motivoDaApi(resposta) {
-  if (!resposta) return '';
-  const m = resposta.message || resposta.mensagem || resposta.error || resposta.erro || (Array.isArray(resposta.errors) ? resposta.errors.map((x) => x.message || x.defaultMessage || x).join('; ') : resposta.errors) || resposta.bruto;
-  return m ? String(typeof m === 'string' ? m : JSON.stringify(m)).slice(0, 200) : '';
-}
+// Transforma qualquer falha da API LocarX numa mensagem clara para a tela (com o código documentado, quando houver).
 function erroLocarx(e) {
   if (e instanceof ErroApp) return e;
-  console.error('[locarx]', e.message, e.resposta ? JSON.stringify(e.resposta).slice(0, 800) : '', e.stack?.split('\n').slice(1, 3).join(' | ') || '');
+  console.error('[locarx]', e.message, e.codigo || '', e.resposta ? JSON.stringify(e.resposta).slice(0, 800) : '', e.stack?.split('\n').slice(1, 3).join(' | ') || '');
   if (e.status === 409 || e.status === 422) return erro(e.status, e.message);
   if (e.status === 503) return erro(503, 'API LocarX não configurada no servidor.');
-  if (e.status === 404) return erro(502, 'A filial desta loja não foi encontrada no ambiente atual da API LocarX.');
-  const motivo = motivoDaApi(e.resposta);
-  if (e.status) return erro(502, `A API LocarX respondeu com erro (HTTP ${e.status})${motivo ? ': ' + motivo : ''}.`);
+  if (e.status === 404 && !e.codigo) return erro(502, 'A filial desta loja não foi encontrada no ambiente atual da API LocarX.');
+  if (e.codigo && e.motivo) return erro(e.status === 400 ? 422 : 502, `${e.motivo} [${e.codigo}]`);
+  if (e.status) return erro(502, `A API LocarX respondeu com erro (HTTP ${e.status})${e.motivo ? ': ' + e.motivo : ''}.`);
   return erro(502, `Falha ao falar com o portal LocarX: ${String(e.message || e).slice(0, 160)}`);
 }
 
@@ -166,7 +162,7 @@ reservas.post('/reservas', exigirPerfil('dono', 'atendente'), limiteCotacao, rot
   const contatoId = vinculo.contato?.id || vinculo.conversa?.contato_id || null;
   const telefone = String(d.telefone || vinculo.contato?.telefone || '').replace(/\D/g, '');
   if (!telefone) throw erro(422, 'Confira os campos destacados.', { telefone: 'Informe o telefone do cliente.' });
-  const cliente = { nome: d.nome, cpf: d.cpf.replace(/\D/g, ''), cnh: d.cnh.replace(/\D/g, ''), email: d.email, telefone };
+  const cliente = { nome: d.nome, cpf: d.cpf.replace(/\D/g, ''), cnh: d.cnh.replace(/\D/g, ''), email: d.email, telefone, observacoes: `Reserva feita pela equipe da loja no Conecta LocarX (${req.usuario.nome}).`, referencia: vinculo.conversa ? `CONECTA-${String(vinculo.conversa.id).slice(0, 8)}` : `CONECTA-EQ-${String(req.usuario.id).slice(0, 8)}` };
 
   const base = { lojaId: loja.id, usuarioId: req.usuario.id, conversaId: vinculo.conversa?.id || null, origem: 'equipe', tipo: 'reserva' };
   const contexto = { fleetId: d.fleetId, protecoes, periodo: { retirada: periodo.retirada, devolucao: periodo.devolucao }, passo: d.confirmar ? 'confirmar' : 'resumo' };
@@ -225,9 +221,11 @@ locarxAdmin.get('/locarx/filiais', exigirPerfil('admin'), rota(async (req, res) 
 }));
 
 locarxAdmin.get('/locarx/teste', exigirPerfil('admin'), rota(async (req, res) => {
-  const { branchId } = validar(z.object({ branchId: z.coerce.number().int().positive() }), req.query);
+  const { branchId, reserva } = validar(z.object({ branchId: z.coerce.number().int().positive(), reserva: z.enum(['0', '1']).default('0') }), req.query);
   if (!config.locarx) throw erro(503, 'API LocarX não configurada no servidor (LOCARX_API_TOKEN).');
-  res.json(await locarx.diagnostico(branchId));
+  if (reserva === '1' && !locarx.ehHomologacao()) throw erro(409, 'A reserva de teste só pode ser feita com a API de homologação.');
+  if (reserva === '1') await comContexto(ctx(req), (c) => registrar(c, req, 'locarx_reserva_teste', { detalhes: { branchId } }));
+  res.json(await locarx.diagnostico(branchId, { reservaTeste: reserva === '1' }));
 }));
 
 // =====================================================================
@@ -235,7 +233,7 @@ locarxAdmin.get('/locarx/teste', exigirPerfil('admin'), rota(async (req, res) =>
 // Uso por outros sistemas da rede: Authorization: Bearer <MCP_TOKEN> e X-Conecta-Filial: <branchId>
 // Só ferramentas de consulta; reserva e cancelamento ficam restritos ao assistente do WhatsApp.
 // =====================================================================
-const SO_CONSULTA = ['buscar_informacoes', 'dados_da_loja', 'consultar_disponibilidade', 'calcular_preco', 'consultar_reserva'];
+const SO_CONSULTA = ['buscar_informacoes', 'dados_da_loja', 'descrever_grupo', 'consultar_disponibilidade', 'calcular_preco', 'consultar_reserva'];
 mcp.use(rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: 'draft-7', legacyHeaders: false }));
 mcp.post('/', rota(async (req, res) => {
   const token = String(req.get('authorization') || '').replace(/^Bearer\s+/i, '');

@@ -22,5 +22,5 @@ export async function registrarOcorrencia(o) {
 
 // transforma um erro da API LocarX (ErroLocarx) ou qualquer erro em detalhes legíveis
 export function detalhesDoErro(e, extra = {}) {
-  return { ...extra, erro: String(e?.message || e).slice(0, 300), status: e?.status || null, respostaApi: e?.resposta ? JSON.stringify(e.resposta).slice(0, 800) : null };
+  return { ...extra, erro: String(e?.message || e).slice(0, 300), codigo: e?.codigo || null, motivo: e?.motivo || null, status: e?.status || null, respostaApi: e?.resposta ? JSON.stringify(e.resposta).slice(0, 800) : null };
 }

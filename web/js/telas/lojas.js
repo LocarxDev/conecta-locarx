@@ -169,11 +169,13 @@ export async function detalhe(alvo, ctx) {
         <button class="btn ${loja.ativa ? 'btn-perigo' : 'btn-primario'}" id="situacao-loja">${loja.ativa ? 'Desativar loja' : 'Reativar loja'}</button>
       </div>` : ''}
     </div>
+    ${loja.filialPortal?.encontrada === false ? html`<div class="alerta-caixa erro">${icone('alerta')}<span><strong>Filial ${loja.filial.branchId} não existe no ambiente atual da API LocarX (${loja.filialPortal.ambiente}).</strong> Os ids mudam entre homologação e produção: edite a loja e escolha a filial de novo em "Buscar filiais no portal". Até lá, cotações e reservas desta loja falham.</span></div>` : ''}
+    ${loja.filialPortal?.encontrada === null ? html`<div class="alerta-caixa info">${icone('info')}<span>Não foi possível conferir a filial no portal LocarX agora: ${loja.filialPortal.erro}</span></div>` : ''}
     ${!temDono && ehAdmin ? html`<div class="alerta-caixa info">${icone('info')}<span>Esta loja ainda não tem dono com acesso. Convide o franqueado em “Convidar” na equipe abaixo, escolhendo a função Dono da loja.</span></div>` : ''}
     <section class="painel">
       <div class="painel-cab"><h2>Dados da loja</h2>${seloAtiva(loja.ativa)}</div>
       <div class="painel-corpo"><dl class="dados-grade">
-        <div class="dado"><dt>Filial no portal LocarX</dt><dd>${filial(loja.filial)}</dd></div>
+        <div class="dado"><dt>Filial no portal LocarX</dt><dd>${filial(loja.filial)}${loja.filialPortal?.encontrada ? html`<div class="sub">${loja.filialPortal.nome} · ${loja.filialPortal.ambiente}${loja.filialPortal.horarios ? ' · ' + loja.filialPortal.horarios : ''}</div>` : ''}</dd></div>
         <div class="dado"><dt>WhatsApp da loja</dt><dd>${seloWhats(loja.whatsapp)}</dd></div>
         <div class="dado"><dt>Assistente virtual</dt><dd><span class="selo neutro">Desligado</span></dd></div>
         <div class="dado"><dt>Pessoas com acesso</dt><dd class="num">${loja.usuarios.filter((u) => u.status === 'ativo').length} ativas</dd></div>
@@ -183,18 +185,23 @@ export async function detalhe(alvo, ctx) {
 
   painelEquipe($('#equipe-loja', alvo), { ctx, lojaId, podeGerir: ehAdmin, podeConvidarDono: ehAdmin, titulo: 'Equipe da loja' });
 
-  $('#testar-api', alvo)?.addEventListener('click', (e) => comBotao(e.currentTarget, async () => {
-    try {
-      const r = await api.testarLocarx(loja.filial.branchId);
-      abrirModal({
-        titulo: 'Teste da API LocarX',
-        corpo: html`<p class="sub">Filial ${loja.filial.branchId}. Mostra o que o portal respondeu em cada consulta, para conferir os campos.</p>
-          ${Object.entries(r).map(([nome, x]) => html`<div class="diag"><div class="filtros"><strong>${nome}</strong>${x.ok ? html`<span class="selo ok">OK</span>` : html`<span class="selo erro">Erro ${x.status || ''}</span>`}</div>
-            <pre class="pre-diag">${x.ok ? x.amostra : `${x.erro}\n${x.resposta || ''}`}</pre></div>`)}`,
-        rodape: html`<button class="btn btn-primario" data-fechar>Fechar</button>`,
-      });
-    } catch (err) { avisar(err.message, 'erro'); }
-  }));
+  const NOMES_DIAG = { ambiente: 'Ambiente', locality: 'GET /locality', availabilities: 'GET /availabilities/external', prices_calculate: 'POST /prices/calculate', reservations: 'GET /reservations', reservations_new_TESTE: 'POST /reservations/new (reserva de teste, cancelada em seguida)' };
+  async function testarApi(comReserva) {
+    const r = await api.testarLocarx(loja.filial.branchId, comReserva);
+    let homolog = false;
+    try { homolog = !!JSON.parse(r.ambiente?.amostra || '{}').homologacao; } catch { /* sem ambiente */ }
+    const m = abrirModal({
+      titulo: 'Teste da API LocarX',
+      corpo: html`<p class="sub">Filial ${loja.filial.branchId}. Mostra o que o portal respondeu em cada passo, para conferir endereço, token e formato dos campos.</p>
+        ${Object.entries(r).map(([nome, x]) => html`<div class="diag"><div class="filtros"><strong>${NOMES_DIAG[nome] || nome}</strong>${x.ok ? html`<span class="selo ok">OK</span>` : html`<span class="selo erro">Erro ${x.status || ''}</span>`}</div>
+          <pre class="pre-diag">${x.ok ? x.amostra : `${x.erro}\n${x.resposta || ''}`}</pre></div>`)}`,
+      rodape: html`${homolog && !comReserva ? html`<button class="btn btn-contorno" id="reserva-teste" title="Cria uma reserva com cliente fictício na homologação e cancela em seguida">Testar reserva (homologação)</button>` : ''}<button class="btn btn-primario" data-fechar>Fechar</button>`,
+    });
+    $('#reserva-teste', m.el)?.addEventListener('click', (e) => comBotao(e.currentTarget, async () => {
+      try { m.fechar(); await testarApi(true); } catch (err) { avisar(err.message, 'erro'); }
+    }));
+  }
+  $('#testar-api', alvo)?.addEventListener('click', (e) => comBotao(e.currentTarget, async () => { try { await testarApi(false); } catch (err) { avisar(err.message, 'erro'); } }));
   $('#editar-loja', alvo)?.addEventListener('click', () => abrirFormLoja(loja, () => ctx.navegar(`lojas/${lojaId}`)));
   $('#situacao-loja', alvo)?.addEventListener('click', async () => {
     if (loja.ativa && !(await confirmar({ titulo: 'Desativar loja', texto: `A equipe da ${loja.nome} perde o acesso ao Conecta e o assistente para de atender. Os dados ficam guardados e a loja pode ser reativada.`, botao: 'Desativar loja', perigo: true }))) return;

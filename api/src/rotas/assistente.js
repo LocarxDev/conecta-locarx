@@ -8,6 +8,7 @@ import { testarChave } from '../servicos/ia/provedores.js';
 import { testarAssistente } from '../servicos/ia/assistente.js';
 import { dividirEmBlocos } from '../servicos/ia/conhecimento.js';
 import { extrairTexto } from '../servicos/arquivos/extrair-texto.js';
+import * as locarx from '../servicos/locarx/api-locarx.js';
 import { rota, erro, validar, zUuid, exigirPerfil, registrar } from '../http.js';
 
 export const assistente = Router();   // /api/loja/...
@@ -262,6 +263,30 @@ rede.put('/rede', exigirPerfil('admin', 'matriz'), rota(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// Importa as políticas oficiais do portal LocarX (texto do bloco comum da disponibilidade) como itens PENDENTES da base da rede.
+// Não duplica: título já existente (não arquivado) é ignorado. A administração revisa, edita e aprova na tela.
+rede.post('/rede/importar-politicas', exigirPerfil('admin', 'matriz'), rota(async (req, res) => {
+  if (!config.locarx) throw erro(503, 'API LocarX não configurada no servidor.');
+  const loja = await comContexto(ctx(req), async (c) => (await c.query('SELECT branch_id, nome FROM lojas WHERE ativa AND branch_id IS NOT NULL ORDER BY criada_em LIMIT 1')).rows[0]);
+  if (!loja) throw erro(409, 'Cadastre pelo menos uma loja vinculada a uma filial do portal para importar as políticas.');
+  let itens;
+  try { itens = await locarx.politicasDoPortal(loja.branch_id); }
+  catch (e) { throw erro(502, `Não foi possível ler as políticas no portal LocarX: ${e.motivo || e.message}`); }
+  if (!itens.length) throw erro(409, `O portal não devolveu políticas para a filial da loja ${loja.nome}.`);
+  const r = await comContexto(ctx(req), async (c) => {
+    const existentes = new Set((await c.query(`SELECT lower(titulo) AS t FROM conhecimento WHERE escopo = 'rede' AND status <> 'arquivado'`)).rows.map((x) => x.t));
+    const incluidos = [], ignorados = [];
+    for (const it of itens) {
+      if (existentes.has(it.titulo.toLowerCase())) { ignorados.push(it.titulo); continue; }
+      await c.query(`INSERT INTO conhecimento (escopo, loja_id, titulo, conteudo, status, criado_por) VALUES ('rede', NULL, $1, $2, 'pendente', $3)`, [it.titulo, it.conteudo, req.usuario.id]);
+      incluidos.push(it.titulo);
+    }
+    await registrar(c, req, 'conhecimento_importado_portal', { detalhes: { incluidos: incluidos.length, ignorados: ignorados.length, filial: loja.branch_id } });
+    return { incluidos, ignorados };
+  });
+  res.json({ ...r, filial: loja.nome });
+}));
+
 rede.post('/sinonimos', exigirPerfil('admin', 'matriz'), rota(async (req, res) => {
   const { termos } = validar(z.object({ termos: z.array(z.string().trim().min(1).max(40)).min(2, 'Informe pelo menos 2 palavras.').max(20) }), req.body);
   const r = await comContexto(ctx(req), async (c) => (await c.query('INSERT INTO sinonimos (termos) VALUES ($1) RETURNING id, termos', [termos.map((t) => t.toLowerCase())])).rows[0]);
@@ -314,7 +339,7 @@ rede.get('/assistente/monitor', exigirPerfil('admin'), rota(async (req, res) => 
     itens: r.itens.map((u) => ({
       id: Number(u.id), em: u.criado_em, loja: { id: u.loja_id, nome: u.loja_nome }, conversaId: u.conversa_id, provedor: u.provedor, modelo: u.modelo,
       tokens: { entrada: u.tokens_in, saida: u.tokens_out }, ferramentas: u.ferramentas || [], ok: u.ok, erro: u.erro, duracaoMs: u.duracao_ms,
-      eventos: u.detalhes?.eventos || [], voltas: u.detalhes?.voltas ?? null, parada: u.detalhes?.parada ?? null, tamanho: u.detalhes?.tamanho ?? null, pedidoAtendente: u.detalhes?.pedidoAtendente ?? null,
+      eventos: u.detalhes?.eventos || [], semDetalhes: !u.detalhes, voltas: u.detalhes?.voltas ?? null, parada: u.detalhes?.parada ?? null, tamanho: u.detalhes?.tamanho ?? null, pedidoAtendente: u.detalhes?.pedidoAtendente ?? null,
     })),
   });
 }));

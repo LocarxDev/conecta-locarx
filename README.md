@@ -36,6 +36,9 @@ Proteções do motor (`servicos/ia/provedores.js` e `assistente.js`):
 - **Markdown → WhatsApp**: `**negrito**`, `### título` e `- item` viram `*negrito*` e `• item` antes do envio.
 - **Reserva criada no portal nunca se perde**: se a gravação no Conecta falhar depois de o portal confirmar, o código ainda chega ao cliente/atendente com um aviso, em vez de erro.
 
+### Políticas do portal na Base da rede
+Em **Base da rede → Importar do portal LocarX**, as políticas oficiais que a API devolve na disponibilidade (clientes brasileiros/estrangeiros, cancelamento, validade da reserva, pagamento, taxa de entrega…), a franquia de km, as proteções com valor por diária e os serviços adicionais entram como itens **pendentes** da rede, sem duplicar títulos. A administração revisa, edita e aprova; só o aprovado chega ao assistente. `POST /api/admin/rede/importar-politicas`.
+
 ### Testes
 ```bash
 cd api && npm test
@@ -108,6 +111,18 @@ Em `web/netlify.toml`, o bloco `/api/*` aponta para o endereço do Railway (já 
 4. Em **Acessos da rede**, convide a Matriz LocarX e, se quiser, crie a **loja de demonstração**.
 
 ---
+
+## API LocarX — o que o código segue (documentação para integradores, out/2026)
+- `GET /availabilities/external?branchId&dateFrom&dateTo` (datas `YYYY-MM-DDTHH:mm:ss`, Brasília). Lista com `branch.fleets[]` e um bloco comum (serviços, proteções, políticas, km). Retirada < 24 h → `[]`. `400 OUTSIDE_BUSINESS_HOURS` / `BRANCH_HOLIDAY` / `INVALID_DATE_RANGE`.
+- `POST /prices/calculate` `{ dateFrom, dateTo, priceFleetId, branchId, protections: [{id}], additionalServices: [{id, qtd}] }` → `summary.totalWithTax`. Não valida horário nem feriado.
+- `POST /reservations/new` `{ priceFleetId, pickUpLocationBranchId, dropOffLocationBranchId, pickUpDate, pickUpTime, dropOffDate, dropOffTime, customer{name, cpf, phone "(71) 99999-0000", email?, cnh?}, protections: [{fleetProtectionId}], billingType: LOCAL_PAYMENT, observations, assistanceNumber }` → 201 com `id`, `reservationCode`, `value`, `status.reservation`. `400 ADVANCE_BOOKING_REQUIRED` / `BRANCH_HOLIDAY` / `NOT_AVAILABILITY_STCOK` (com `days`) / `PRICE_OUT_OF_VALIDITY`; `404 NOT_FOUND_PRICE` / `NOT_FOUND_BRANCH`; `403` token.
+- `GET /reservations` — só reservas criadas pelo nosso token; filtros `search` (nome, código ou CPF), `customerCpf`, `reservationStatus`, `assistanceNumber`, `startDate/endDate`, `page/size/sort`. Status: CONFIRMED, PENDING, INPROGRESS (retirado), COMPLETED (devolvido), CANCELED; `payment` nasce PENDING.
+- `POST /reservations/cancel/{id}` `{ reason ≤ 250 }` — `id` numérico (achado pelo código via `search`). Só reservas criadas pelo Conecta; o assistente não cancela depois da retirada (política comercial).
+- Em 500 o adaptador repete a chamada uma vez (nunca em criação/cancelamento). Catálogo completo de erros em `CODIGOS_LOCARX`, inclusive os "sem code" reconhecidos pela mensagem.
+- Todos os códigos documentados estão em `CODIGOS_LOCARX` (`api-locarx.js`) com a mensagem para a equipe e a orientação para o assistente; a mensagem do portal vai junto.
+- `GET /locality?branchId=` para a filial da loja (horários por dia 1–7, `open`, janelas de atendimento especial com `amount`). A página da loja (administração) avisa quando a filial **não existe no ambiente atual** (homologação × produção).
+- `GET /fleets/catalog` (cache de 1 h) alimenta a ferramenta `descrever_grupo` do assistente: modelos, lugares, malas, câmbio e itens — sem preço nem estoque.
+- `assistanceNumber` leva `CONECTA-<8 primeiros caracteres da conversa>` para achar a reserva na listagem.
 
 ## Antes de ligar as reservas em produção (importante)
 `GET /locality` e `GET /reservations` já foram validados com a API LocarX. Os formatos de **`/availabilities/external`**, **`/prices/calculate`**, **`/reservations/new`** e **`/reservations/cancel`** foram montados pelo padrão dos campos conhecidos e **precisam ser conferidos com um token de homologação**. Tudo fica em um arquivo: `api/src/servicos/locarx/api-locarx.js`. Use **Testar API LocarX** (página da loja, administração) para ver as respostas cruas. Até lá, deixe `LOCARX_API_URL` apontando para a homologação.

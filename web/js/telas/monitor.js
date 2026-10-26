@@ -44,6 +44,7 @@ function detalhar(u) {
         ${u.erro ? html`<div><span>Erro</span><span class="erro-texto">${u.erro}</span></div>` : ''}
       </div>
       <h3 class="sub-titulo">Linha do tempo</h3>
+      ${u.semDetalhes ? html`<p class="sub">Resposta registrada antes desta atualização do Conecta: não há linha do tempo. As próximas terão.</p>` : ''}
       ${u.eventos.length ? html`<ol class="passos">${u.eventos.map((e) => html`<li class="${e.erro ? 'falhou' : e.ok ? 'feito' : ''}"><div>
         ${e.tipo === 'ferramenta' ? html`<strong>${NOMES[e.nome] || e.nome}</strong> <span class="sub">${ms(e.ms)}</span>
           ${Object.keys(e.args || {}).length ? html`<span class="sub">${JSON.stringify(e.args)}</span>` : ''}
@@ -52,7 +53,7 @@ function detalhar(u) {
           ${e.respostaApi ? html`<pre class="pre-diag">${e.respostaApi}</pre>` : ''}`
         : e.tipo === 'nudge' ? html`<strong>Prometeu sem agir — cobrada pelo sistema</strong><span class="sub">A IA escreveu "${e.texto}" e não chamou ferramenta. O sistema pediu para ela executar.</span>`
         : html`<strong>${e.tipo === 'limite' ? 'Limite' : 'Erro'}</strong><span class="sub erro-texto">${e.erro}</span>`}
-      </div></li>`)}</ol>` : html`<p class="sub">Nenhuma ferramenta foi chamada: a IA respondeu só com texto.</p>`}
+      </div></li>`)}</ol>` : u.semDetalhes ? '' : html`<p class="sub">Nenhuma ferramenta foi chamada: a IA respondeu só com texto.</p>`}
       ${u.conversaId ? html`<p class="ajuda">Conversa ${u.conversaId.slice(0, 8)}… — o conteúdo só pode ser visto pela equipe da loja.</p>` : ''}`,
     rodape: html`<button class="btn btn-contorno" data-fechar>Fechar</button>`,
   });

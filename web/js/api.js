@@ -97,6 +97,7 @@ const real = {
   importarConhecimento: (d) => chamar('POST', '/conhecimento/importar', d),
   rede: () => chamar('GET', '/admin/rede'),
   salvarRede: (d) => chamar('PUT', '/admin/rede', d),
+  importarPoliticasLocarx: () => chamar('POST', '/admin/rede/importar-politicas', {}),
   incluirSinonimo: (termos) => chamar('POST', '/admin/sinonimos', { termos }),
   excluirSinonimo: (id) => chamar('DELETE', `/admin/sinonimos/${encodeURIComponent(id)}`),
 
@@ -104,7 +105,7 @@ const real = {
   reservas: (q) => chamar('GET', '/loja/reservas?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
   atualizarReserva: (id) => chamar('POST', `/loja/reservas/${encodeURIComponent(id)}/atualizar`, {}),
   filiaisLocarx: () => chamar('GET', '/admin/locarx/filiais'),
-  testarLocarx: (branchId) => chamar('GET', `/admin/locarx/teste?branchId=${encodeURIComponent(branchId)}`),
+  testarLocarx: (branchId, reserva) => chamar('GET', `/admin/locarx/teste?branchId=${encodeURIComponent(branchId)}${reserva ? '&reserva=1' : ''}`),
   cotar: (d) => chamar('POST', '/loja/cotacao', d),
   precoCotacao: (d) => chamar('POST', '/loja/cotacao/preco', d),
   reservarEquipe: (d) => chamar('POST', '/loja/reservas', d),

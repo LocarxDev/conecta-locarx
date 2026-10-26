@@ -121,14 +121,15 @@ function importar(escopo, aoSalvar) {
   });
 }
 
-export function painelBase(alvo, { ctx, escopo, titulo, podeEditar, podeAprovar }) {
+export function painelBase(alvo, { ctx, escopo, titulo, podeEditar, podeAprovar, importarPortal = false }) {
   let lista = [], filtro = 'todos', busca = '';
   render(alvo, html`<section class="painel">
     <div class="painel-cab"><h2>${titulo}</h2>
       <div class="filtros">
         <label class="busca"><span class="sr-only">Buscar</span>${icone('busca')}<input type="search" data-busca placeholder="Buscar"></label>
         ${podeAprovar ? html`<div class="abas">${[['todos', 'Todas'], ['pendente', 'Para aprovar']].map(([v, t]) => html`<button data-filtro="${v}" class="${v === filtro ? 'ativa' : ''}">${t}</button>`)}</div>` : ''}
-        ${podeEditar ? html`<button class="btn btn-contorno" data-importar>Importar</button><button class="btn btn-primario" data-novo>${icone('mais')}Nova informação</button>` : ''}
+        ${importarPortal ? html`<button class="btn btn-contorno" data-importar-portal title="Traz as políticas oficiais do portal LocarX (clientes, cancelamento, pagamento, km, proteções, serviços) como itens pendentes para você aprovar">${icone('reservas')}Importar do portal LocarX</button>` : ''}
+        ${podeEditar ? html`<button class="btn btn-contorno" data-importar>Importar arquivo</button><button class="btn btn-primario" data-novo>${icone('mais')}Nova informação</button>` : ''}
       </div></div>
     <div data-lista><div class="painel-corpo"><div class="esqueleto"></div></div></div></section>`);
   const area = $('[data-lista]', alvo);
@@ -167,5 +168,13 @@ export function painelBase(alvo, { ctx, escopo, titulo, podeEditar, podeAprovar 
   $$('[data-filtro]', alvo).forEach((b) => b.addEventListener('click', () => { filtro = b.dataset.filtro; $$('[data-filtro]', alvo).forEach((x) => x.classList.toggle('ativa', x === b)); desenhar(); }));
   $('[data-novo]', alvo)?.addEventListener('click', () => editarItem({ escopo }, carregar));
   $('[data-importar]', alvo)?.addEventListener('click', () => importar(escopo, carregar));
+  $('[data-importar-portal]', alvo)?.addEventListener('click', (e) => comBotao(e.currentTarget, async () => {
+    try {
+      const r = await api.importarPoliticasLocarx();
+      avisar(r.incluidos.length ? `${r.incluidos.length} item(ns) do portal entraram como pendentes (filial ${r.filial}).${r.ignorados.length ? ` ${r.ignorados.length} já existiam.` : ''} Revise e aprove.` : 'Nada novo: todas as políticas do portal já estão na base.');
+      if (r.incluidos.length && podeAprovar) { filtro = 'pendente'; $$('[data-filtro]', alvo).forEach((x) => x.classList.toggle('ativa', x.dataset.filtro === 'pendente')); }
+      carregar();
+    } catch (err) { if (err.status === 401) return ctx.sessaoExpirou(); avisar(err.message, 'erro'); }
+  }));
   carregar();
 }

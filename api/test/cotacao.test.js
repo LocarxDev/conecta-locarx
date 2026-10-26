@@ -106,7 +106,83 @@ test('criarReserva: corpo no formato real da API (LOCAL_PAYMENT, ids da filial, 
   assert.equal(corpo.billingType, 'LOCAL_PAYMENT');
   assert.equal(corpo.pickUpLocationBranchId, 12);
   assert.deepEqual(corpo.protections, [{ fleetProtectionId: 12 }]);
-  assert.equal(corpo.customer.cnh, '');
+  assert.equal(corpo.customer.cnh, undefined);               // CNH vazia não vai
+  assert.equal(corpo.customer.address, undefined);           // endereço vazio não vai
+  assert.equal(corpo.customer.phone, '(71) 99999-0000');     // telefone no formato do portal
   assert.equal(corpo.pickUpDate, '2026-11-15'); assert.equal(corpo.dropOffTime, '10:00');
   assert.equal(r.codigo, 'SSA123'); assert.equal(r.id, 987); assert.equal(r.valor, 330);
+});
+
+test('ErroLocarx: códigos documentados viram motivo claro e dica para o assistente', async () => {
+  const { ErroLocarx, telefoneBr } = await import('../src/servicos/locarx/api-locarx.js');
+  const e1 = new ErroLocarx('API LocarX GET /availabilities/external respondeu 400', 400, { code: 'OUTSIDE_BUSINESS_HOURS', message: 'The branch is closed at the requested pickup time. Business hours on terça: 08:00-18:00.', statusCode: 400 });
+  assert.equal(e1.codigo, 'OUTSIDE_BUSINESS_HOURS');
+  assert.match(e1.motivo, /fora do horário de atendimento/); assert.match(e1.motivo, /08:00-18:00/);
+  assert.match(e1.dicaAssistente, /outro horário/);
+  const e2 = new ErroLocarx('x', 400, { code: 'NOT_AVAILABILITY_STCOK', message: 'There is not enough stock', statusCode: 400, days: ['2026-10-28', '2026-10-29'] });
+  assert.match(e2.motivo, /Dias sem carro: 2026-10-28, 2026-10-29/);
+  const e3 = new ErroLocarx('x', 403, { message: 'Forbidden resource', error: 'Forbidden', statusCode: 403 });
+  assert.equal(e3.codigo, 'FORBIDDEN'); assert.match(e3.motivo, /Token/);
+  const e4 = new ErroLocarx('x', 400, { statusCode: 400, message: ['customer.phone must be a valid Brazilian phone', 'customer.cpf must be a valid CPF'], error: 'Bad Request' });
+  assert.equal(e4.codigo, null); assert.match(e4.motivo, /phone.*; .*cpf/);
+  // telefone no formato do portal
+  assert.equal(telefoneBr('5571999990000'), '(71) 99999-0000');
+  assert.equal(telefoneBr('557133334444'), '(71) 3333-4444');
+  assert.equal(telefoneBr('(71) 99999-0000'), '(71) 99999-0000');
+  assert.equal(telefoneBr('557181002541'), '(71) 98100-2541');   // WhatsApp sem o nono dígito → insere o 9
+  assert.equal(telefoneBr('557133334444'), '(71) 3333-4444');    // fixo continua com 8 dígitos
+});
+
+test('locality e catálogo: horários legíveis, filial por id e grupos do catálogo', async (t) => {
+  const locarx = await import('../src/servicos/locarx/api-locarx.js');
+  const fetchOriginal = globalThis.fetch;
+  const urls = [];
+  globalThis.fetch = async (url) => {
+    urls.push(String(url));
+    if (String(url).includes('/locality')) return Response.json([{ branchId: 2, branchCode: 'SSA', name: 'Salvador - Aeroporto', displayName: 'Salvador - Aeroporto – BA', typeLabel: 'Aeroporto', type: 'AIRPORT', city: 'Salvador', cityCode: 'SSA1', state: 'BA', iataCode: 'SSA1', address: 'Tv. Santos Dumont, 431',
+      businessHours: [1, 2, 3, 4, 5].map((d) => ({ dayOfWeek: d, open: true, openingHour: '08:00', closingHour: '18:00' })).concat([{ dayOfWeek: 6, open: true, openingHour: '08:00', closingHour: '13:00' }, { dayOfWeek: 7, open: false, openingHour: '08:00', closingHour: '08:01' }]),
+      specialAttentionHours: [{ dayOfWeek: 1, rangeFrom: '18:01', rangeTo: '23:59', amount: 40 }] }]);
+    return Response.json([{ fleetId: 2, name: 'B - COMPACTO COM AR', sippCode: 'ECMM', doors: 4, passengers: 5, baggages: 2, transmitionType: 'MANUAL', vehicleModels: [{ brand: 'RENAULT', model: 'Kwid ou Similar', category: 'COMPACT', type: 'DOOR_4_5' }], characteristics: ['Alarme'] }, { fleetId: 99, name: 'Z - DESATIVADO', vehicleModels: [] }]);
+  };
+  t.after(() => { globalThis.fetch = fetchOriginal; });
+  const f = await locarx.dadosDaFilial(2);
+  assert.match(urls[0], /\/locality\?branchId=2$/);
+  assert.equal(f.horariosTexto, 'seg a sex 08:00–18:00 · sáb 08:00–13:00 · dom fechado');
+  assert.equal(f.especiaisTexto, 'segunda 18:01–23:59 (+R$ 40,00)');
+  assert.equal(await locarx.dadosDaFilial(77), null);
+  const cat = await locarx.catalogoFrotas();
+  assert.equal(cat.length, 1);                      // DESATIVADO fica de fora
+  assert.equal(cat[0].cambio, 'MANUAL'); assert.equal(cat[0].exemplos, 'RENAULT Kwid ou Similar'); assert.equal(cat[0].malas, 2);
+  const antes = urls.length; await locarx.catalogoFrotas(); assert.equal(urls.length, antes);   // cache
+});
+
+test('criarReserva: se o portal recusar só o telefone nacional, tenta uma vez no formato +55', async (t) => {
+  const locarx = await import('../src/servicos/locarx/api-locarx.js');
+  const fetchOriginal = globalThis.fetch;
+  const corpos = [];
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('/availabilities/external')) return Response.json([{ branch: { fleets: [{ fleetId: 5, name: 'A', price: { priceFleetId: 50, summary: { totalWithTax: 1 } }, availableProtections: [{ id: 1, code: 'PROTECAO_X', baseProtection: true }] }] } }]);
+    const c = JSON.parse(init.body); corpos.push(c);
+    if (corpos.length === 1) return new Response(JSON.stringify({ message: ['customer.phone must be a valid phone number'], error: 'Bad Request', statusCode: 400 }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+    return Response.json({ id: 1, reservationCode: 'SSA1', value: 1 });
+  };
+  t.after(() => { globalThis.fetch = fetchOriginal; });
+  const r = await locarx.criarReserva({ branchId: 2, fleetId: 5, retirada: { date: '2026-11-15', time: '10:00' }, devolucao: { date: '2026-11-18', time: '10:00' }, protecoes: ['PROTECAO_X'], cliente: { nome: 'Silas Teste', cpf: '52998224725', telefone: '557181002541' } });
+  assert.equal(corpos[0].customer.phone, '(71) 98100-2541');
+  assert.equal(corpos[1].customer.phone, '+5571981002541');
+  assert.equal(r.codigo, 'SSA1');
+});
+
+test('politicasDoPortal: políticas, km, proteções e serviços viram itens de conhecimento', async (t) => {
+  const locarx = await import('../src/servicos/locarx/api-locarx.js');
+  const fetchOriginal = globalThis.fetch;
+  globalThis.fetch = async () => Response.json([
+    { branch: { fleets: [{ fleetId: 2, name: 'B - COMPACTO', price: { priceFleetId: 1, summary: { totalWithTax: 100 } }, availableProtections: [{ id: 1, code: 'PROTECAO_X', name: 'Proteção X', baseProtection: true, price: 10, description: 'Cobertura básica' }, { id: 3, code: 'TERCEIROS', name: 'Terceiros', price: 13 }] }] } },
+    { additionalServices: [{ additionalServiceId: 4, name: 'Cadeirinha', price: 24.9, maxQuantity: 3 }], protections: [], policies: [{ category: 'Cancelamento', policy: 'Permitido antes da retirada.' }, { category: 'Pagamento', policy: 'Na loja.' }], mileageInfo: 'Franquia de km: livre' },
+  ]);
+  t.after(() => { globalThis.fetch = fetchOriginal; });
+  const itens = await locarx.politicasDoPortal(2);
+  assert.deepEqual(itens.map((i) => i.titulo), ['Política LocarX — Cancelamento', 'Política LocarX — Pagamento', 'Quilometragem (franquia de km)', 'Proteções disponíveis e caução', 'Serviços adicionais (cadeirinha, condutor adicional…)']);
+  assert.match(itens[3].conteudo, /Proteção X \(básica\) — R\$\s?10,00 por diária\. Cobertura básica/);
+  assert.match(itens[4].conteudo, /Cadeirinha — R\$\s?24,90 por diária \(até 3 por reserva\)/);
 });

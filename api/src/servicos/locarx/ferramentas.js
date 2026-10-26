@@ -3,7 +3,7 @@
 import { comoSistema } from '../../banco/conexao.js';
 import { buscarConhecimento } from '../ia/conhecimento.js';
 import * as locarx from './api-locarx.js';
-import { cifrar } from '../seguranca.js';
+import { cifrar, decifrar } from '../seguranca.js';
 import { registrarEvento } from '../crm/funis.js';
 import { normalizarValor } from '../crm/personalizacao.js';
 import { reais, validarPeriodo, normalizarProtecoes, periodoTexto, dataBr, rotuloGrupo, ordenarPorPreco, textoOpcoes } from './cotacao.js';
@@ -14,6 +14,8 @@ export function cpfValido(cpf) {
   const dv = (n) => { let s = 0; for (let i = 0; i < n; i++) s += Number(d[i]) * (n + 1 - i); const r = (s * 10) % 11; return r === 10 ? 0 : r; };
   return dv(9) === Number(d[9]) && dv(10) === Number(d[10]);
 }
+
+const SITUACAO = { CONFIRMED: 'confirmada', PENDING: 'pendente', INPROGRESS: 'em andamento (carro retirado)', COMPLETED: 'concluída (carro devolvido)', CANCELED: 'cancelada' };
 
 const PERIODO = {
   data_retirada: { type: 'string', description: 'Data de retirada, AAAA-MM-DD' },
@@ -39,13 +41,38 @@ export function ferramentasDaLoja(ctx) {
     },
     {
       nome: 'dados_da_loja',
-      descricao: 'Nome, endereço e horários de funcionamento desta loja LocarX.',
+      descricao: 'Nome, endereço, horário de atendimento (por dia da semana) e janelas de atendimento especial (fora do horário, com taxa) desta loja LocarX, direto do portal. Use para responder horário/endereço e quando a consulta recusar um horário (OUTSIDE_BUSINESS_HOURS).',
       parametros: { type: 'object', properties: {} },
       executar: async () => {
         const loja = await comoSistema(async (c) => (await c.query('SELECT nome, cidade, uf FROM lojas WHERE id = $1', [ctx.lojaId])).rows[0]);
         let filial = null;
         try { filial = await locarx.dadosDaFilial(ctx.branchId); } catch { /* sem API: segue com o cadastro */ }
-        return { loja: loja?.nome, cidade: `${loja?.cidade}/${loja?.uf}`, endereco: filial?.endereco || 'consultar buscar_informacoes', horarios: filial?.horarios || 'consultar buscar_informacoes', tipo: filial?.tipo || null };
+        return {
+          loja: loja?.nome, cidade: `${loja?.cidade}/${loja?.uf}`, tipo: filial?.tipo || null,
+          endereco: filial?.endereco || 'consultar buscar_informacoes',
+          horario_de_atendimento: filial?.horariosTexto || 'consultar buscar_informacoes',
+          atendimento_especial: filial?.especiaisTexto || 'nenhum (fora do horário a loja não atende)',
+          observacao: 'Retirada e devolução precisam cair no horário de atendimento ou numa janela de atendimento especial (que tem taxa, já incluída no total da consulta).',
+        };
+      },
+    },
+    {
+      nome: 'descrever_grupo',
+      descricao: 'Descreve um grupo de carros do catálogo LocarX (modelos de referência, lugares, malas, portas, câmbio, itens de série). Use quando o cliente perguntar "o que é o grupo B", "cabe 5 pessoas?", "qual é automático?". NÃO tem preço nem disponibilidade: para isso use consultar_disponibilidade.',
+      parametros: { type: 'object', properties: { grupo: { type: 'string', description: 'letra (ex.: B), nome (ex.: SUV) ou modelo (ex.: Renegade). Vazio = lista resumida de todos' } } },
+      executar: async ({ grupo }) => {
+        const todos = await locarx.catalogoFrotas();
+        const q = String(grupo || '').trim().toLowerCase();
+        const semAcento = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        const achados = !q ? todos : todos.filter((g) => {
+          const r = rotuloGrupo(g, 0);
+          return r.letra.toLowerCase() === q || semAcento(g.grupo).includes(semAcento(q)) || semAcento(g.exemplos).includes(semAcento(q)) || g.tipos.some((t) => semAcento(t).includes(semAcento(q)));
+        });
+        if (!achados.length) return 'Nenhum grupo com esse nome no catálogo. Peça ao cliente a letra ou consulte a disponibilidade para o período.';
+        return {
+          aviso: 'Catálogo geral: sem preço e sem garantia de carro na loja. Para valores e disponibilidade use consultar_disponibilidade.',
+          grupos: achados.slice(0, 8).map((g) => { const r = rotuloGrupo(g, 0); return { letra: r.letra, nome: r.nome, modelos: g.exemplos, lugares: g.passageiros, malas: g.malas, portas: g.portas, cambio: g.cambio ? String(g.cambio).toLowerCase().replace('automatic', 'automático') : null, itens: g.itens.slice(0, 8) }; }),
+        };
       },
     },
     {
@@ -65,8 +92,10 @@ export function ferramentasDaLoja(ctx) {
         ctx.consultas = (ctx.consultas || 0) + 1;
         if (ctx.consultas > 3) return 'Limite de consultas atingido. Não consulte mais: avise o cliente e use chamar_atendente com o motivo "sem disponibilidade".';
         const p = validarPeriodo(a);
-        let grupos = await locarx.disponibilidade({ branchId: ctx.branchId, ...p });
         const periodo = periodoTexto(a);
+        let grupos;
+        try { grupos = await locarx.disponibilidade({ branchId: ctx.branchId, ...p }); }
+        catch (e) { if (e.dicaAssistente) return `Consulta para ${periodo} recusada pelo portal (${e.codigo}): ${e.dicaAssistente}`; throw e; }
         if (!grupos.length) {
           await etiquetarSemDisponibilidade(ctx);
           return `Nenhum carro disponível no sistema para ${periodo} nesta loja. NÃO procure outras datas por conta própria: avise o cliente em uma frase e use chamar_atendente com o motivo "sem disponibilidade para ${periodo}". Só consulte outra data se o próprio cliente pedir.`;
@@ -94,7 +123,9 @@ export function ferramentasDaLoja(ctx) {
       executar: async (a) => {
         const p = validarPeriodo(a);
         const protecoes = normalizarProtecoes(a.protecoes);
-        const r = await locarx.calcularPreco({ branchId: ctx.branchId, fleetId: a.fleet_id, ...p, protecoes });
+        let r;
+        try { r = await locarx.calcularPreco({ branchId: ctx.branchId, fleetId: a.fleet_id, ...p, protecoes }); }
+        catch (e) { if (e.dicaAssistente) return `Cálculo recusado pelo portal (${e.codigo}): ${e.dicaAssistente}`; throw e; }
         const cotacao = { fleetId: a.fleet_id, grupo: r.grupo, retirada: p.retirada, devolucao: p.devolucao, protecoes, nomesProtecoes: r.protecoes.map((x) => x.nome), total: r.total, diaria: r.diaria, diarias: r.diarias, em: new Date().toISOString() };
         ctx.cotacao = cotacao;
         if (!ctx.simulacao && ctx.conversaId) {
@@ -123,7 +154,7 @@ export function ferramentasDaLoja(ctx) {
         const cnh = String(a.cnh || '').replace(/\D/g, '');
         if (cnh && !/^\d{9,11}$/.test(cnh)) return 'O número da CNH parece incompleto. Peça para conferir ou siga sem a CNH (ela é opcional).';
         const telefone = String(a.telefone || ctx.telefone || '').replace(/\D/g, '');
-        const cliente = { nome: String(a.nome).trim().slice(0, 120), cpf: String(a.cpf).replace(/\D/g, ''), cnh, email: String(a.email).trim().toLowerCase(), telefone };
+        const cliente = { nome: String(a.nome).trim().slice(0, 100), cpf: String(a.cpf).replace(/\D/g, ''), cnh, email: String(a.email).trim().toLowerCase(), telefone, observacoes: 'Reserva feita pelo assistente virtual do WhatsApp (Conecta LocarX).', referencia: ctx.conversaId ? `CONECTA-${String(ctx.conversaId).slice(0, 8)}` : null };
 
         // cotação guardada (o que o cliente viu) e controle do resumo
         let cv = null;
@@ -153,7 +184,12 @@ export function ferramentasDaLoja(ctx) {
         let reserva;
         if (ctx.simulacao) reserva = { codigo: 'TESTE' + Math.floor(Math.random() * 1e5), status: 'SIMULACAO', grupo: cotacao.grupo, valor: cotacao.total };
         else {
-          reserva = await locarx.criarReserva({ branchId: ctx.branchId, fleetId: cotacao.fleetId, retirada: p.retirada, devolucao: p.devolucao, protecoes: cotacao.protecoes, cliente });
+          try { reserva = await locarx.criarReserva({ branchId: ctx.branchId, fleetId: cotacao.fleetId, retirada: p.retirada, devolucao: p.devolucao, protecoes: cotacao.protecoes, cliente }); }
+          catch (e) {
+            // erro conhecido do portal: a IA recebe a orientação (e o Monitor recebe o erro pelo evento da ferramenta)
+            if (e.dicaAssistente) { e.message = `Reserva NÃO criada — portal recusou (${e.codigo}): ${e.dicaAssistente}`; }
+            throw e;
+          }
           if (reserva.valor == null) reserva.valor = cotacao.total;
           // a reserva já existe no portal: se a gravação no Conecta falhar, o cliente ainda recebe o código
           try {
@@ -170,28 +206,43 @@ export function ferramentasDaLoja(ctx) {
     },
     {
       nome: 'consultar_reserva',
-      descricao: 'Consulta uma reserva desta loja pelo código (ex.: SSA586587).',
-      parametros: { type: 'object', properties: { codigo: { type: 'string' } }, required: ['codigo'] },
+      descricao: 'Consulta reservas desta loja. Com o código (ex.: SSA586587) traz aquela reserva; sem código, lista as reservas ativas do cliente desta conversa pelo CPF que ele já informou em reserva anterior.',
+      parametros: { type: 'object', properties: { codigo: { type: 'string', description: 'código da reserva; vazio para listar as do cliente' } } },
       executar: async ({ codigo }) => {
         const cod = String(codigo || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 20);
-        const r = await locarx.buscarReserva(cod);
-        if (!r || (r.branchId != null && Number(r.branchId) !== Number(ctx.branchId))) return 'Não encontrei essa reserva nesta loja. Peça para o cliente conferir o código.';
-        return { codigo: r.codigo, situacao: r.status, retirada: r.retirada, devolucao: r.devolucao, grupo: r.grupo, valor: reais(r.valor), protecoes: r.protecoes };
+        const resumo = (r) => ({ codigo: r.codigo, situacao: SITUACAO[r.status] || r.status, pagamento: r.pagamento === 'PAID' ? 'pago' : 'pagamento na loja (pendente)', retirada: r.retirada, devolucao: r.devolucao, grupo: r.grupo, valor: reais(r.valor), protecoes: r.protecoes, ...(r.motivoCancelamento ? { motivo_cancelamento: r.motivoCancelamento } : {}) });
+        if (cod) {
+          const r = await locarx.buscarReserva(cod);
+          if (!r || (r.branchId != null && Number(r.branchId) !== Number(ctx.branchId))) return 'Não encontrei essa reserva nesta loja. Peça para o cliente conferir o código (ou peça o CPF e consulte sem código).';
+          return resumo(r);
+        }
+        // sem código: pelo CPF guardado na ficha do cliente (só o próprio cliente da conversa)
+        if (!ctx.contatoId) return 'Peça o código da reserva ao cliente.';
+        const cpf = await comoSistema(async (c) => { const x = (await c.query('SELECT cpf_cifrado FROM contatos WHERE id = $1', [ctx.contatoId])).rows[0]; return x?.cpf_cifrado ? decifrar(x.cpf_cifrado) : null; });
+        if (!cpf) return 'Ainda não tenho o CPF deste cliente. Peça o código da reserva (ou o CPF, e tente de novo depois de anotar).';
+        const lista = (await locarx.reservasDoCpf(cpf)).filter((r) => r.branchId == null || Number(r.branchId) === Number(ctx.branchId));
+        if (!lista.length) return 'Nenhuma reserva ativa deste cliente nesta loja.';
+        return { reservas: lista.slice(0, 5).map(resumo) };
       },
     },
     {
       nome: 'cancelar_reserva',
-      descricao: 'Cancela uma reserva desta loja. Só use se o cliente pediu o cancelamento e confirmou claramente o código.',
-      parametros: { type: 'object', properties: { codigo: { type: 'string' }, cliente_confirmou: { type: 'boolean' }, motivo: { type: 'string' } }, required: ['codigo', 'cliente_confirmou'] },
+      descricao: 'Cancela uma reserva desta loja feita pelo Conecta. Só use se o cliente pediu o cancelamento e confirmou claramente o código. Não cancela reserva já retirada (carro na rua) nem concluída.',
+      parametros: { type: 'object', properties: { codigo: { type: 'string' }, cliente_confirmou: { type: 'boolean' }, motivo: { type: 'string', description: 'motivo dito pelo cliente, curto' } }, required: ['codigo', 'cliente_confirmou'] },
       executar: async ({ codigo, cliente_confirmou, motivo }) => {
         if (cliente_confirmou !== true) return 'Peça para o cliente confirmar o cancelamento antes.';
         const cod = String(codigo || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 20);
         const r = await locarx.buscarReserva(cod);
         if (!r || (r.branchId != null && Number(r.branchId) !== Number(ctx.branchId))) return 'Não encontrei essa reserva nesta loja.';
+        if (/CANCEL/i.test(r.status || '')) return 'Essa reserva já estava cancelada. Avise o cliente.';
+        if (/INPROGRESS|COMPLETED/i.test(r.status || '')) return 'Essa reserva já teve o carro retirado; não dá para cancelar pelo WhatsApp. Use chamar_atendente com o motivo "cancelamento após retirada".';
+        if (r.retirada && new Date(`${r.retirada}:00-03:00`) < new Date()) return 'O horário de retirada já passou. Pela política, o cancelamento precisa ser antes da retirada: use chamar_atendente com o motivo "cancelamento após o horário de retirada".';
         if (ctx.simulacao) return { cancelada: true, simulacao: true };
-        await locarx.cancelarReserva(cod, String(motivo || '').slice(0, 200));
+        try { await locarx.cancelarReserva(cod, String(motivo || 'Cancelada pelo cliente via WhatsApp').slice(0, 250)); }
+        catch (e) { if (e.dicaAssistente) return `Cancelamento recusado pelo portal (${e.codigo}): ${e.dicaAssistente}`; throw e; }
+        // o funil marca "perdido" sozinho na próxima rodada das automações (reserva cancelada)
         await comoSistema((c) => c.query(`UPDATE reservas SET status = 'cancelada', atualizada_em = now() WHERE loja_id = $1 AND codigo = $2`, [ctx.lojaId, cod]));
-        return { cancelada: true, codigo: cod };
+        return { cancelada: true, codigo: cod, aviso: 'Cancelamento definitivo. Se o cliente mudar de ideia, é preciso fazer uma reserva nova.' };
       },
     },
     {

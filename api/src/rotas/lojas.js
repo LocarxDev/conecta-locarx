@@ -3,6 +3,8 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { comContexto, contextoDoUsuario } from '../banco/conexao.js';
 import { rota, erro, validar, zUuid, exigirPerfil, lojaPublica, usuarioPublico, registrar } from '../http.js';
+import { config } from '../config.js';
+import * as locarx from '../servicos/locarx/api-locarx.js';
 
 export const admin = Router();
 export const loja = Router();
@@ -50,7 +52,13 @@ admin.get('/lojas/:id', exigirPerfil('admin', 'matriz'), rota(async (req, res) =
     return { ...lojaPublica(l), usuarios: usuarios.map(usuarioPublico) };
   });
   if (!r) throw erro(404, 'Loja não encontrada.');
-  res.json(r);
+  // a filial existe no ambiente atual da API? (os ids mudam entre homologação e produção)
+  let filialPortal = null;
+  if (config.locarx && r.filial?.branchId) {
+    try { const f = await locarx.dadosDaFilial(r.filial.branchId); filialPortal = f ? { encontrada: true, nome: f.nome, endereco: f.endereco, horarios: f.horariosTexto, ambiente: locarx.ehHomologacao() ? 'homologação' : 'produção' } : { encontrada: false, ambiente: locarx.ehHomologacao() ? 'homologação' : 'produção' }; }
+    catch (e) { filialPortal = { encontrada: null, erro: e.motivo || e.message, ambiente: locarx.ehHomologacao() ? 'homologação' : 'produção' }; }
+  }
+  res.json({ ...r, filialPortal });
 }));
 
 async function salvar(req, res, id) {

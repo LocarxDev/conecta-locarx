@@ -50,7 +50,7 @@ export async function montar(alvo, ctx) {
     await comBotao($('.barra-salvar [type=submit]', f), async () => { try { await api.salvarRede(d); avisar('Orientações da rede salvas.'); } catch (err) { avisar(err.message, 'erro'); } });
   });
 
-  painelBase($('#base', alvo), { ctx, escopo: 'rede', titulo: 'Base de conhecimento da rede', podeEditar: true, podeAprovar: true });
+  painelBase($('#base', alvo), { ctx, escopo: 'rede', titulo: 'Base de conhecimento da rede', podeEditar: true, podeAprovar: true, importarPortal: true });
 
   let sinonimos = r.sinonimos;
   const desenharSin = () => {
