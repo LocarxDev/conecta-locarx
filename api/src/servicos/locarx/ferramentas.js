@@ -108,6 +108,12 @@ export function ferramentasDaLoja(ctx) {
         if (!mostrar.length) return 'Não há mais opções além das já mostradas. Pergunte qual das opções o cliente prefere ou chame um atendente.';
         await marcarEtapa(ctx, 'cotacao');
         const texto = textoOpcoes(mostrar, { periodo, inicio: a.mais_opcoes ? 4 : 1, haMais: grupos.length > 3 && !a.mais_opcoes });
+        // guarda as opções na conversa: na próxima mensagem a IA recebe letra → fleet_id no prompt (ela não vê o resultado da ferramenta depois)
+        if (!ctx.simulacao && ctx.conversaId) {
+          const opcoes = { periodo: { data_retirada: a.data_retirada, hora_retirada: a.hora_retirada, data_devolucao: a.data_devolucao, hora_devolucao: a.hora_devolucao }, em: new Date().toISOString(),
+            grupos: [...(a.mais_opcoes ? (ctx.opcoesAnteriores || []) : []), ...mostrar.map((g, i) => ({ letra: rotuloGrupo(g, i + (a.mais_opcoes ? 4 : 1)).letra, fleet_id: g.fleetId, grupo: g.grupo, total: g.total }))] };
+          await comoSistema((c) => c.query('UPDATE conversas SET opcoes = $2 WHERE id = $1', [ctx.conversaId, opcoes]));
+        }
         return {
           texto_para_cliente: texto,
           grupos: mostrar.map((g, i) => ({ letra: rotuloGrupo(g, i + (a.mais_opcoes ? 4 : 1)).letra, fleet_id: g.fleetId, grupo: g.grupo, cambio: g.cambio, total: reais(g.total) })),
@@ -119,20 +125,20 @@ export function ferramentasDaLoja(ctx) {
     {
       nome: 'calcular_preco',
       descricao: 'Calcula o valor total da locação do grupo escolhido com as proteções. Use o fleet_id da opção que o cliente escolheu. Proteções: PROTECAO_X ou PROTECAO_SUPER_X (uma das duas é obrigatória), TERCEIROS, VIDROS ou VIDROS_E_PNEUS (opcionais; VIDROS e VIDROS_E_PNEUS não podem ir juntas). Esta cotação fica guardada e é a que será reservada.',
-      parametros: { type: 'object', properties: { fleet_id: { type: ['integer', 'string'] }, ...PERIODO, protecoes: { type: 'array', items: { type: 'string' } } }, required: ['fleet_id', ...Object.keys(PERIODO)] },
+      parametros: { type: 'object', properties: { fleet_id: { type: ['integer', 'string'], description: 'fleet_id numérico da opção escolhida (a letra da opção, ex.: "B", também é aceita)' }, ...PERIODO, protecoes: { type: 'array', items: { type: 'string' } } }, required: ['fleet_id', ...Object.keys(PERIODO)] },
       executar: async (a) => {
         const p = validarPeriodo(a);
         const protecoes = normalizarProtecoes(a.protecoes);
         let r;
         try { r = await locarx.calcularPreco({ branchId: ctx.branchId, fleetId: a.fleet_id, ...p, protecoes }); }
         catch (e) { if (e.dicaAssistente) return `Cálculo recusado pelo portal (${e.codigo}): ${e.dicaAssistente}`; throw e; }
-        const cotacao = { fleetId: a.fleet_id, grupo: r.grupo, retirada: p.retirada, devolucao: p.devolucao, protecoes, nomesProtecoes: r.protecoes.map((x) => x.nome), total: r.total, diaria: r.diaria, diarias: r.diarias, em: new Date().toISOString() };
+        const cotacao = { fleetId: r.fleetId ?? a.fleet_id, grupo: r.grupo, retirada: p.retirada, devolucao: p.devolucao, protecoes, nomesProtecoes: r.protecoes.map((x) => x.nome), total: r.total, diaria: r.diaria, diarias: r.diarias, em: new Date().toISOString() };
         ctx.cotacao = cotacao;
         if (!ctx.simulacao && ctx.conversaId) {
           await comoSistema((c) => c.query('UPDATE conversas SET cotacao = $2, resumo_enviado_em = NULL WHERE id = $1', [ctx.conversaId, cotacao]));
         }
         await marcarEtapa(ctx, 'cotacao', r.total);
-        return { grupo: r.grupo, total: reais(r.total), diaria: reais(r.diaria), diarias: r.diarias, protecoes: r.protecoes.length ? r.protecoes.map((x) => x.nome) : protecoes, pagamento: 'na loja, na retirada' };
+        return { grupo: r.grupo, fleet_id: r.fleetId, total: reais(r.total), diaria: reais(r.diaria), diarias: r.diarias, protecoes: r.protecoes.length ? r.protecoes.map((x) => x.nome) : protecoes, pagamento: 'na loja, na retirada', proximo_passo: 'Informe o total ao cliente. Para fechar, peça nome completo, CPF e e-mail (se ainda não tiver) e chame criar_reserva.' };
       },
     },
     {
@@ -144,16 +150,27 @@ export function ferramentasDaLoja(ctx) {
           nome: { type: 'string' }, cpf: { type: 'string' }, email: { type: 'string' },
           cnh: { type: 'string', description: 'opcional' }, telefone: { type: 'string', description: 'opcional; só se o cliente pedir outro número' },
           cliente_confirmou: { type: 'boolean', description: 'true somente se o cliente respondeu ao RESUMO confirmando' },
+          fleet_id: { type: ['integer', 'string'], description: 'só se ainda não calculou o preço: grupo escolhido (número ou letra)' },
+          ...PERIODO, protecoes: { type: 'array', items: { type: 'string' }, description: 'só se ainda não calculou o preço' },
         },
-        required: ['nome', 'cpf', 'email'],
+        required: [],
       },
       executar: async (a) => {
+        // dados que faltarem na chamada são completados com os já informados nesta conversa
+        if (!ctx.simulacao && ctx.conversaId && (!a.nome || !a.cpf || !a.email)) {
+          const guardado = await comoSistema(async (c) => (await c.query('SELECT condutor FROM conversas WHERE id = $1', [ctx.conversaId])).rows[0]?.condutor);
+          if (guardado) { a = { ...a, nome: a.nome || guardado.nome, email: a.email || guardado.email, cpf: a.cpf || (guardado.cpf_cifrado ? decifrar(guardado.cpf_cifrado) : null), cnh: a.cnh || guardado.cnh || '' }; }
+        }
         if (!a.nome || String(a.nome).trim().split(/\s+/).length < 2) return 'Peça o nome completo do condutor.';
         if (!cpfValido(a.cpf)) return 'CPF inválido. Peça para o cliente conferir o CPF.';
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(a.email || '').trim())) return 'E-mail inválido. Peça para o cliente conferir.';
         const cnh = String(a.cnh || '').replace(/\D/g, '');
         if (cnh && !/^\d{9,11}$/.test(cnh)) return 'O número da CNH parece incompleto. Peça para conferir ou siga sem a CNH (ela é opcional).';
         const telefone = String(a.telefone || ctx.telefone || '').replace(/\D/g, '');
+        // dados do condutor ficam na conversa (CPF cifrado): se o cliente trocar de grupo, a IA não precisa pedir de novo
+        if (!ctx.simulacao && ctx.conversaId) {
+          await comoSistema((c) => c.query('UPDATE conversas SET condutor = $2 WHERE id = $1', [ctx.conversaId, { nome: String(a.nome).trim().slice(0, 100), email: String(a.email).trim().toLowerCase(), cpf_cifrado: cifrar(String(a.cpf).replace(/\D/g, '')), cpf_final: String(a.cpf).replace(/\D/g, '').slice(-2), cnh: cnh || null, em: new Date().toISOString() }]));
+        }
         const cliente = { nome: String(a.nome).trim().slice(0, 100), cpf: String(a.cpf).replace(/\D/g, ''), cnh, email: String(a.email).trim().toLowerCase(), telefone, observacoes: 'Reserva feita pelo assistente virtual do WhatsApp (Conecta LocarX).', referencia: ctx.conversaId ? `CONECTA-${String(ctx.conversaId).slice(0, 8)}` : null };
 
         // cotação guardada (o que o cliente viu) e controle do resumo
@@ -161,8 +178,16 @@ export function ferramentasDaLoja(ctx) {
         if (!ctx.simulacao && ctx.conversaId) {
           cv = await comoSistema(async (c) => (await c.query('SELECT cotacao, resumo_enviado_em, ultima_do_cliente FROM conversas WHERE id = $1', [ctx.conversaId])).rows[0]);
         }
-        const cotacao = cv?.cotacao || ctx.cotacao;
-        if (!cotacao) return 'Ainda não há cotação. Calcule o preço do grupo escolhido com calcular_preco antes de reservar.';
+        let cotacao = cv?.cotacao || ctx.cotacao;
+        // sem cotação guardada: se a IA mandou grupo e período, calcula aqui mesmo (igual a calcular_preco)
+        if (!cotacao && a.fleet_id && a.data_retirada) {
+          const calc = lista.find((f) => f.nome === 'calcular_preco');
+          const r = await calc.executar({ fleet_id: a.fleet_id, data_retirada: a.data_retirada, hora_retirada: a.hora_retirada, data_devolucao: a.data_devolucao, hora_devolucao: a.hora_devolucao, protecoes: a.protecoes });
+          if (typeof r === 'string') return r;   // recusa/erro do cálculo, já com orientação
+          cotacao = ctx.cotacao;
+          cv = cv && { ...cv, cotacao, resumo_enviado_em: null };
+        }
+        if (!cotacao) return 'Ainda não há cotação. Chame calcular_preco com o fleet_id (ou a letra) do grupo escolhido, o período e as proteções — ou chame criar_reserva de novo informando fleet_id, datas, horas e proteções junto com os dados do cliente.';
         const rg = rotuloGrupo({ grupo: cotacao.grupo }, 1);
         const resumo = `*Resumo da reserva*\n🚗 ${cotacao.grupo ? `${rg.letra} – ${rg.nome}` : 'Grupo escolhido'}\n📅 Retirada: ${dataBr(cotacao.retirada)}\n📅 Devolução: ${dataBr(cotacao.devolucao)}\n🛡️ Proteção: ${(cotacao.nomesProtecoes?.length ? cotacao.nomesProtecoes : cotacao.protecoes).join(', ')}\n💰 Total: *${reais(cotacao.total)}* (pagamento na loja, na retirada)\n👤 ${cliente.nome} · CPF final ${cliente.cpf.slice(-2)} · ${cliente.email}`;
         const assinatura = `${cliente.cpf}|${cliente.email}|${cotacao.em}`;
@@ -194,7 +219,7 @@ export function ferramentasDaLoja(ctx) {
           // a reserva já existe no portal: se a gravação no Conecta falhar, o cliente ainda recebe o código
           try {
             await registrarReserva(ctx, reserva, p, cliente, { fleetId: cotacao.fleetId, protecoes: cotacao.protecoes });
-            await comoSistema((c) => c.query('UPDATE conversas SET cotacao = NULL, resumo_enviado_em = NULL WHERE id = $1', [ctx.conversaId]));
+            await comoSistema((c) => c.query('UPDATE conversas SET cotacao = NULL, resumo_enviado_em = NULL, opcoes = NULL WHERE id = $1', [ctx.conversaId]));
           } catch (e) {
             console.error('[criar_reserva] criada no portal mas falhou ao gravar no Conecta:', reserva.codigo, e);
             reserva.avisoGravacao = 'A reserva foi criada no portal, mas não ficou registrada no Conecta. Informe o código ao cliente e avise a equipe no chamar_atendente.';

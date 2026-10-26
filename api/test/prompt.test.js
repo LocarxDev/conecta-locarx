@@ -40,3 +40,21 @@ test('prompt: cliente recorrente e nome aparecem', () => {
   assert.match(p, /Cliente recorrente: já alugou 1x/);
   assert.match(p, /CLIENTE: Ana\./);
 });
+
+test('prompt: estado da reserva em andamento entra em toda rodada (opções com fleet_id, cotação e condutor)', async () => {
+  const { textoReservaEmAndamento } = await import('../src/servicos/ia/assistente.js');
+  const cv = {
+    opcoes: { periodo: { data_retirada: '2026-10-30', hora_retirada: '11:00', data_devolucao: '2026-11-05', hora_devolucao: '11:00' }, grupos: [{ letra: 'B', fleet_id: 2, grupo: 'B - COMPACTO COM AR', total: 726 }, { letra: 'C', fleet_id: 3, grupo: 'C - COMPACTO ESPECIAL', total: 858 }] },
+    cotacao: { fleetId: 3, grupo: 'C - COMPACTO ESPECIAL', retirada: { date: '2026-10-30', time: '11:00' }, devolucao: { date: '2026-11-05', time: '11:00' }, nomesProtecoes: ['Proteção X'], total: 858 },
+    resumo_enviado_em: '2026-10-26T20:35:00Z',
+    condutor: { nome: 'Silas Moreira dos Santos', cpf_final: '18', email: 'casilas9@hotmail.com' },
+  };
+  const t = textoReservaEmAndamento(cv);
+  assert.match(t, /C = 3 \(C - COMPACTO ESPECIAL\)/);
+  assert.match(t, /fleet_id 3/); assert.match(t, /R\$ 858,00/);
+  assert.match(t, /RESUMO já foi enviado/);
+  assert.match(t, /Silas Moreira dos Santos, CPF final 18/); assert.match(t, /NÃO peça de novo/);
+  assert.equal(textoReservaEmAndamento(null), '');
+  const p = montarSistema({ ...base, conversa: cv });
+  assert.match(p, /RESERVA EM ANDAMENTO/);
+});

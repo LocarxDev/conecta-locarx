@@ -186,3 +186,16 @@ test('politicasDoPortal: políticas, km, proteções e serviços viram itens de 
   assert.match(itens[3].conteudo, /Proteção X \(básica\) — R\$\s?10,00 por diária\. Cobertura básica/);
   assert.match(itens[4].conteudo, /Cadeirinha — R\$\s?24,90 por diária \(até 3 por reserva\)/);
 });
+
+test('acharGrupo: aceita fleetId numérico, letra ou nome (a IA costuma mandar a letra)', async () => {
+  const { acharGrupo } = await import('../src/servicos/locarx/api-locarx.js');
+  const grupos = [{ fleetId: 3, grupo: 'C - COMPACTO ESPECIAL', exemplos: 'FIAT Argo, HB20' }, { fleetId: 2, grupo: 'B - COMPACTO COM AR', exemplos: 'FIAT Mobi' }, { fleetId: 16, grupo: 'M - MINIVAN 7 LUGARES', exemplos: 'Spin' }];
+  assert.equal(acharGrupo(grupos, 2).fleetId, 2);
+  assert.equal(acharGrupo(grupos, '3').fleetId, 3);
+  assert.equal(acharGrupo(grupos, 'C').fleetId, 3);
+  assert.equal(acharGrupo(grupos, 'b').fleetId, 2);
+  assert.equal(acharGrupo(grupos, 'Compacto especial').fleetId, 3);
+  assert.equal(acharGrupo(grupos, 'minivan').fleetId, 16);
+  assert.equal(acharGrupo(grupos, 'argo').fleetId, 3);
+  assert.equal(acharGrupo(grupos, 'Z'), null);
+});

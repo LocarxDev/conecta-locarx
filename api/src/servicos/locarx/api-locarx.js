@@ -255,10 +255,35 @@ export async function disponibilidade(args) {
 }
 
 // acha o grupo (pelo fleetId, que é estável) e traduz os códigos das proteções para os ids da API
+// Acha o grupo pelo fleetId numérico ou, se a IA mandar a letra ("C") ou o nome ("Compacto especial"), por eles.
+export function acharGrupo(grupos, ref) {
+  const r = String(ref ?? '').trim();
+  if (!r) return null;
+  const porId = grupos.find((x) => String(x.fleetId) === r);
+  if (porId) return porId;
+  const letra = (g) => (String(g.grupo || '').match(/^\s*([A-Z0-9]{1,3})\s*[-–.]/i) || [])[1]?.toUpperCase();
+  const semAcento = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const q = semAcento(r);
+  return grupos.find((g) => letra(g) === r.toUpperCase())
+    || grupos.find((g) => semAcento(g.grupo) === q || semAcento(g.grupo).replace(/^[a-z0-9]{1,3}\s*[-–.]\s*/i, '') === q)
+    || grupos.find((g) => q.length >= 4 && (semAcento(g.grupo).includes(q) || semAcento(g.exemplos).includes(q)))
+    || null;
+}
+
 async function prepararGrupo({ branchId, fleetId, retirada, devolucao, protecoes = [] }) {
   const grupos = await disponibilidade({ branchId, retirada, devolucao });
-  const g = grupos.find((x) => String(x.fleetId) === String(fleetId));
-  if (!g) throw new ErroLocarx('Este grupo não está mais disponível para essas datas.', 409);
+  const g = acharGrupo(grupos, fleetId);
+  if (!g) {
+    const e = new ErroLocarx(grupos.length
+      ? `Grupo "${fleetId}" não encontrado entre os disponíveis para essas datas (${grupos.map((x) => x.grupo).join('; ')}). Use o fleet_id ou a letra de uma opção da consulta.`
+      : 'Nenhum grupo disponível para essas datas (a consulta voltou vazia).', 409);
+    e.codigo = grupos.length ? 'GRUPO_NAO_ENCONTRADO' : 'SEM_DISPONIBILIDADE';
+    e.motivo = e.message;
+    e.dicaAssistente = grupos.length
+      ? `O grupo "${fleetId}" não bate com as opções disponíveis: ${grupos.map((x) => x.grupo).join('; ')}. Informe o fleet_id (número) ou a letra exata da opção escolhida e tente de novo. NÃO diga ao cliente que o carro acabou.`
+      : 'A consulta voltou sem carros para essas datas. Avise o cliente e use chamar_atendente com o motivo "sem disponibilidade"; não procure outras datas por conta própria.';
+    throw e;
+  }
   const ids = protecoes.map((c) => g.protecoes.find((p) => p.codigo === c)?.id).filter((x) => x != null);
   return { g, ids };
 }
@@ -276,6 +301,7 @@ export async function calcularPreco({ branchId, fleetId, retirada, devolucao, pr
     diarias: num(d?.period?.baseDays),
     taxas: num(d?.summary?.administrationTax),
     grupo: g.grupo,
+    fleetId: g.fleetId,
     protecoes: g.protecoes.filter((p) => protecoes.includes(p.codigo)).map((p) => ({ codigo: p.codigo, nome: p.nome })),
     bruto: d,
   };

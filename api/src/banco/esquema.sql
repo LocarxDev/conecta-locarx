@@ -731,3 +731,8 @@ DROP POLICY IF EXISTS ocorrencias_loja ON ocorrencias;
 CREATE POLICY ocorrencias_loja ON ocorrencias FOR ALL USING (ctx_perfil() = 'sistema' OR loja_id = ctx_loja()) WITH CHECK (ctx_perfil() = 'sistema' OR loja_id = ctx_loja());
 DROP POLICY IF EXISTS ocorrencias_rede ON ocorrencias;
 CREATE POLICY ocorrencias_rede ON ocorrencias FOR SELECT USING (ctx_perfil() = 'admin');
+
+-- estado da reserva em andamento (o que a IA precisa "lembrar" entre uma mensagem e outra):
+-- últimas opções mostradas (letra → fleetId) e dados do condutor já informados (CPF cifrado)
+ALTER TABLE conversas ADD COLUMN IF NOT EXISTS opcoes jsonb;
+ALTER TABLE conversas ADD COLUMN IF NOT EXISTS condutor jsonb;

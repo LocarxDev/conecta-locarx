@@ -32,6 +32,7 @@ Menu **Monitor do assistente**: cada resposta da IA em tempo real (atualiza a ca
 A seção **Reservas e cotações** lista cada tentativa (equipe e assistente) com o resultado: criada, ou **o motivo da falha** — mensagem amigável, HTTP e resposta crua da API LocarX, período, grupo e proteções (tabela `ocorrencias`, `GET /api/admin/ocorrencias`). O dono vê a mesma mensagem de motivo na hora, na janela de reserva.
 
 Proteções do motor (`servicos/ia/provedores.js` e `assistente.js`):
+- **Estado da reserva entre mensagens**: a IA só vê o texto do WhatsApp (não o resultado das ferramentas de rodadas anteriores). Por isso a conversa guarda as últimas opções (letra → `fleet_id`), a cotação atual e os dados do condutor (CPF cifrado) — `conversas.opcoes`, `cotacao`, `condutor` — e o bloco **RESERVA EM ANDAMENTO** entra no prompt em toda rodada. `calcular_preco` aceita letra ou nome do grupo; `criar_reserva` completa nome/CPF/e-mail com o que já foi informado e calcula o preço sozinha se faltar cotação.
 - **Promessa sem ação**: se a IA responde "vou criar a reserva, um momento" sem chamar ferramenta, o sistema cobra uma vez na mesma rodada; se ela insistir sem agir, a conversa vai para a equipe com o motivo registrado.
 - **Markdown → WhatsApp**: `**negrito**`, `### título` e `- item` viram `*negrito*` e `• item` antes do envio.
 - **Reserva criada no portal nunca se perde**: se a gravação no Conecta falhar depois de o portal confirmar, o código ainda chega ao cliente/atendente com um aviso, em vez de erro.

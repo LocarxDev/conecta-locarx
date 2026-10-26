@@ -104,7 +104,25 @@ function textoCrm({ campos, etiquetas, valores, aplicadas }) {
   return partes.join('\n\n');
 }
 
-export function montarSistema({ loja, a, rede, contato, historicoReservas, crm }) {
+// bloco "RESERVA EM ANDAMENTO": o que ficou guardado na conversa (opções com fleet_id, cotação, condutor).
+// Sem isso a IA só vê o texto do WhatsApp e "esquece" os números entre uma mensagem e outra.
+export function textoReservaEmAndamento(cv) {
+  if (!cv) return '';
+  const linhas = [];
+  if (cv.opcoes?.grupos?.length) {
+    const p = cv.opcoes.periodo;
+    linhas.push(`Última consulta: ${p.data_retirada} ${p.hora_retirada} → ${p.data_devolucao} ${p.hora_devolucao}. Opções mostradas (letra = fleet_id): ${cv.opcoes.grupos.map((g) => `${g.letra} = ${g.fleet_id} (${g.grupo})`).join('; ')}. Use o fleet_id numérico em calcular_preco.`);
+  }
+  if (cv.cotacao?.total != null) {
+    linhas.push(`Cotação atual (é a que criar_reserva vai reservar): ${cv.cotacao.grupo || 'grupo'} fleet_id ${cv.cotacao.fleetId}, ${cv.cotacao.retirada?.date} ${cv.cotacao.retirada?.time} → ${cv.cotacao.devolucao?.date} ${cv.cotacao.devolucao?.time}, proteções ${(cv.cotacao.nomesProtecoes || cv.cotacao.protecoes || []).join(', ')}, total R$ ${Number(cv.cotacao.total).toFixed(2).replace('.', ',')}.${cv.resumo_enviado_em ? ' O RESUMO já foi enviado: se o cliente confirmar, chame criar_reserva com cliente_confirmou = true.' : ''}`);
+  }
+  if (cv.condutor?.nome) {
+    linhas.push(`Dados do condutor já informados nesta conversa: ${cv.condutor.nome}, CPF final ${cv.condutor.cpf_final}, ${cv.condutor.email}${cv.condutor.cnh ? ', CNH informada' : ''}. NÃO peça de novo; criar_reserva usa esses dados sozinha se você não mandar.`);
+  }
+  return linhas.length ? `RESERVA EM ANDAMENTO (estado guardado pelo sistema)\n${linhas.map((l) => '- ' + l).join('\n')}` : '';
+}
+
+export function montarSistema({ loja, a, rede, contato, historicoReservas, crm, conversa = null }) {
   const agora = agoraBahia();
   const recorrente = historicoReservas.length
     ? `Cliente recorrente: já alugou ${historicoReservas.length}x nesta loja; última vez grupo ${historicoReservas[0].grupo || 'não informado'} em ${new Date(historicoReservas[0].retirada).toLocaleDateString('pt-BR')}. Cumprimente pelo nome e, se fizer sentido, sugira o mesmo grupo.`
@@ -128,14 +146,14 @@ REGRAS OBRIGATÓRIAS
 
 ROTEIRO DE RESERVA (uma etapa por mensagem; se o cliente já deu a informação, não pergunte de novo)
 Passo 1 — Período. Você precisa de 4 coisas: data e hora da retirada, data e hora da devolução. Pergunte o que faltar em uma mensagem só (ex.: "Para qual dia e horário você quer retirar, e quando devolve?"). Converta "sexta", "dia 15", "de manhã" para data e hora reais usando a data de hoje; se a hora não vier, pergunte (não chute). Repita o período entendido em uma linha antes de consultar ("Então retirada 15/11 às 10h e devolução 18/11 às 10h, certo?") — pode consultar na mesma resposta se o cliente já foi claro.
-Passo 2 — Opções. Use consultar_disponibilidade e envie ao cliente o texto_para_cliente EXATAMENTE como veio (não mude valores, não resuma, não acrescente opções). Se o cliente pediu câmbio automático ou manual, use o filtro cambio. Se pedir "outras opções", consulte de novo com mais_opcoes = true. Guarde o fleet_id de cada letra.
+Passo 2 — Opções. Use consultar_disponibilidade e envie ao cliente o texto_para_cliente EXATAMENTE como veio (não mude valores, não resuma, não acrescente opções). Se o cliente pediu câmbio automático ou manual, use o filtro cambio. Se pedir "outras opções", consulte de novo com mais_opcoes = true. Guarde o fleet_id (número) de cada letra: é ele que vai em calcular_preco.
 Passo 3 — Escolha. O cliente responde com a letra (ou com o nome do carro). Se a resposta for ambígua ("o mais barato", "o segundo"), confirme qual letra é antes de seguir.
 Passo 4 — Proteção. Pergunte em uma mensagem: "O total mostrado já inclui a Proteção X. Quer manter a Proteção X ou prefere a Super X (cobertura maior)? Também temos opcionais: proteção a terceiros e vidros." Use os valores de protecoes_disponiveis se o cliente perguntar quanto custa cada uma. Depois da resposta, use calcular_preco com o fleet_id escolhido e informe o total ("Com a Super X, fica R$ X no total, pagamento na loja na retirada."). Se o cliente mudar de carro ou de datas depois disso, consulte e calcule de novo.
 Passo 5 — Dados do condutor. Peça em UMA mensagem: nome completo, CPF e e-mail. Diga que o telefone usado será o deste WhatsApp e que a CNH é opcional (ele pode mandar se quiser). Se vier parte dos dados, peça só o que faltou. Se o CPF ou o e-mail estiverem inválidos, a ferramenta avisa: peça para conferir, sem constranger.
-Passo 6 — Resumo. Chame criar_reserva com os dados. Na primeira vez ela devolve o RESUMO: envie o resumo ao cliente exatamente como veio e termine perguntando "Posso confirmar a reserva?". Não chame criar_reserva de novo nesta mesma resposta.
+Passo 6 — Resumo. Chame criar_reserva com os dados. Na primeira vez ela devolve o RESUMO: envie o resumo ao cliente exatamente como veio e termine perguntando "Posso confirmar a reserva?". NUNCA escreva um resumo por conta própria: o único resumo válido é o que a ferramenta devolve. Não chame criar_reserva de novo nesta mesma resposta.
 Passo 7 — Confirmação. Só quando o cliente responder confirmando (sim, pode, confirma, ok…), chame criar_reserva de novo com cliente_confirmou = true. Se ele pedir para mudar algo, ajuste (volte ao passo certo) e gere um novo resumo. Se disser que vai pensar, agradeça e fique à disposição (a cotação fica guardada).
 Passo 8 — Fechamento. Informe o código da reserva, lembre que o pagamento é na loja na retirada e o que levar (use buscar_informacoes para documentos e caução se o cliente perguntar). Se a ferramenta devolver "atencao", repasse o valor do portal ao cliente. Em seguida use chamar_atendente com motivo "reserva criada".
-Situações: cliente dá tudo de uma vez (datas, carro e dados) → siga os passos na ordem mesmo assim, sem pedir o que já tem, mas o resumo e a confirmação são obrigatórios. Cliente recorrente → pode sugerir o mesmo grupo da última vez, mas consulte a disponibilidade normalmente. Dúvida no meio do fluxo (caução, documentos, km) → responda com buscar_informacoes e retome o passo onde parou. Ferramenta deu erro → não invente; diga que vai confirmar com a equipe e use chamar_atendente.
+Situações: cliente dá tudo de uma vez (datas, carro e dados) → siga os passos na ordem mesmo assim, sem pedir o que já tem, mas o resumo e a confirmação são obrigatórios. Cliente troca de grupo, proteção ou datas depois de já ter mandado nome, CPF e e-mail → NÃO peça os dados de novo: recalcule (calcular_preco) e chame criar_reserva com os mesmos dados que ele já mandou, para gerar o novo resumo. Ferramenta disse que o grupo "não foi encontrado" → é erro de identificação, não falta de carro: use o fleet_id numérico ou a letra exata e tente de novo; só diga que não há carro quando a consulta voltar vazia. Cliente recorrente → pode sugerir o mesmo grupo da última vez, mas consulte a disponibilidade normalmente. Dúvida no meio do fluxo (caução, documentos, km) → responda com buscar_informacoes e retome o passo onde parou. Ferramenta deu erro → não invente; diga que vai confirmar com a equipe e use chamar_atendente.
 
 ORIENTAÇÕES DA REDE LOCARX
 ${rede.orientacoes_rede || '(nenhuma)'}
@@ -146,6 +164,8 @@ ${a.instrucoes || '(nenhuma)'}
 ${a.boas_vindas ? `SAUDAÇÃO DO PRIMEIRO CONTATO: ${a.boas_vindas}` : ''}
 
 ${crm ? textoCrm(crm) : ''}
+
+${textoReservaEmAndamento(conversa)}
 
 CLIENTE: ${contato.nome || 'nome não informado'}. ${recorrente}`;
 }
@@ -224,7 +244,7 @@ async function processarAgora(conversaId) {
   let pedidoAtendente = null;
   const ferramentas = ferramentasDaLoja({
     lojaId: loja.id, branchId: loja.branch_id, conversaId: conversa.id, contatoId: conversa.contato_id, telefone: conversa.telefone,
-    locarxDisponivel: !!config.locarx, simulacao: false, campos: crm.campos, etiquetas: crm.etiquetas,
+    locarxDisponivel: !!config.locarx, simulacao: false, campos: crm.campos, etiquetas: crm.etiquetas, opcoesAnteriores: conversa.opcoes?.grupos || [],
     aoChamarAtendente: async (args) => { pedidoAtendente = args; },
   });
 
@@ -234,7 +254,7 @@ async function processarAgora(conversaId) {
   try {
     const opcoes = {
       provedor: a.provedor, modelo: a.modelo, chave: a.chave_cifrada ? decifrar(a.chave_cifrada) : null,
-      sistema: montarSistema({ loja, a, rede, contato: { nome: conversa.contato_nome }, historicoReservas, crm }), historico, ferramentas,
+      sistema: montarSistema({ loja, a, rede, contato: { nome: conversa.contato_nome }, historicoReservas, crm, conversa }), historico, ferramentas,
     };
     resposta = config.iaSimulada ? await simularIa(opcoes) : await conversarComIa(opcoes);
   } catch (e) { erroIa = e; console.error('[assistente] IA:', e.message); }
