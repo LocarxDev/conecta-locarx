@@ -9,6 +9,7 @@ import { simularIa } from './simulada.js';
 import { ferramentasDaLoja } from '../locarx/ferramentas.js';
 import { listarCampos, listarEtiquetas } from '../crm/personalizacao.js';
 import { distribuir } from '../crm/roleta.js';
+import { registrarOcorrencia } from '../ocorrencias.js';
 
 const provedoresCanal = { evolution };
 const ESPERA_MS = 4000;              // espera o cliente terminar de digitar várias mensagens seguidas
@@ -41,7 +42,19 @@ export function agendar(conversaId) {
   timers.set(conversaId, setTimeout(() => { timers.delete(conversaId); processar(conversaId).catch((e) => console.error('[assistente]', e.message)); }, ESPERA_MS));
 }
 
-async function enviarComoAssistente(c, conversa, canal, texto) {
+// A IA às vezes escreve em Markdown (**negrito**, ### título, - item). O WhatsApp usa *negrito* e não tem títulos.
+export function paraWhatsApp(texto) {
+  return String(texto || '')
+    .replace(/\*\*(.+?)\*\*/g, '*$1*')          // **x** → *x*
+    .replace(/^#{1,6}\s+(.+)$/gm, '*$1*')        // ### Título → *Título*
+    .replace(/^\s*[-•]\s+/gm, '• ')             // - item → • item
+    .replace(/\[(.+?)\]\((https?:[^)]+)\)/g, '$1 $2')  // [texto](link) → texto link
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+async function enviarComoAssistente(c, conversa, canal, textoBruto) {
+  const texto = paraWhatsApp(textoBruto);
   const partes = texto.match(/[\s\S]{1,3800}(?=\s|$)|[\s\S]{1,3800}/g) || [];
   for (const parte of partes) {
     const externoId = await provedoresCanal[canal.provedor].enviarTexto(canal.instancia, conversa.telefone, parte.trim());
@@ -217,6 +230,7 @@ async function processarAgora(conversaId) {
 
   // 5) IA
   let resposta, erroIa = null;
+  const inicioIa = Date.now();
   try {
     const opcoes = {
       provedor: a.provedor, modelo: a.modelo, chave: a.chave_cifrada ? decifrar(a.chave_cifrada) : null,
@@ -226,9 +240,28 @@ async function processarAgora(conversaId) {
   } catch (e) { erroIa = e; console.error('[assistente] IA:', e.message); }
 
   // 6) grava e envia
+  const eventos = [...(resposta?.eventos || [])];
+  const prometeuSemAgir = !erroIa && resposta?.texto && eventos.some((e) => e.tipo === 'nudge') && !eventos.some((e) => e.tipo === 'ferramenta');
+  if (prometeuSemAgir) eventos.push({ tipo: 'erro', em: new Date().toISOString(), erro: 'A IA disse que ia agir, foi cobrada e mesmo assim não usou ferramenta. Conversa repassada à equipe.' });
+  if (!erroIa && !resposta?.texto) eventos.push({ tipo: 'erro', em: new Date().toISOString(), erro: 'A IA devolveu resposta vazia.' });
+  const falhas = eventos.filter((e) => e.erro).length;
+  // o que falhou vai para as ocorrências (Monitor da administração), com o motivo
+  if (erroIa) await registrarOcorrencia({ lojaId: loja.id, conversaId: conversa.id, origem: 'assistente', tipo: 'ia', nivel: 'erro', mensagem: `IA indisponível: ${String(erroIa.message).slice(0, 200)}`, detalhes: { provedor: a.provedor, modelo: a.modelo, status: erroIa.status || null } });
+  for (const e of eventos.filter((x) => x.erro)) {
+    const tipo = e.tipo === 'ferramenta' && /reserva/.test(e.nome) ? 'reserva' : e.tipo === 'ferramenta' && /disponibilidade|preco/.test(e.nome) ? 'cotacao' : 'ia';
+    await registrarOcorrencia({ lojaId: loja.id, conversaId: conversa.id, origem: 'assistente', tipo, nivel: 'erro', mensagem: e.tipo === 'ferramenta' ? `${e.nome} falhou: ${e.erro}` : e.erro, detalhes: e });
+  }
+  for (const e of eventos.filter((x) => x.tipo === 'ferramenta' && x.ok && x.nome === 'criar_reserva' && !x.aviso)) {
+    await registrarOcorrencia({ lojaId: loja.id, conversaId: conversa.id, origem: 'assistente', tipo: 'reserva', nivel: 'info', mensagem: 'Reserva criada pelo assistente', detalhes: e });
+  }
   await comoSistema(async (c) => {
-    await c.query(`INSERT INTO uso_ia (loja_id, conversa_id, provedor, modelo, tokens_in, tokens_out, ferramentas, ok) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [loja.id, conversa.id, a.provedor, a.modelo, resposta?.uso?.entrada || 0, resposta?.uso?.saida || 0, resposta?.usadas || [], !erroIa]);
+    await c.query(
+      `INSERT INTO uso_ia (loja_id, conversa_id, provedor, modelo, tokens_in, tokens_out, ferramentas, ok, erro, detalhes, duracao_ms)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [loja.id, conversa.id, a.provedor, a.modelo, resposta?.uso?.entrada || 0, resposta?.uso?.saida || 0, resposta?.usadas || [], !erroIa && !falhas,
+        erroIa ? String(erroIa.message).slice(0, 300) : (eventos.find((e) => e.erro)?.erro || null),
+        { eventos, voltas: resposta?.voltas || 0, parada: resposta?.parada || null, tamanho: resposta?.texto?.length || 0, pedidoAtendente: pedidoAtendente?.motivo || null },
+        Date.now() - inicioIa]);
     if (erroIa) {
       await repassar(c, conversa, 'o assistente ficou indisponível (erro na IA)');
       return;
@@ -239,7 +272,9 @@ async function processarAgora(conversaId) {
     if (resposta.texto) {
       try { await enviarComoAssistente(c, conversa, canal, resposta.texto); } catch (e) { console.error('[assistente] envio:', e.message); }
     }
-    if (pedidoAtendente) {
+    if (prometeuSemAgir) {
+      await repassar(c, conversa, 'o assistente não conseguiu concluir a ação (prometeu e não executou)');
+    } else if (pedidoAtendente) {
       await repassar(c, conversa, pedidoAtendente.motivo);
       if (pedidoAtendente.sem_resposta) {
         await c.query(`INSERT INTO perguntas_sem_resposta (loja_id, conversa_id, pergunta) VALUES ($1, $2, $3)`,
@@ -295,5 +330,5 @@ export async function testarAssistente(lojaId, historico) {
   const ferramentas = ferramentasDaLoja({ lojaId, branchId: loja.branch_id, locarxDisponivel: !!config.locarx, simulacao: true, campos: crm.campos, etiquetas: crm.etiquetas, aoChamarAtendente: async (x) => { chamou = x; } });
   const opcoes = { provedor: a.provedor, modelo: a.modelo, chave: a.chave_cifrada ? decifrar(a.chave_cifrada) : null, sistema: montarSistema({ loja, a, rede, contato: { nome: null }, historicoReservas: [], crm }), historico, ferramentas };
   const r = config.iaSimulada ? await simularIa(opcoes) : await conversarComIa(opcoes);
-  return { resposta: r.texto, ferramentas: r.usadas, chamouAtendente: chamou };
+  return { resposta: r.texto, ferramentas: r.usadas, chamouAtendente: chamou, eventos: r.eventos || [] };
 }

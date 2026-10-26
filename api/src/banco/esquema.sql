@@ -702,3 +702,32 @@ INSERT INTO etiquetas (loja_id, nome, cor, descricao_bot)
 -- A reserva usa a cotação gravada e só sai se o cliente respondeu DEPOIS do resumo.
 ALTER TABLE conversas ADD COLUMN IF NOT EXISTS cotacao jsonb;
 ALTER TABLE conversas ADD COLUMN IF NOT EXISTS resumo_enviado_em timestamptz;
+
+-- monitor do assistente (administração): erro, eventos de cada resposta (ferramentas, nudges) e tempo gasto
+ALTER TABLE uso_ia ADD COLUMN IF NOT EXISTS erro text;
+ALTER TABLE uso_ia ADD COLUMN IF NOT EXISTS detalhes jsonb;
+ALTER TABLE uso_ia ADD COLUMN IF NOT EXISTS duracao_ms integer;
+CREATE INDEX IF NOT EXISTS uso_ia_recentes ON uso_ia (criado_em DESC);
+
+-- ocorrências de reservas/cotações (equipe e assistente), com o motivo — alimentam o Monitor da administração
+CREATE TABLE IF NOT EXISTS ocorrencias (
+  id          bigserial PRIMARY KEY,
+  loja_id     uuid NOT NULL REFERENCES lojas(id) ON DELETE CASCADE,
+  usuario_id  uuid REFERENCES usuarios(id) ON DELETE SET NULL,
+  conversa_id uuid REFERENCES conversas(id) ON DELETE SET NULL,
+  origem      text NOT NULL CHECK (origem IN ('equipe', 'assistente', 'sistema')),
+  tipo        text NOT NULL CHECK (tipo IN ('reserva', 'cotacao', 'ia', 'whatsapp')),
+  nivel       text NOT NULL CHECK (nivel IN ('erro', 'aviso', 'info')),
+  mensagem    text NOT NULL,
+  detalhes    jsonb,
+  criado_em   timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ocorrencias_recentes ON ocorrencias (criado_em DESC);
+CREATE INDEX IF NOT EXISTS ocorrencias_loja ON ocorrencias (loja_id, criado_em DESC);
+GRANT SELECT, INSERT ON ocorrencias TO conecta_app;
+GRANT USAGE ON SEQUENCE ocorrencias_id_seq TO conecta_app;
+ALTER TABLE ocorrencias ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS ocorrencias_loja ON ocorrencias;
+CREATE POLICY ocorrencias_loja ON ocorrencias FOR ALL USING (ctx_perfil() = 'sistema' OR loja_id = ctx_loja()) WITH CHECK (ctx_perfil() = 'sistema' OR loja_id = ctx_loja());
+DROP POLICY IF EXISTS ocorrencias_rede ON ocorrencias;
+CREATE POLICY ocorrencias_rede ON ocorrencias FOR SELECT USING (ctx_perfil() = 'admin');

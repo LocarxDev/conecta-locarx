@@ -142,7 +142,10 @@ export async function criarReserva({ branchId, fleetId, retirada, devolucao, pro
       observations: 'Reserva feita pelo assistente virtual do WhatsApp (Conecta LocarX).',
     },
   });
-  return normalizarReserva(d?.reservation || d);
+  const r = normalizarReserva(d?.reservation || d?.data || d);
+  // o portal respondeu OK mas sem reserva reconhecível: melhor avisar do que seguir com código vazio
+  if (!r || (!r.codigo && r.id == null)) throw new ErroLocarx('O portal LocarX não devolveu o código da reserva (formato de resposta inesperado).', 502, d);
+  return r;
 }
 
 export async function buscarReserva(codigo) {

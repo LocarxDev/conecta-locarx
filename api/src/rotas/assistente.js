@@ -271,3 +271,67 @@ rede.delete('/sinonimos/:id', exigirPerfil('admin', 'matriz'), rota(async (req, 
   await comContexto(ctx(req), (c) => c.query('DELETE FROM sinonimos WHERE id = $1', [uuid(req.params.id)]));
   res.status(204).end();
 }));
+
+// =====================================================================
+// Monitor do assistente (administração): cada resposta da IA em tempo real — loja, modelo, tokens, tempo,
+// ferramentas chamadas, erros da API LocarX/IA e "promessas sem ação". Nada de conteúdo de conversa.
+// A tela consulta a cada poucos segundos passando o último id visto (`desde`).
+// =====================================================================
+rede.get('/assistente/monitor', exigirPerfil('admin'), rota(async (req, res) => {
+  const q = validar(z.object({
+    desde: z.coerce.number().int().nonnegative().optional(),
+    loja: zUuid.optional(),
+    so: z.enum(['tudo', 'erros']).default('tudo'),
+    limite: z.coerce.number().int().min(1).max(200).default(60),
+  }), req.query);
+  const params = [q.limite];
+  let filtro = '';
+  if (q.desde) { params.push(q.desde); filtro += ` AND u.id > $${params.length}`; }
+  if (q.loja) { params.push(q.loja); filtro += ` AND u.loja_id = $${params.length}`; }
+  if (q.so === 'erros') filtro += ' AND (u.ok = false OR u.erro IS NOT NULL)';
+  const r = await comContexto(ctx(req), async (c) => ({
+    itens: (await c.query(
+      `SELECT u.id, u.criado_em, u.loja_id, l.nome AS loja_nome, u.conversa_id, u.provedor, u.modelo, u.tokens_in, u.tokens_out, u.ferramentas, u.ok, u.erro, u.detalhes, u.duracao_ms
+         FROM uso_ia u JOIN lojas l ON l.id = u.loja_id
+        WHERE true ${filtro}
+        ORDER BY u.id DESC LIMIT $1`, params)).rows,
+    resumo: (await c.query(
+      `SELECT count(*)::int AS respostas,
+              count(*) FILTER (WHERE NOT ok OR erro IS NOT NULL)::int AS com_erro,
+              count(*) FILTER (WHERE detalhes @> '{"eventos":[{"tipo":"nudge"}]}')::int AS promessas,
+              coalesce(avg(duracao_ms), 0)::int AS media_ms,
+              coalesce(sum(tokens_in + tokens_out), 0)::bigint AS tokens,
+              count(DISTINCT conversa_id)::int AS conversas
+         FROM uso_ia WHERE criado_em > now() - interval '24 hours'`)).rows[0],
+    porLoja: (await c.query(
+      `SELECT l.id, l.nome, count(u.*)::int AS respostas, count(u.*) FILTER (WHERE NOT u.ok OR u.erro IS NOT NULL)::int AS com_erro, max(u.criado_em) AS ultima
+         FROM lojas l LEFT JOIN uso_ia u ON u.loja_id = l.id AND u.criado_em > now() - interval '24 hours'
+        WHERE l.ativa GROUP BY l.id, l.nome ORDER BY respostas DESC, l.nome`)).rows,
+  }));
+  res.json({
+    resumo: { respostas: r.resumo.respostas, comErro: r.resumo.com_erro, promessas: r.resumo.promessas, mediaMs: r.resumo.media_ms, tokens: Number(r.resumo.tokens), conversas: r.resumo.conversas },
+    porLoja: r.porLoja.map((x) => ({ id: x.id, nome: x.nome, respostas: x.respostas, comErro: x.com_erro, ultima: x.ultima })),
+    itens: r.itens.map((u) => ({
+      id: Number(u.id), em: u.criado_em, loja: { id: u.loja_id, nome: u.loja_nome }, conversaId: u.conversa_id, provedor: u.provedor, modelo: u.modelo,
+      tokens: { entrada: u.tokens_in, saida: u.tokens_out }, ferramentas: u.ferramentas || [], ok: u.ok, erro: u.erro, duracaoMs: u.duracao_ms,
+      eventos: u.detalhes?.eventos || [], voltas: u.detalhes?.voltas ?? null, parada: u.detalhes?.parada ?? null, tamanho: u.detalhes?.tamanho ?? null, pedidoAtendente: u.detalhes?.pedidoAtendente ?? null,
+    })),
+  });
+}));
+
+// Ocorrências de reservas e cotações (equipe e assistente), com o motivo. Administração.
+rede.get('/ocorrencias', exigirPerfil('admin'), rota(async (req, res) => {
+  const q = validar(z.object({ desde: z.coerce.number().int().nonnegative().optional(), loja: zUuid.optional(), nivel: z.enum(['tudo', 'erro']).default('tudo'), limite: z.coerce.number().int().min(1).max(200).default(60) }), req.query);
+  const params = [q.limite];
+  let filtro = '';
+  if (q.desde) { params.push(q.desde); filtro += ` AND o.id > $${params.length}`; }
+  if (q.loja) { params.push(q.loja); filtro += ` AND o.loja_id = $${params.length}`; }
+  if (q.nivel === 'erro') filtro += ` AND o.nivel IN ('erro', 'aviso')`;
+  const rows = await comContexto(ctx(req), async (c) => (await c.query(
+    `SELECT o.*, l.nome AS loja_nome, u.nome AS usuario_nome FROM ocorrencias o JOIN lojas l ON l.id = o.loja_id LEFT JOIN usuarios u ON u.id = o.usuario_id
+      WHERE true ${filtro} ORDER BY o.id DESC LIMIT $1`, params)).rows);
+  res.json(rows.map((o) => ({
+    id: Number(o.id), em: o.criado_em, loja: { id: o.loja_id, nome: o.loja_nome }, conversaId: o.conversa_id, origem: o.origem, quem: o.usuario_nome || (o.origem === 'assistente' ? 'Assistente' : 'Sistema'),
+    tipo: o.tipo, nivel: o.nivel, mensagem: o.mensagem, detalhes: o.detalhes,
+  })));
+}));

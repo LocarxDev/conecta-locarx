@@ -155,11 +155,17 @@ export function ferramentasDaLoja(ctx) {
         else {
           reserva = await locarx.criarReserva({ branchId: ctx.branchId, fleetId: cotacao.fleetId, retirada: p.retirada, devolucao: p.devolucao, protecoes: cotacao.protecoes, cliente });
           if (reserva.valor == null) reserva.valor = cotacao.total;
-          await registrarReserva(ctx, reserva, p, cliente, { fleetId: cotacao.fleetId, protecoes: cotacao.protecoes });
-          await comoSistema((c) => c.query('UPDATE conversas SET cotacao = NULL, resumo_enviado_em = NULL WHERE id = $1', [ctx.conversaId]));
+          // a reserva já existe no portal: se a gravação no Conecta falhar, o cliente ainda recebe o código
+          try {
+            await registrarReserva(ctx, reserva, p, cliente, { fleetId: cotacao.fleetId, protecoes: cotacao.protecoes });
+            await comoSistema((c) => c.query('UPDATE conversas SET cotacao = NULL, resumo_enviado_em = NULL WHERE id = $1', [ctx.conversaId]));
+          } catch (e) {
+            console.error('[criar_reserva] criada no portal mas falhou ao gravar no Conecta:', reserva.codigo, e);
+            reserva.avisoGravacao = 'A reserva foi criada no portal, mas não ficou registrada no Conecta. Informe o código ao cliente e avise a equipe no chamar_atendente.';
+          }
         }
         const divergente = reserva.valor != null && cotacao.total != null && Math.abs(reserva.valor - cotacao.total) > 1;
-        return { reserva_criada: true, codigo: reserva.codigo, total: reais(reserva.valor ?? cotacao.total), ...(divergente ? { atencao: `O portal fechou a reserva em ${reais(reserva.valor)} (a cotação mostrava ${reais(cotacao.total)}). Informe o valor do portal ao cliente e avise a equipe.` } : {}), pagamento: 'na loja, na retirada', proximo_passo: 'Informe o código ao cliente e avise que um atendente da loja vai dar sequência.' };
+        return { reserva_criada: true, codigo: reserva.codigo, total: reais(reserva.valor ?? cotacao.total), ...(reserva.avisoGravacao ? { atencao: reserva.avisoGravacao } : {}), ...(divergente ? { atencao: `O portal fechou a reserva em ${reais(reserva.valor)} (a cotação mostrava ${reais(cotacao.total)}). Informe o valor do portal ao cliente e avise a equipe.` } : {}), pagamento: 'na loja, na retirada', proximo_passo: 'Informe o código ao cliente e avise que um atendente da loja vai dar sequência.' };
       },
     },
     {

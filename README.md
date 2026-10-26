@@ -26,6 +26,16 @@ Plataforma de atendimento e CRM da rede LocarX: assistente virtual com IA no Wha
 ### Status do WhatsApp (administração e matriz)
 Menu **Status do WhatsApp**: servidor Evolution no ar (e versão), instância e número de cada loja, assistente ligado/desligado, equipe online, mensagens nas últimas 24 h e alertas (desconectada, assistente sem chave, conversas aguardando sem ninguém online). **Verificar agora** confere a situação real na Evolution e corrige o que estava gravado. A administração **reconecta** (QR code para o celular da loja) e **desconecta**; a matriz só consulta. `GET /api/admin/whatsapp`, `POST /api/admin/whatsapp/:lojaId/conectar|desconectar`, `GET …/qr`.
 
+### Monitor do assistente (administração)
+Menu **Monitor do assistente**: cada resposta da IA em tempo real (atualiza a cada 5 s) — loja, modelo, tempo, tokens, ferramentas chamadas com duração, erros da API LocarX (com a resposta crua) e da IA, e "promessas sem ação". Clique na linha para ver a linha do tempo. Nenhum conteúdo de conversa e nenhum dado pessoal é guardado: os argumentos das ferramentas entram sem CPF, nome, e-mail e telefone. Colunas novas em `uso_ia` (`erro`, `detalhes`, `duracao_ms`); `GET /api/admin/assistente/monitor`.
+
+A seção **Reservas e cotações** lista cada tentativa (equipe e assistente) com o resultado: criada, ou **o motivo da falha** — mensagem amigável, HTTP e resposta crua da API LocarX, período, grupo e proteções (tabela `ocorrencias`, `GET /api/admin/ocorrencias`). O dono vê a mesma mensagem de motivo na hora, na janela de reserva.
+
+Proteções do motor (`servicos/ia/provedores.js` e `assistente.js`):
+- **Promessa sem ação**: se a IA responde "vou criar a reserva, um momento" sem chamar ferramenta, o sistema cobra uma vez na mesma rodada; se ela insistir sem agir, a conversa vai para a equipe com o motivo registrado.
+- **Markdown → WhatsApp**: `**negrito**`, `### título` e `- item` viram `*negrito*` e `• item` antes do envio.
+- **Reserva criada no portal nunca se perde**: se a gravação no Conecta falhar depois de o portal confirmar, o código ainda chega ao cliente/atendente com um aviso, em vez de erro.
+
 ### Testes
 ```bash
 cd api && npm test

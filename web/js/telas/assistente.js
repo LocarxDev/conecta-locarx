@@ -70,12 +70,11 @@ export async function montar(alvo, ctx) {
         <div class="painel-cab"><h2>Como o assistente se apresenta</h2></div>
         <div class="painel-corpo form">
           <label class="checkbox"><input type="checkbox" name="ativo" ${a.ativo ? 'checked' : ''}> <strong>Assistente ligado</strong> (atende as conversas novas no WhatsApp)</label>
-          <div class="form-linha">
-            <div class="campo"><label for="as-nome">Nome do assistente</label><input id="as-nome" name="nome" value="${a.nome}" maxlength="60"></div>
-            <div class="campo"><label for="as-boas">Saudação do primeiro contato</label><input id="as-boas" name="boasVindas" value="${a.boasVindas}" maxlength="1000" placeholder="Ex.: Olá! Sou a Lia, assistente da LocarX Salvador Aeroporto."></div>
-          </div>
-          <div class="campo"><label for="as-instr">Orientações desta loja</label>
-            <textarea id="as-instr" name="instrucoes" rows="7" maxlength="8000" placeholder="Ex.: Sempre ofereça a proteção Super X. Clientes de empresa: peça o CNPJ e chame um atendente.">${a.instrucoes}</textarea>
+          <div class="campo campo-curto"><label for="as-nome">Nome do assistente</label><input id="as-nome" name="nome" value="${a.nome}" maxlength="60"></div>
+          <div class="campo"><label for="as-boas">Saudação do primeiro contato</label>
+            <textarea id="as-boas" name="boasVindas" rows="2" maxlength="1000" data-cresce placeholder="Ex.: Olá! Sou a Lia, assistente da LocarX Salvador Aeroporto.">${a.boasVindas}</textarea></div>
+          <div class="campo"><label for="as-instr">Orientações desta loja <span class="sub contador" data-contador-de="as-instr"></span></label>
+            <textarea id="as-instr" name="instrucoes" rows="18" maxlength="8000" class="texto-longo" data-cresce placeholder="Ex.: Sempre ofereça a proteção Super X. Clientes de empresa: peça o CNPJ e chame um atendente.">${a.instrucoes}</textarea>
             <p class="ajuda">Jeito de falar e regras de atendimento da loja. Regras como caução, documentos e endereço ficam melhor na Base de conhecimento.</p></div>
         </div>
       </section>
@@ -147,6 +146,16 @@ export async function montar(alvo, ctx) {
 
   // ---------- configurações ----------
   const f = $('#form-assistente', alvo);
+  // campos de texto crescem com o conteúdo; o de orientações mostra quantos caracteres ainda cabem
+  $$('[data-cresce]', f).forEach((t) => {
+    const ajustar = () => { t.style.height = 'auto'; t.style.height = Math.max(t.scrollHeight + 2, t.classList.contains('texto-longo') ? 360 : 0) + 'px'; };
+    t.addEventListener('input', ajustar); ajustar();
+  });
+  $$('[data-contador-de]', f).forEach((c) => {
+    const t = $('#' + c.dataset.contadorDe, f);
+    const mostrar = () => { c.textContent = `${t.value.length.toLocaleString('pt-BR')} / ${Number(t.maxLength).toLocaleString('pt-BR')}`; c.classList.toggle('alerta', t.value.length > t.maxLength * 0.9); };
+    t.addEventListener('input', mostrar); mostrar();
+  });
   $('#sempre', alvo).addEventListener('change', (e) => { $('#horario-grade', alvo).hidden = e.target.checked; });
   f.addEventListener('submit', async (e) => {
     e.preventDefault();

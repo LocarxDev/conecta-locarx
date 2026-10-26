@@ -108,6 +108,8 @@ const real = {
   cotar: (d) => chamar('POST', '/loja/cotacao', d),
   precoCotacao: (d) => chamar('POST', '/loja/cotacao/preco', d),
   reservarEquipe: (d) => chamar('POST', '/loja/reservas', d),
+  monitorAssistente: (q) => chamar('GET', '/admin/assistente/monitor?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
+  ocorrencias: (q) => chamar('GET', '/admin/ocorrencias?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
   statusWhatsappRede: (aoVivo) => chamar('GET', '/admin/whatsapp' + (aoVivo ? '?aoVivo=1' : '')),
   conectarWhatsappLoja: (lojaId) => chamar('POST', `/admin/whatsapp/${encodeURIComponent(lojaId)}/conectar`, {}),
   qrWhatsappLoja: (lojaId) => chamar('GET', `/admin/whatsapp/${encodeURIComponent(lojaId)}/qr`),

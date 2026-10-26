@@ -6,9 +6,10 @@ import { config } from '../config.js';
 import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js';
 import * as locarx from '../servicos/locarx/api-locarx.js';
 import * as cotacao from '../servicos/locarx/cotacao.js';
+import { registrarOcorrencia, detalhesDoErro } from '../servicos/ocorrencias.js';
 import { ferramentasDaLoja, cpfValido, registrarReserva } from '../servicos/locarx/ferramentas.js';
 import { iguais } from '../servicos/seguranca.js';
-import { rota, erro, validar, zUuid, exigirPerfil, registrar } from '../http.js';
+import { rota, erro, ErroApp, validar, zUuid, exigirPerfil, registrar } from '../http.js';
 
 export const reservas = Router();     // /api/loja
 export const locarxAdmin = Router();  // /api/admin
@@ -72,10 +73,21 @@ async function lojaDoUsuario(req) {
   return loja;
 }
 
+// Transforma qualquer falha da API LocarX numa mensagem clara para a tela (com o motivo que o portal deu, se houver).
+function motivoDaApi(resposta) {
+  if (!resposta) return '';
+  const m = resposta.message || resposta.mensagem || resposta.error || resposta.erro || (Array.isArray(resposta.errors) ? resposta.errors.map((x) => x.message || x.defaultMessage || x).join('; ') : resposta.errors) || resposta.bruto;
+  return m ? String(typeof m === 'string' ? m : JSON.stringify(m)).slice(0, 200) : '';
+}
 function erroLocarx(e) {
-  if (e.status === 422 || e.status === 409 || e.status === 503) return e;
-  console.error('[cotacao]', e.message, e.resposta ? JSON.stringify(e.resposta).slice(0, 500) : '');
-  return erro(502, e.status === 404 ? 'A filial desta loja não foi encontrada no ambiente atual da API LocarX.' : 'Não foi possível consultar o portal LocarX agora. Tente de novo em instantes.');
+  if (e instanceof ErroApp) return e;
+  console.error('[locarx]', e.message, e.resposta ? JSON.stringify(e.resposta).slice(0, 800) : '', e.stack?.split('\n').slice(1, 3).join(' | ') || '');
+  if (e.status === 409 || e.status === 422) return erro(e.status, e.message);
+  if (e.status === 503) return erro(503, 'API LocarX não configurada no servidor.');
+  if (e.status === 404) return erro(502, 'A filial desta loja não foi encontrada no ambiente atual da API LocarX.');
+  const motivo = motivoDaApi(e.resposta);
+  if (e.status) return erro(502, `A API LocarX respondeu com erro (HTTP ${e.status})${motivo ? ': ' + motivo : ''}.`);
+  return erro(502, `Falha ao falar com o portal LocarX: ${String(e.message || e).slice(0, 160)}`);
 }
 
 const grupoPublico = (g) => ({
@@ -89,7 +101,10 @@ reservas.post('/cotacao', exigirPerfil('dono', 'atendente'), limiteCotacao, rota
   const periodo = periodoDaEquipe(d);
   const loja = await lojaDoUsuario(req);
   let r;
-  try { r = await cotacao.cotarPeriodo({ branchId: loja.branch_id, periodo }); } catch (e) { throw erroLocarx(e); }
+  try { r = await cotacao.cotarPeriodo({ branchId: loja.branch_id, periodo }); } catch (e) {
+    await registrarOcorrencia({ lojaId: loja.id, usuarioId: req.usuario.id, origem: 'equipe', tipo: 'cotacao', nivel: 'erro', mensagem: `Cotação falhou: ${erroLocarx(e).message}`, detalhes: detalhesDoErro(e, { periodo: d }) });
+    throw erroLocarx(e);
+  }
   const menos24h = periodo.ini < new Date(Date.now() + 24 * 3_600_000);
   const texto = r.grupos.length ? cotacao.textoOpcoes(r.grupos.slice(0, 3), { periodo: cotacao.periodoTexto({ data_retirada: d.dataRetirada, hora_retirada: d.horaRetirada, data_devolucao: d.dataDevolucao, hora_devolucao: d.horaDevolucao }), haMais: r.grupos.length > 3 }) : null;
   res.json({
@@ -153,33 +168,53 @@ reservas.post('/reservas', exigirPerfil('dono', 'atendente'), limiteCotacao, rot
   if (!telefone) throw erro(422, 'Confira os campos destacados.', { telefone: 'Informe o telefone do cliente.' });
   const cliente = { nome: d.nome, cpf: d.cpf.replace(/\D/g, ''), cnh: d.cnh.replace(/\D/g, ''), email: d.email, telefone };
 
+  const base = { lojaId: loja.id, usuarioId: req.usuario.id, conversaId: vinculo.conversa?.id || null, origem: 'equipe', tipo: 'reserva' };
+  const contexto = { fleetId: d.fleetId, protecoes, periodo: { retirada: periodo.retirada, devolucao: periodo.devolucao }, passo: d.confirmar ? 'confirmar' : 'resumo' };
   let preco;
-  try { preco = await locarx.calcularPreco({ branchId: loja.branch_id, fleetId: d.fleetId, retirada: periodo.retirada, devolucao: periodo.devolucao, protecoes }); } catch (e) { throw erroLocarx(e); }
+  try { preco = await locarx.calcularPreco({ branchId: loja.branch_id, fleetId: d.fleetId, retirada: periodo.retirada, devolucao: periodo.devolucao, protecoes }); } catch (e) {
+    const amigavel = erroLocarx(e);
+    await registrarOcorrencia({ ...base, nivel: 'erro', mensagem: `Reserva não criada (cálculo do preço): ${amigavel.message}`, detalhes: detalhesDoErro(e, contexto) });
+    throw amigavel;
+  }
   const rotulo = cotacao.rotuloGrupo({ grupo: preco.grupo }, 1);
   const nomes = preco.protecoes.length ? preco.protecoes.map((x) => x.nome) : protecoes;
   const resumo = `*Resumo da reserva*\n🚗 ${rotulo.letra} – ${rotulo.nome}\n📅 Retirada: ${cotacao.dataBr(periodo.retirada)}\n📅 Devolução: ${cotacao.dataBr(periodo.devolucao)}\n🛡️ Proteção: ${nomes.join(', ')}\n💰 Total: *${cotacao.reais(preco.total)}* (pagamento na loja, na retirada)\n👤 ${cliente.nome} · CPF final ${cliente.cpf.slice(-2)} · ${cliente.email}`;
   if (!d.confirmar) return res.json({ passo: 'resumo', grupo: preco.grupo, letra: rotulo.letra, nome: rotulo.nome, total: preco.total, diarias: preco.diarias, protecoes: nomes, resumo });
 
   let reserva;
-  try { reserva = await locarx.criarReserva({ branchId: loja.branch_id, fleetId: d.fleetId, retirada: periodo.retirada, devolucao: periodo.devolucao, protecoes, cliente }); } catch (e) { throw erroLocarx(e); }
+  try { reserva = await locarx.criarReserva({ branchId: loja.branch_id, fleetId: d.fleetId, retirada: periodo.retirada, devolucao: periodo.devolucao, protecoes, cliente }); } catch (e) {
+    const amigavel = erroLocarx(e);
+    await registrarOcorrencia({ ...base, nivel: 'erro', mensagem: `Reserva não criada: ${amigavel.message}`, detalhes: detalhesDoErro(e, contexto) });
+    throw amigavel;
+  }
   if (reserva.valor == null) reserva.valor = preco.total;
   if (!reserva.grupo) reserva.grupo = preco.grupo;
-  const reservaId = await registrarReserva(
-    { lojaId: loja.id, contatoId, conversaId: vinculo.conversa?.id || null, origem: 'equipe' },
-    reserva, { ini: periodo.ini, fim: periodo.fim }, cliente, { fleetId: d.fleetId, protecoes, porUsuarioId: req.usuario.id },
-  );
-  await comContexto(ctx(req), async (c) => {
-    if (vinculo.conversa) {
-      await c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto) VALUES ($1, $2, 'interna', 'sistema', 'evento', $3)`,
-        [vinculo.conversa.id, loja.id, `Reserva ${reserva.codigo || ''} criada por ${req.usuario.nome} (${cotacao.reais(reserva.valor)})`.trim()]);
-      await c.query('UPDATE conversas SET atualizada_em = now() WHERE id = $1', [vinculo.conversa.id]);
-    }
-    await registrar(c, req, 'reserva_criar', { alvo: reservaId, detalhes: { codigo: reserva.codigo, fleetId: d.fleetId } });
-  });
+  // A partir daqui a reserva JÁ EXISTE no portal. Se algo falhar ao gravar no Conecta, o atendente ainda recebe o código
+  // (com um aviso), para não criar a mesma reserva duas vezes.
+  let reservaId = null, avisoGravacao = null;
+  try {
+    reservaId = await registrarReserva(
+      { lojaId: loja.id, contatoId, conversaId: vinculo.conversa?.id || null, origem: 'equipe' },
+      reserva, { ini: periodo.ini, fim: periodo.fim }, cliente, { fleetId: d.fleetId, protecoes, porUsuarioId: req.usuario.id },
+    );
+    await comContexto(ctx(req), async (c) => {
+      if (vinculo.conversa) {
+        await c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto) VALUES ($1, $2, 'interna', 'sistema', 'evento', $3)`,
+          [vinculo.conversa.id, loja.id, `Reserva ${reserva.codigo || ''} criada por ${req.usuario.nome} (${cotacao.reais(reserva.valor)})`.trim()]);
+        await c.query('UPDATE conversas SET atualizada_em = now() WHERE id = $1', [vinculo.conversa.id]);
+      }
+      await registrar(c, req, 'reserva_criar', { alvo: reservaId, detalhes: { codigo: reserva.codigo, fleetId: d.fleetId } });
+    });
+  } catch (e) {
+    console.error('[reserva-equipe] reserva criada no portal mas falhou ao gravar no Conecta:', reserva.codigo, e);
+    avisoGravacao = `A reserva ${reserva.codigo || ''} foi criada no portal, mas não ficou registrada no Conecta (${String(e.message || e).slice(0, 120)}). Anote o código e avise a administração.`;
+    await registrarOcorrencia({ ...base, nivel: 'aviso', mensagem: `Reserva ${reserva.codigo || ''} criada no portal, mas não gravada no Conecta: ${String(e.message || e).slice(0, 200)}`, detalhes: { ...contexto, codigo: reserva.codigo, erro: String(e.stack || e).slice(0, 600) } });
+  }
+  if (!avisoGravacao) await registrarOcorrencia({ ...base, nivel: 'info', mensagem: `Reserva ${reserva.codigo || ''} criada por ${req.usuario.nome} (${cotacao.reais(reserva.valor)})`, detalhes: { ...contexto, codigo: reserva.codigo, total: reserva.valor } });
   const divergente = reserva.valor != null && preco.total != null && Math.abs(reserva.valor - preco.total) > 1;
   res.status(201).json({
     passo: 'criada', id: reservaId, codigo: reserva.codigo, total: reserva.valor, status: reserva.status,
-    atencao: divergente ? `O portal fechou a reserva em ${cotacao.reais(reserva.valor)} (a cotação mostrava ${cotacao.reais(preco.total)}).` : null,
+    atencao: avisoGravacao || (divergente ? `O portal fechou a reserva em ${cotacao.reais(reserva.valor)} (a cotação mostrava ${cotacao.reais(preco.total)}).` : null),
     textoWhatsapp: `✅ *Reserva confirmada!*\nCódigo: *${reserva.codigo || '—'}*\n🚗 ${rotulo.letra} – ${rotulo.nome}\n📅 Retirada: ${cotacao.dataBr(periodo.retirada)}\n📅 Devolução: ${cotacao.dataBr(periodo.devolucao)}\n🛡️ ${nomes.join(', ')}\n💰 Total: *${cotacao.reais(reserva.valor)}*, pagamento na loja, na retirada.\nQualquer dúvida é só chamar por aqui!`,
   });
 }));

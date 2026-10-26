@@ -17,17 +17,44 @@ async function post(url, headers, corpo) {
 }
 
 const paraTexto = (v) => (typeof v === 'string' ? v : JSON.stringify(v)).slice(0, 12_000);
+const SENSIVEIS = ['cpf', 'cnh', 'email', 'nome', 'telefone', 'informacoes'];
+const argsSeguros = (args) => Object.fromEntries(Object.entries(args || {}).filter(([k]) => !SENSIVEIS.includes(k)));
 
-async function executar(ferramentas, nome, args, usadas) {
+// A IA às vezes diz "vou criar a reserva, um momento" e encerra a resposta sem chamar ferramenta nenhuma.
+// Quando isso acontece, damos uma volta a mais pedindo para ela agir de fato.
+const PROMESSA = /\b(um momento|um instante|s[oó] um (momento|minuto|instante)|aguarde|vou (criar|fazer|consultar|verificar|calcular|buscar|checar|confirmar|registrar|gerar)|estou (criando|consultando|verificando|calculando|buscando))\b/i;
+const NUDGE = '(mensagem automática do sistema, não do cliente) Você disse que ia fazer algo, mas não usou nenhuma ferramenta. Faça agora usando a ferramenta certa e só então responda ao cliente com o resultado. Se não for possível, explique ao cliente e use chamar_atendente.';
+const MAX_NUDGES = 1;
+
+// Cada chamada de ferramenta vira um evento no monitor da administração: nome, argumentos sem dados pessoais,
+// se deu certo, a mensagem de erro e o tempo gasto. O conteúdo das respostas não é guardado.
+async function executar(ferramentas, nome, args, usadas, eventos) {
   const f = ferramentas.find((x) => x.nome === nome);
   usadas.push(nome);
-  if (!f) return 'Ferramenta inexistente.';
-  try { return paraTexto(await f.executar(args || {})); } catch (e) {
-    // log para diagnóstico no Railway — sem dados pessoais
-    const seguros = Object.fromEntries(Object.entries(args || {}).filter(([k]) => !['cpf', 'cnh', 'email', 'nome', 'telefone'].includes(k)));
-    console.error(`[ferramenta] ${nome} falhou: ${e.message}`, JSON.stringify(seguros).slice(0, 500), e.resposta ? 'resposta da API: ' + JSON.stringify(e.resposta).slice(0, 800) : '');
-    return `Erro ao executar ${nome}: ${e.message}`.slice(0, 500);
+  const ev = { tipo: 'ferramenta', nome, args: argsSeguros(args), em: new Date().toISOString() };
+  const inicio = Date.now();
+  if (!f) { ev.ok = false; ev.erro = 'Ferramenta inexistente.'; ev.ms = 0; eventos.push(ev); return 'Ferramenta inexistente.'; }
+  try {
+    const r = await f.executar(args || {});
+    const texto = paraTexto(r);
+    ev.ok = true; ev.ms = Date.now() - inicio;
+    // respostas de "não feito" das ferramentas (ex.: reserva ainda não criada) viram aviso, não erro
+    if (typeof r === 'string' && /^(RESERVA AINDA NÃO CRIADA|Nenhum carro disponível|Limite de consultas|Ainda não há cotação|Nada encontrado)/.test(r)) ev.aviso = r.split('\n')[0].slice(0, 160);
+    eventos.push(ev);
+    return texto;
+  } catch (e) {
+    ev.ok = false; ev.ms = Date.now() - inicio; ev.erro = String(e.message || e).slice(0, 300);
+    if (e.status) ev.status = e.status;
+    if (e.resposta) ev.respostaApi = JSON.stringify(e.resposta).slice(0, 600);
+    eventos.push(ev);
+    console.error(`[ferramenta] ${nome} falhou: ${ev.erro}`, JSON.stringify(ev.args).slice(0, 500), ev.respostaApi ? 'resposta da API: ' + ev.respostaApi : '');
+    return `Erro ao executar ${nome}: ${ev.erro}`.slice(0, 500);
   }
+}
+
+// a IA respondeu só texto: decide se é uma "promessa sem ação" que merece uma volta a mais
+function promessaSemAcao(texto, ferramentas, nudges, eventosDaVolta) {
+  return ferramentas.length > 0 && nudges < MAX_NUDGES && eventosDaVolta === 0 && PROMESSA.test(texto || '');
 }
 
 async function anthropic({ chave, modelo, sistema, historico, ferramentas, maxTokens }) {
@@ -39,40 +66,67 @@ async function anthropic({ chave, modelo, sistema, historico, ferramentas, maxTo
   }
   if (!msgs.length || msgs[0].role !== 'user') msgs.unshift({ role: 'user', content: '(início da conversa)' });
   const tools = ferramentas.map((f) => ({ name: f.nome, description: f.descricao, input_schema: f.parametros }));
-  const uso = { entrada: 0, saida: 0 }, usadas = [];
+  const uso = { entrada: 0, saida: 0 }, usadas = [], eventos = [];
+  let nudges = 0, voltas = 0;
   for (let volta = 0; volta < MAX_VOLTAS; volta++) {
+    voltas++;
     const r = await post('https://api.anthropic.com/v1/messages', { 'x-api-key': chave, 'anthropic-version': '2023-06-01' },
       { model: modelo, max_tokens: maxTokens, system: sistema, messages: msgs, ...(tools.length ? { tools } : {}) });
     uso.entrada += r.usage?.input_tokens || 0; uso.saida += r.usage?.output_tokens || 0;
     const pedidos = (r.content || []).filter((b) => b.type === 'tool_use');
     const texto = (r.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
-    if (r.stop_reason !== 'tool_use' || !pedidos.length) return { texto, uso, usadas };
+    if (r.stop_reason !== 'tool_use' || !pedidos.length) {
+      if (promessaSemAcao(texto, ferramentas, nudges, eventos.length)) {
+        nudges++;
+        eventos.push({ tipo: 'nudge', em: new Date().toISOString(), texto: texto.slice(0, 160) });
+        msgs.push({ role: 'assistant', content: r.content?.length ? r.content : texto || '…' });
+        msgs.push({ role: 'user', content: NUDGE });
+        continue;
+      }
+      return { texto, uso, usadas, eventos, voltas, parada: r.stop_reason };
+    }
     msgs.push({ role: 'assistant', content: r.content });
     const resultados = [];
-    for (const p of pedidos) resultados.push({ type: 'tool_result', tool_use_id: p.id, content: await executar(ferramentas, p.name, p.input, usadas) });
+    for (const p of pedidos) resultados.push({ type: 'tool_result', tool_use_id: p.id, content: await executar(ferramentas, p.name, p.input, usadas, eventos) });
     msgs.push({ role: 'user', content: resultados });
   }
-  return { texto: '', uso, usadas };
+  eventos.push({ tipo: 'limite', em: new Date().toISOString(), erro: `Limite de ${MAX_VOLTAS} voltas de ferramentas atingido sem resposta final.` });
+  return { texto: '', uso, usadas, eventos, voltas, parada: 'limite' };
 }
 
 async function openai({ chave, modelo, sistema, historico, ferramentas, maxTokens }) {
   const msgs = [{ role: 'system', content: sistema }, ...historico.map((h) => ({ role: h.papel === 'cliente' ? 'user' : 'assistant', content: h.texto }))];
   const tools = ferramentas.map((f) => ({ type: 'function', function: { name: f.nome, description: f.descricao, parameters: f.parametros } }));
-  const uso = { entrada: 0, saida: 0 }, usadas = [];
+  const uso = { entrada: 0, saida: 0 }, usadas = [], eventos = [];
+  let nudges = 0, voltas = 0;
   for (let volta = 0; volta < MAX_VOLTAS; volta++) {
+    voltas++;
     const r = await post('https://api.openai.com/v1/chat/completions', { Authorization: `Bearer ${chave}` },
       { model: modelo, max_completion_tokens: maxTokens, messages: msgs, ...(tools.length ? { tools } : {}) });
     uso.entrada += r.usage?.prompt_tokens || 0; uso.saida += r.usage?.completion_tokens || 0;
     const m = r.choices?.[0]?.message || {};
-    if (!m.tool_calls?.length) return { texto: (m.content || '').trim(), uso, usadas };
+    const parada = r.choices?.[0]?.finish_reason || null;
+    if (!m.tool_calls?.length) {
+      const texto = (m.content || '').trim();
+      if (promessaSemAcao(texto, ferramentas, nudges, eventos.length)) {
+        nudges++;
+        eventos.push({ tipo: 'nudge', em: new Date().toISOString(), texto: texto.slice(0, 160) });
+        msgs.push({ role: 'assistant', content: texto || '…' });
+        msgs.push({ role: 'user', content: NUDGE });
+        continue;
+      }
+      if (parada === 'length') eventos.push({ tipo: 'limite', em: new Date().toISOString(), erro: 'A resposta foi cortada pelo limite de tokens (max_completion_tokens).' });
+      return { texto, uso, usadas, eventos, voltas, parada };
+    }
     msgs.push(m);
     for (const t of m.tool_calls) {
       let args = {};
-      try { args = JSON.parse(t.function.arguments || '{}'); } catch { /* argumentos inválidos */ }
-      msgs.push({ role: 'tool', tool_call_id: t.id, content: await executar(ferramentas, t.function.name, args, usadas) });
+      try { args = JSON.parse(t.function.arguments || '{}'); } catch { eventos.push({ tipo: 'erro', em: new Date().toISOString(), erro: `Argumentos inválidos para ${t.function.name}.` }); }
+      msgs.push({ role: 'tool', tool_call_id: t.id, content: await executar(ferramentas, t.function.name, args, usadas, eventos) });
     }
   }
-  return { texto: '', uso, usadas };
+  eventos.push({ tipo: 'limite', em: new Date().toISOString(), erro: `Limite de ${MAX_VOLTAS} voltas de ferramentas atingido sem resposta final.` });
+  return { texto: '', uso, usadas, eventos, voltas, parada: 'limite' };
 }
 
 export async function conversarComIa(opcoes) {
