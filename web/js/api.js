@@ -105,6 +105,13 @@ const real = {
   atualizarReserva: (id) => chamar('POST', `/loja/reservas/${encodeURIComponent(id)}/atualizar`, {}),
   filiaisLocarx: () => chamar('GET', '/admin/locarx/filiais'),
   testarLocarx: (branchId) => chamar('GET', `/admin/locarx/teste?branchId=${encodeURIComponent(branchId)}`),
+  cotar: (d) => chamar('POST', '/loja/cotacao', d),
+  precoCotacao: (d) => chamar('POST', '/loja/cotacao/preco', d),
+  reservarEquipe: (d) => chamar('POST', '/loja/reservas', d),
+  statusWhatsappRede: (aoVivo) => chamar('GET', '/admin/whatsapp' + (aoVivo ? '?aoVivo=1' : '')),
+  conectarWhatsappLoja: (lojaId) => chamar('POST', `/admin/whatsapp/${encodeURIComponent(lojaId)}/conectar`, {}),
+  qrWhatsappLoja: (lojaId) => chamar('GET', `/admin/whatsapp/${encodeURIComponent(lojaId)}/qr`),
+  desconectarWhatsappLoja: (lojaId) => chamar('POST', `/admin/whatsapp/${encodeURIComponent(lojaId)}/desconectar`, {}),
 
   // etapa 5 — CRM
   contatos: (q) => chamar('GET', '/crm/contatos?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),

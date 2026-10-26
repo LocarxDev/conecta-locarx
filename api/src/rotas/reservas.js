@@ -5,9 +5,10 @@ import rateLimit from 'express-rate-limit';
 import { config } from '../config.js';
 import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js';
 import * as locarx from '../servicos/locarx/api-locarx.js';
-import { ferramentasDaLoja } from '../servicos/locarx/ferramentas.js';
+import * as cotacao from '../servicos/locarx/cotacao.js';
+import { ferramentasDaLoja, cpfValido, registrarReserva } from '../servicos/locarx/ferramentas.js';
 import { iguais } from '../servicos/seguranca.js';
-import { rota, erro, validar, zUuid, exigirPerfil } from '../http.js';
+import { rota, erro, validar, zUuid, exigirPerfil, registrar } from '../http.js';
 
 export const reservas = Router();     // /api/loja
 export const locarxAdmin = Router();  // /api/admin
@@ -49,6 +50,138 @@ reservas.post('/reservas/:id/atualizar', exigirPerfil('dono', 'atendente'), rota
     `UPDATE reservas SET status = $2, valor = coalesce($3, valor), grupo = coalesce($4, grupo), atualizada_em = now() WHERE id = $1 RETURNING *`,
     [r.id, status, p.valor, p.grupo])).rows[0]);
   res.json(reservaPublica(atual));
+}));
+
+// ---------- cotação ao vivo (tela Cotação: dono e atendente) ----------
+// A equipe informa só data e hora; a filial é a da loja do usuário logado (cada loja cota no próprio contexto).
+const zData = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Informe a data.');
+const zHora = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Informe a hora.');
+const zPeriodo = { dataRetirada: zData, horaRetirada: zHora, dataDevolucao: zData, horaDevolucao: zHora };
+const limiteCotacao = rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: 'draft-7', legacyHeaders: false, message: { mensagem: 'Muitas consultas seguidas. Aguarde um minuto.' } });
+
+function periodoDaEquipe(d) {
+  try {
+    return cotacao.validarPeriodo({ data_retirada: d.dataRetirada, hora_retirada: d.horaRetirada, data_devolucao: d.dataDevolucao, hora_devolucao: d.horaDevolucao }, { antecedenciaHoras: 0 });
+  } catch (e) { throw erro(422, e.message, { dataRetirada: e.message }); }
+}
+
+async function lojaDoUsuario(req) {
+  const loja = await comContexto(ctx(req), async (c) => (await c.query('SELECT id, branch_id FROM lojas WHERE id = $1', [req.usuario.loja_id])).rows[0]);
+  if (!loja?.branch_id) throw erro(409, 'Esta loja ainda não está vinculada a uma filial do portal LocarX. Peça à administração.');
+  if (!config.locarx) throw erro(503, 'API LocarX não configurada no servidor.');
+  return loja;
+}
+
+function erroLocarx(e) {
+  if (e.status === 422 || e.status === 409 || e.status === 503) return e;
+  console.error('[cotacao]', e.message, e.resposta ? JSON.stringify(e.resposta).slice(0, 500) : '');
+  return erro(502, e.status === 404 ? 'A filial desta loja não foi encontrada no ambiente atual da API LocarX.' : 'Não foi possível consultar o portal LocarX agora. Tente de novo em instantes.');
+}
+
+const grupoPublico = (g) => ({
+  fleetId: g.fleetId, letra: g.rotulo.letra, nome: g.rotulo.nome, grupo: g.grupo, exemplos: g.exemplos, cambio: g.cambio,
+  passageiros: g.passageiros, portas: g.portas, malas: g.malas, itens: g.itens, diaria: g.diaria, diarias: g.diarias, total: g.total,
+  protecoes: g.protecoes.map((p) => ({ codigo: p.codigo, nome: p.nome, descricao: p.descricao, diaria: p.diaria, total: p.total, basica: p.base, padrao: p.padrao })),
+});
+
+reservas.post('/cotacao', exigirPerfil('dono', 'atendente'), limiteCotacao, rota(async (req, res) => {
+  const d = validar(z.object(zPeriodo), req.body);
+  const periodo = periodoDaEquipe(d);
+  const loja = await lojaDoUsuario(req);
+  let r;
+  try { r = await cotacao.cotarPeriodo({ branchId: loja.branch_id, periodo }); } catch (e) { throw erroLocarx(e); }
+  const menos24h = periodo.ini < new Date(Date.now() + 24 * 3_600_000);
+  const texto = r.grupos.length ? cotacao.textoOpcoes(r.grupos.slice(0, 3), { periodo: cotacao.periodoTexto({ data_retirada: d.dataRetirada, hora_retirada: d.horaRetirada, data_devolucao: d.dataDevolucao, hora_devolucao: d.horaDevolucao }), haMais: r.grupos.length > 3 }) : null;
+  res.json({
+    periodo: { retirada: periodo.retirada, devolucao: periodo.devolucao },
+    grupos: r.grupos.map(grupoPublico),
+    adicionais: r.adicionais, km: r.km, politicas: r.politicas,
+    textoWhatsapp: texto,
+    aviso: !r.grupos.length && menos24h ? 'O portal LocarX não mostra carros para retirada com menos de 24 horas. Para esse prazo, a reserva é feita direto no portal.' : null,
+  });
+}));
+
+reservas.post('/cotacao/preco', exigirPerfil('dono', 'atendente'), limiteCotacao, rota(async (req, res) => {
+  const d = validar(z.object({ ...zPeriodo, fleetId: z.coerce.number().int().positive(), protecoes: z.array(z.string().max(30)).max(5).default([]) }), req.body);
+  const periodo = periodoDaEquipe(d);
+  const loja = await lojaDoUsuario(req);
+  const protecoes = cotacao.normalizarProtecoes(d.protecoes);
+  let r;
+  try { r = await locarx.calcularPreco({ branchId: loja.branch_id, fleetId: d.fleetId, retirada: periodo.retirada, devolucao: periodo.devolucao, protecoes }); } catch (e) { throw erroLocarx(e); }
+  const rotulo = cotacao.rotuloGrupo({ grupo: r.grupo }, 1);
+  const nomes = r.protecoes.length ? r.protecoes.map((x) => x.nome) : protecoes;
+  res.json({
+    fleetId: d.fleetId, grupo: r.grupo, letra: rotulo.letra, nome: rotulo.nome, total: r.total, diaria: r.diaria, diarias: r.diarias, taxas: r.taxas, protecoes: nomes,
+    textoWhatsapp: `*${rotulo.letra} – ${rotulo.nome}*\n📅 Retirada: ${cotacao.dataBr(periodo.retirada)}\n📅 Devolução: ${cotacao.dataBr(periodo.devolucao)}\n🛡️ Proteção: ${nomes.join(', ')}\n💰 Total: *${cotacao.reais(r.total)}* (pagamento na loja, na retirada)`,
+  });
+}));
+
+// ---------- reserva pela equipe (botão "Reservar" da cotação) ----------
+// Dois passos, iguais aos do assistente: sem `confirmar`, devolve o resumo; com `confirmar: true`, cria no portal,
+// grava no histórico da loja, na ficha do cliente e no funil, e registra o evento na conversa (se houver).
+const zReservaEquipe = z.object({
+  ...zPeriodo,
+  fleetId: z.coerce.number().int().positive(),
+  protecoes: z.array(z.string().max(30)).max(5).default([]),
+  nome: z.string().trim().min(2, 'Informe o nome completo.').max(120).refine((v) => v.split(/\s+/).length >= 2, 'Informe o nome completo.'),
+  cpf: z.string().trim().max(20).refine((v) => cpfValido(v), 'CPF inválido.'),
+  email: z.string().trim().toLowerCase().max(254).email('Informe um e-mail válido.'),
+  cnh: z.string().trim().max(20).optional().default('').refine((v) => !v || /^\d{9,11}$/.test(v.replace(/\D/g, '')), 'CNH parece incompleta (9 a 11 números).'),
+  telefone: z.string().trim().max(20).optional().default(''),
+  contatoId: zUuid.optional(),
+  conversaId: zUuid.optional(),
+  confirmar: z.boolean().default(false),
+});
+
+reservas.post('/reservas', exigirPerfil('dono', 'atendente'), limiteCotacao, rota(async (req, res) => {
+  const d = validar(zReservaEquipe, req.body);
+  const periodo = periodoDaEquipe(d);
+  // a equipe pode reservar com menos de 24 h? Não pela API: ela não devolve carros nesse prazo.
+  if (periodo.ini < new Date(Date.now() + 24 * 3_600_000)) throw erro(422, 'O portal LocarX só aceita reservas pela API com retirada a partir de 24 horas. Para esse prazo, reserve direto no portal.', { dataRetirada: 'Retirada com menos de 24 h.' });
+  const loja = await lojaDoUsuario(req);
+  const protecoes = cotacao.normalizarProtecoes(d.protecoes);
+
+  // contato e conversa precisam ser desta loja (RLS já garante; aqui só para a mensagem de erro ficar clara)
+  const vinculo = await comContexto(ctx(req), async (c) => ({
+    contato: d.contatoId ? (await c.query('SELECT id, telefone, nome, email FROM contatos WHERE id = $1 AND loja_id = $2', [d.contatoId, loja.id])).rows[0] : null,
+    conversa: d.conversaId ? (await c.query('SELECT id, contato_id FROM conversas WHERE id = $1 AND loja_id = $2', [d.conversaId, loja.id])).rows[0] : null,
+  }));
+  if (d.contatoId && !vinculo.contato) throw erro(404, 'Cliente não encontrado.');
+  if (d.conversaId && !vinculo.conversa) throw erro(404, 'Conversa não encontrada.');
+  const contatoId = vinculo.contato?.id || vinculo.conversa?.contato_id || null;
+  const telefone = String(d.telefone || vinculo.contato?.telefone || '').replace(/\D/g, '');
+  if (!telefone) throw erro(422, 'Confira os campos destacados.', { telefone: 'Informe o telefone do cliente.' });
+  const cliente = { nome: d.nome, cpf: d.cpf.replace(/\D/g, ''), cnh: d.cnh.replace(/\D/g, ''), email: d.email, telefone };
+
+  let preco;
+  try { preco = await locarx.calcularPreco({ branchId: loja.branch_id, fleetId: d.fleetId, retirada: periodo.retirada, devolucao: periodo.devolucao, protecoes }); } catch (e) { throw erroLocarx(e); }
+  const rotulo = cotacao.rotuloGrupo({ grupo: preco.grupo }, 1);
+  const nomes = preco.protecoes.length ? preco.protecoes.map((x) => x.nome) : protecoes;
+  const resumo = `*Resumo da reserva*\n🚗 ${rotulo.letra} – ${rotulo.nome}\n📅 Retirada: ${cotacao.dataBr(periodo.retirada)}\n📅 Devolução: ${cotacao.dataBr(periodo.devolucao)}\n🛡️ Proteção: ${nomes.join(', ')}\n💰 Total: *${cotacao.reais(preco.total)}* (pagamento na loja, na retirada)\n👤 ${cliente.nome} · CPF final ${cliente.cpf.slice(-2)} · ${cliente.email}`;
+  if (!d.confirmar) return res.json({ passo: 'resumo', grupo: preco.grupo, letra: rotulo.letra, nome: rotulo.nome, total: preco.total, diarias: preco.diarias, protecoes: nomes, resumo });
+
+  let reserva;
+  try { reserva = await locarx.criarReserva({ branchId: loja.branch_id, fleetId: d.fleetId, retirada: periodo.retirada, devolucao: periodo.devolucao, protecoes, cliente }); } catch (e) { throw erroLocarx(e); }
+  if (reserva.valor == null) reserva.valor = preco.total;
+  if (!reserva.grupo) reserva.grupo = preco.grupo;
+  const reservaId = await registrarReserva(
+    { lojaId: loja.id, contatoId, conversaId: vinculo.conversa?.id || null, origem: 'equipe' },
+    reserva, { ini: periodo.ini, fim: periodo.fim }, cliente, { fleetId: d.fleetId, protecoes, porUsuarioId: req.usuario.id },
+  );
+  await comContexto(ctx(req), async (c) => {
+    if (vinculo.conversa) {
+      await c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto) VALUES ($1, $2, 'interna', 'sistema', 'evento', $3)`,
+        [vinculo.conversa.id, loja.id, `Reserva ${reserva.codigo || ''} criada por ${req.usuario.nome} (${cotacao.reais(reserva.valor)})`.trim()]);
+      await c.query('UPDATE conversas SET atualizada_em = now() WHERE id = $1', [vinculo.conversa.id]);
+    }
+    await registrar(c, req, 'reserva_criar', { alvo: reservaId, detalhes: { codigo: reserva.codigo, fleetId: d.fleetId } });
+  });
+  const divergente = reserva.valor != null && preco.total != null && Math.abs(reserva.valor - preco.total) > 1;
+  res.status(201).json({
+    passo: 'criada', id: reservaId, codigo: reserva.codigo, total: reserva.valor, status: reserva.status,
+    atencao: divergente ? `O portal fechou a reserva em ${cotacao.reais(reserva.valor)} (a cotação mostrava ${cotacao.reais(preco.total)}).` : null,
+    textoWhatsapp: `✅ *Reserva confirmada!*\nCódigo: *${reserva.codigo || '—'}*\n🚗 ${rotulo.letra} – ${rotulo.nome}\n📅 Retirada: ${cotacao.dataBr(periodo.retirada)}\n📅 Devolução: ${cotacao.dataBr(periodo.devolucao)}\n🛡️ ${nomes.join(', ')}\n💰 Total: *${cotacao.reais(reserva.valor)}*, pagamento na loja, na retirada.\nQualquer dúvida é só chamar por aqui!`,
+  });
 }));
 
 // ---------- administração: filiais e diagnóstico da API LocarX ----------

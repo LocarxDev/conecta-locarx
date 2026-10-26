@@ -4,12 +4,13 @@ import { config } from '../config.js';
 import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js';
 import { evolution, lerMensagemEvolution } from '../servicos/canais/evolution.js';
 import { iguais } from '../servicos/seguranca.js';
-import { rota, erro, exigirPerfil, registrar } from '../http.js';
+import { rota, erro, exigirPerfil, registrar, zUuid } from '../http.js';
 import { estadoInicial, agendar, dentroDoHorario } from '../servicos/ia/assistente.js';
 import { registrarEvento } from '../servicos/crm/funis.js';
 import { distribuir } from '../servicos/crm/roleta.js';
 
 export const canal = Router();
+export const canalAdmin = Router();   // /api/admin — status do WhatsApp de todas as lojas
 export const webhooks = Router();
 
 const provedores = { evolution };
@@ -40,63 +41,121 @@ canal.get('/canal', exigirPerfil('dono', 'atendente'), rota(async (req, res) => 
 }));
 
 // ---------- conectar: cria a instância (se preciso) e devolve o QR code ----------
-canal.post('/canal/conectar', exigirPerfil('dono'), rota(async (req, res) => {
+// (as mesmas funções servem o dono da loja e a administração — por isso recebem o lojaId)
+async function conectarLoja(req, lojaId) {
   exigirEvolution();
-  const lojaId = req.usuario.loja_id;
-  let cn = await comContexto(ctx(req), (c) => lerCanal(c, lojaId));
+  let cn = await comoSistema((c) => lerCanal(c, lojaId));
   if (!cn) {
-    cn = await comContexto(ctx(req), async (c) => {
-      const novo = (await c.query(
-        `INSERT INTO canais (loja_id, provedor, instancia, status) VALUES ($1, 'evolution', $2, 'conectando') RETURNING *`,
-        [lojaId, nomeInstancia(lojaId)])).rows[0];
-      await registrar(c, req, 'whatsapp_conectar');
-      return novo;
-    });
+    cn = await comoSistema(async (c) => (await c.query(
+      `INSERT INTO canais (loja_id, provedor, instancia, status) VALUES ($1, 'evolution', $2, 'conectando') RETURNING *`,
+      [lojaId, nomeInstancia(lojaId)])).rows[0]);
+    await comContexto(ctx(req), (c) => registrar(c, req, 'whatsapp_conectar', { lojaId }));
   }
   const p = provedores[cn.provedor];
   try {
     await p.criar(cn.instancia);
     const r = await p.qr(cn.instancia);
-    if (r.conectado) { await gravarStatus(lojaId, 'conectado'); return res.json({ status: 'conectado' }); }
+    if (r.conectado) { await gravarStatus(lojaId, 'conectado'); return { status: 'conectado' }; }
     await gravarStatus(lojaId, 'conectando');
-    res.json({ status: 'conectando', qr: r.qr, codigo: r.codigo });
+    return { status: 'conectando', qr: r.qr, codigo: r.codigo };
   } catch (e) {
     console.error('[whatsapp] conectar:', e.message, JSON.stringify(e.resposta || '').slice(0, 300));
     throw erro(502, 'Não foi possível falar com o servidor do WhatsApp agora. Tente de novo em instantes.');
   }
-}));
+}
 
-// ---------- QR atualizado / situação ao vivo (a tela consulta a cada poucos segundos) ----------
-canal.get('/canal/qr', exigirPerfil('dono'), rota(async (req, res) => {
+async function qrDaLoja(req, lojaId) {
   exigirEvolution();
-  const lojaId = req.usuario.loja_id;
-  const cn = await comContexto(ctx(req), (c) => lerCanal(c, lojaId));
+  const cn = await comoSistema((c) => lerCanal(c, lojaId));
   if (!cn) throw erro(404, 'Clique em "Conectar WhatsApp" para começar.');
-  if (cn.status === 'conectado') return res.json({ status: 'conectado', numero: cn.numero });
+  if (cn.status === 'conectado') return { status: 'conectado', numero: cn.numero };
   try {
     const p = provedores[cn.provedor];
     const estado = await p.estado(cn.instancia);
-    if (estado === 'conectado') { await gravarStatus(lojaId, 'conectado'); return res.json({ status: 'conectado' }); }
+    if (estado === 'conectado') { await gravarStatus(lojaId, 'conectado'); return { status: 'conectado' }; }
     const r = await p.qr(cn.instancia);
-    if (r.conectado) { await gravarStatus(lojaId, 'conectado'); return res.json({ status: 'conectado' }); }
-    res.json({ status: 'conectando', qr: r.qr, codigo: r.codigo });
+    if (r.conectado) { await gravarStatus(lojaId, 'conectado'); return { status: 'conectado' }; }
+    return { status: 'conectando', qr: r.qr, codigo: r.codigo };
   } catch (e) {
     console.error('[whatsapp] qr:', e.message);
     throw erro(502, 'Não foi possível buscar o QR code agora. Tente de novo em instantes.');
   }
-}));
+}
 
-canal.post('/canal/desconectar', exigirPerfil('dono'), rota(async (req, res) => {
+async function desconectarLoja(req, lojaId) {
   exigirEvolution();
-  const lojaId = req.usuario.loja_id;
-  const cn = await comContexto(ctx(req), (c) => lerCanal(c, lojaId));
+  const cn = await comoSistema((c) => lerCanal(c, lojaId));
   if (cn) {
     await provedores[cn.provedor].desconectar(cn.instancia).catch((e) => console.error('[whatsapp] desconectar:', e.message));
     await gravarStatus(lojaId, 'desconectado');
-    await comContexto(ctx(req), (c) => registrar(c, req, 'whatsapp_desconectar'));
+    await comContexto(ctx(req), (c) => registrar(c, req, 'whatsapp_desconectar', { lojaId }));
   }
-  res.json({ status: 'desconectado' });
+  return { status: 'desconectado' };
+}
+
+canal.post('/canal/conectar', exigirPerfil('dono'), rota(async (req, res) => res.json(await conectarLoja(req, req.usuario.loja_id))));
+canal.get('/canal/qr', exigirPerfil('dono'), rota(async (req, res) => res.json(await qrDaLoja(req, req.usuario.loja_id))));
+canal.post('/canal/desconectar', exigirPerfil('dono'), rota(async (req, res) => res.json(await desconectarLoja(req, req.usuario.loja_id))));
+
+// =====================================================================
+// Administração: status do WhatsApp de todas as lojas (Evolution no ar, instância por loja,
+// número conectado, alertas). A matriz só vê; a administração também reconecta e desconecta.
+// Nenhuma conversa é lida aqui: só situação e contagens.
+// =====================================================================
+const lojaValida = async (id) => {
+  if (!zUuid.safeParse(id).success) throw erro(404, 'Loja não encontrada.');
+  const l = await comoSistema(async (c) => (await c.query('SELECT id, ativa FROM lojas WHERE id = $1', [id])).rows[0]);
+  if (!l) throw erro(404, 'Loja não encontrada.');
+  return l.id;
+};
+
+canalAdmin.get('/whatsapp', exigirPerfil('admin', 'matriz'), rota(async (req, res) => {
+  const aoVivo = req.query.aoVivo === '1' && !!config.evolution;
+  const linhas = await comoSistema(async (c) => (await c.query(`
+    SELECT l.id, l.nome, l.cidade, l.uf, l.ativa, l.branch_id,
+           cn.status AS canal_status, cn.numero, cn.instancia, cn.provedor, cn.atualizado_em,
+           coalesce(a.ativo, false) AS assistente_ativo, (a.chave_cifrada IS NOT NULL) AS assistente_com_chave,
+           (SELECT count(*) FROM usuarios u WHERE u.loja_id = l.id AND u.status = 'ativo' AND u.visto_em > now() - interval '5 minutes')::int AS online,
+           (SELECT count(*) FROM usuarios u WHERE u.loja_id = l.id AND u.status = 'ativo' AND u.perfil IN ('dono', 'atendente'))::int AS equipe,
+           (SELECT count(*) FROM mensagens m WHERE m.loja_id = l.id AND m.direcao = 'entrada' AND m.criada_em > now() - interval '24 hours')::int AS recebidas_24h,
+           (SELECT count(*) FROM mensagens m WHERE m.loja_id = l.id AND m.direcao = 'saida' AND m.criada_em > now() - interval '24 hours')::int AS enviadas_24h,
+           (SELECT max(m.criada_em) FROM mensagens m WHERE m.loja_id = l.id) AS ultima_mensagem_em,
+           (SELECT count(*) FROM conversas cv WHERE cv.loja_id = l.id AND cv.estado = 'aguardando')::int AS aguardando
+      FROM lojas l LEFT JOIN canais cn ON cn.loja_id = l.id LEFT JOIN assistentes a ON a.loja_id = l.id
+     ORDER BY l.ativa DESC, l.nome`)).rows);
+  const evolucao = config.evolution ? await evolution.saude() : { noAr: false, versao: null, naoConfigurada: true };
+  const lojas = [];
+  for (const l of linhas) {
+    let estadoVivo = null;
+    if (aoVivo && l.instancia && evolucao.noAr) {
+      try { estadoVivo = await provedores[l.provedor].estado(l.instancia); } catch { estadoVivo = 'erro'; }
+      // o que a Evolution diz vale mais que o que ficou gravado (ex.: caiu sem avisar)
+      if (estadoVivo && estadoVivo !== 'erro' && estadoVivo !== l.canal_status) { await gravarStatus(l.id, estadoVivo); l.canal_status = estadoVivo; }
+    }
+    const status = l.canal_status || 'nunca';
+    const alertas = [];
+    if (l.ativa && status !== 'conectado') alertas.push(status === 'nunca' ? 'WhatsApp nunca foi conectado' : 'WhatsApp desconectado');
+    if (l.ativa && status === 'conectado' && l.assistente_ativo && !l.assistente_com_chave) alertas.push('Assistente ligado sem chave de IA');
+    if (l.ativa && status === 'conectado' && !l.assistente_ativo && l.online === 0 && l.aguardando > 0) alertas.push(`${l.aguardando} conversa(s) aguardando e ninguém da equipe online`);
+    if (estadoVivo === 'erro') alertas.push('A Evolution não respondeu sobre esta instância');
+    lojas.push({
+      id: l.id, nome: l.nome, cidade: l.cidade, uf: l.uf, ativa: l.ativa, filial: l.branch_id,
+      status, numero: l.numero, instancia: l.instancia, atualizadoEm: l.atualizado_em, estadoVivo,
+      assistente: l.assistente_ativo ? (l.assistente_com_chave ? 'ligado' : 'sem chave') : 'desligado',
+      equipe: l.equipe, online: l.online, recebidas24h: l.recebidas_24h, enviadas24h: l.enviadas_24h, ultimaMensagemEm: l.ultima_mensagem_em, aguardando: l.aguardando,
+      alertas,
+    });
+  }
+  res.json({
+    evolution: evolucao,
+    totais: { lojas: lojas.filter((x) => x.ativa).length, conectadas: lojas.filter((x) => x.ativa && x.status === 'conectado').length, comAlerta: lojas.filter((x) => x.alertas.length).length },
+    lojas,
+  });
 }));
+
+canalAdmin.post('/whatsapp/:lojaId/conectar', exigirPerfil('admin'), rota(async (req, res) => res.json(await conectarLoja(req, await lojaValida(req.params.lojaId)))));
+canalAdmin.get('/whatsapp/:lojaId/qr', exigirPerfil('admin'), rota(async (req, res) => res.json(await qrDaLoja(req, await lojaValida(req.params.lojaId)))));
+canalAdmin.post('/whatsapp/:lojaId/desconectar', exigirPerfil('admin'), rota(async (req, res) => res.json(await desconectarLoja(req, await lojaValida(req.params.lojaId)))));
 
 // =====================================================================
 // Webhook da Evolution — sem login; protegido por segredo longo na URL

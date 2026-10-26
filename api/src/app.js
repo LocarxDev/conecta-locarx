@@ -9,7 +9,7 @@ import { auth } from './rotas/auth.js';
 import { admin, loja } from './rotas/lojas.js';
 import { usuarios, equipeAdmin, equipeLoja } from './rotas/usuarios.js';
 import { eu } from './rotas/eu.js';
-import { canal, webhooks } from './rotas/whatsapp.js';
+import { canal, canalAdmin, webhooks } from './rotas/whatsapp.js';
 import { conversas, respostas } from './rotas/conversas.js';
 import { assistente, conhecimento, rede } from './rotas/assistente.js';
 import { reservas, locarxAdmin, mcp } from './rotas/reservas.js';
@@ -52,7 +52,7 @@ export function criarApp() {
 
   // daqui para baixo: precisa estar logado e mandar o token CSRF nas ações que alteram dados
   app.use('/api', exigirLogin, exigirCsrf);
-  app.use('/api/admin', admin, equipeAdmin, rede, locarxAdmin, relatorioRede, personalizacaoRede);
+  app.use('/api/admin', admin, equipeAdmin, rede, locarxAdmin, relatorioRede, personalizacaoRede, canalAdmin);
   app.use('/api/loja', loja, equipeLoja, canal, respostas, assistente, reservas, relatorioLoja);
   app.use('/api/crm', crm, personalizacaoLoja);
   app.use('/api/conhecimento', conhecimento);

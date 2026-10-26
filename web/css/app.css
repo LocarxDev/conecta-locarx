@@ -705,3 +705,18 @@ details[open] summary { margin-bottom: 10px; }
 .interruptor input:checked + .sr-only + .trilho::after { transform: translateX(18px); }
 .interruptor input:focus-visible + .sr-only + .trilho { outline: 2px solid var(--vermelho); outline-offset: 2px; }
 .filtros #escolher-funil { flex: 0 1 240px; }
+
+/* ---------- cotação ao vivo (tela Cotação) — mesmos componentes do sistema ---------- */
+.acoes-form { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.acoes-form .sub, .rodape-cotacao .sub, .total-cotacao .sub { font-size: 12.5px; color: var(--texto-3); }
+.painel-cab .acoes-cab { display: flex; gap: 6px; flex-wrap: wrap; }
+.lista-opcoes { display: grid; gap: 8px; }
+.pilha, #cotacao-janela { display: grid; gap: 16px; }
+.form-linha.periodo-cotacao { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+.total-cotacao { padding: 12px 14px; border: 1px solid var(--borda); border-radius: var(--raio); background: var(--superficie-2); font-size: 15px; }
+.rodape-cotacao { border-top: 1px solid var(--borda); }
+.resumo-item .valor .sub { font-size: 1rem; font-weight: 500; color: var(--texto-3); }
+.resumo-reserva { white-space: pre-wrap; font-size: 14px; line-height: 1.5; }
+.tabela td.nowrap { white-space: nowrap; }
+.tabela-status td:first-child { min-width: 170px; }
+.tabela-status .btn-texto { padding: 0 8px; }

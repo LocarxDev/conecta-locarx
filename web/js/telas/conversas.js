@@ -2,6 +2,7 @@
 // A lista se atualiza sozinha a cada poucos segundos (o "vigia" roda enquanto alguém da loja está logado).
 import { api } from '../api.js';
 import { html, render, $, $$, icone, iniciais, avisar, abrirModal, comBotao, chipEtiqueta, preferencia } from '../util.js';
+import { abrirCotacao } from './cotacao.js';
 import { montarPainelCliente } from './painel-cliente.js';
 
 // ---------------------------------------------------------------------
@@ -245,6 +246,7 @@ export async function montar(alvo, ctx) {
       <div class="acoes-chat">
         ${ESTADO[c.estado]}
         <button class="btn btn-contorno" data-lateral aria-pressed="${lateralAberta}" title="Funil, etiquetas e informações do cliente">${icone('painel')}<span class="rotulo-lateral">Dados do cliente</span></button>
+        ${c.estado !== 'encerrada' ? html`<button class="btn btn-contorno" data-cotacao title="Consultar valores da tabela vigente e enviar ao cliente, sem sair da conversa">${icone('busca')}<span class="rotulo-lateral">Cotação</span></button>` : ''}
         ${!minha && c.estado !== 'encerrada' ? html`<button class="btn btn-primario" data-acao="assumir">Assumir</button>` : ''}
         ${c.estado === 'humano' ? html`<button class="btn btn-contorno" data-acao="devolver" title="O assistente virtual entra na etapa 3">Devolver ao assistente</button>` : ''}
         ${eu.perfil === 'dono' && c.estado !== 'encerrada' ? html`<button class="btn btn-contorno" data-acao="transferir">Transferir</button>` : ''}
@@ -252,6 +254,28 @@ export async function montar(alvo, ctx) {
       </div>`);
     $$('[data-acao]', cab).forEach((b) => b.addEventListener('click', () => acao(b.dataset.acao, b)));
     $('[data-lateral]', cab).addEventListener('click', () => alternarLateral());
+    $('[data-cotacao]', cab)?.addEventListener('click', () => {
+      if (!canalOk) return avisar('O WhatsApp da loja está desconectado.', 'erro');
+      abrirCotacao({
+        ctx, conversa: c,
+        // "Enviar ao cliente": o texto vai para o campo de mensagem, como o assistente faria — o atendente revisa e manda
+        aoUsarTexto: (texto) => {
+          const campo = $('#texto-msg', chatEl); if (!campo) return;
+          if ($('#modo-nota', chatEl)?.checked) $('#modo-nota', chatEl).click();
+          campo.value = (campo.value.trim() ? campo.value.trimEnd() + '\n\n' : '') + texto;
+          campo.dispatchEvent(new Event('input'));
+          campo.focus(); campo.setSelectionRange(campo.value.length, campo.value.length);
+          avisar('Texto colocado na mensagem. Revise e clique em Enviar.');
+        },
+        // reserva criada pela equipe: o evento aparece no histórico e a conversa passa a ser deste atendente
+        aoReservar: async () => {
+          await buscarNovas();
+          if (aberta?.estado !== 'humano' || aberta.atendente?.id !== eu.id) {
+            try { aberta = await api.acaoConversa(aberta.id, 'assumir'); store.mapa.set(aberta.id, aberta); desenharCabecalho(); desenharLista(); } catch { /* segue */ }
+          }
+        },
+      });
+    });
   }
 
   async function acao(nome, botao) {

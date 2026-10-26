@@ -23,6 +23,8 @@ import * as modelosTela from './telas/modelos.js';
 import * as relatoriosTela from './telas/relatorios.js';
 import * as acessosTela from './telas/acessos.js';
 import * as personalizarTela from './telas/personalizar.js';
+import * as cotacaoTela from './telas/cotacao.js';
+import * as whatsappRedeTela from './telas/whatsapp-rede.js';
 
 const app = document.getElementById('app');
 const estado = { usuario: null, destino: null };
@@ -31,6 +33,7 @@ const MODULOS_LOJA = [
   { rota: 'clientes', rotulo: 'Clientes', icone: 'clientes' },
   { rota: 'funil', rotulo: 'Funil de vendas', icone: 'funil' },
   { rota: 'tarefas', rotulo: 'Tarefas', icone: 'ok' },
+  { rota: 'cotacao', rotulo: 'Cotação', icone: 'busca' },
   { rota: 'reservas', rotulo: 'Reservas', icone: 'reservas' },
 ];
 
@@ -40,6 +43,7 @@ function menuDoPerfil(perfilUsuario) {
       { grupo: 'Rede LocarX' },
       { rota: 'inicio', rotulo: 'Visão da rede', icone: 'inicio' },
       { rota: 'lojas', rotulo: 'Lojas', icone: 'lojas' },
+      { rota: 'whatsapp-rede', rotulo: 'Status do WhatsApp', icone: 'whatsapp' },
       { rota: 'rede', rotulo: 'Base da rede', icone: 'assistente' },
       { rota: 'padroes', rotulo: 'Padrões do CRM', icone: 'ajustes' },
       { rota: 'relatorios-rede', rotulo: 'Relatórios', icone: 'relatorios' },
@@ -87,6 +91,8 @@ const ROTAS = [
   { padrao: /^base$/, tela: baseTela.montar, perfis: ['dono', 'atendente'] },
   { padrao: /^rede$/, tela: redeTela.montar, perfis: ['admin', 'matriz'] },
   { padrao: /^reservas$/, tela: reservasTela.montar, perfis: ['dono', 'atendente'] },
+  { padrao: /^cotacao$/, tela: cotacaoTela.montar, perfis: ['dono', 'atendente'] },
+  { padrao: /^whatsapp-rede$/, tela: whatsappRedeTela.montar, perfis: ['admin', 'matriz'] },
   { padrao: /^clientes(?:\/([\w-]+))?$/, tela: clientesTela.montar, perfis: ['dono', 'atendente'] },
   { padrao: /^funil$/, tela: funilTela.montar, perfis: ['dono', 'atendente'], largo: true },
   { padrao: /^tarefas$/, tela: tarefasTela.montar, perfis: ['dono', 'atendente'] },

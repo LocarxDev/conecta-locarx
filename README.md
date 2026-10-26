@@ -18,6 +18,20 @@ Plataforma de atendimento e CRM da rede LocarX: assistente virtual com IA no Wha
 - **Roleta de atendimento:** quando o assistente chama um atendente (ou a conversa chega sem assistente), ela vai para quem está **Disponível** (botão no topo), em rodízio ou para quem tem menos conversas, com limite opcional por pessoa. Configuração em **Atendentes**. Quem sai do sistema fica em pausa; quem fecha o Conecta deixa de receber depois de 5 minutos.
 - **Janelas:** clicar fora não fecha mais; o Esc só fecha se nada foi digitado.
 
+### Cotação e reserva pela equipe
+- **Tela Cotação** (menu, dono e atendente): só data e hora; a filial é a da própria loja. Consulta a tabela vigente (`POST /api/loja/cotacao`), lista os grupos do mais barato ao mais caro e calcula Super X e opcionais (`POST /api/loja/cotacao/preco`).
+- **Na conversa**, o botão **Cotação** (ao lado de "Dados do cliente") abre a mesma cotação numa janela. **Enviar ao cliente** coloca o texto já formatado no campo de mensagem, como o assistente faz, para o atendente revisar e mandar. **Reservar** cria a reserva pela API com os dados do cliente, com o mesmo resumo e confirmação do assistente (`POST /api/loja/reservas`, dois passos); fica no histórico da loja (origem "equipe"), na ficha do cliente, no funil e como evento na conversa.
+- A regra de negócio fica em `api/src/servicos/locarx/cotacao.js`, compartilhada com as LocarX Tools do assistente.
+
+### Status do WhatsApp (administração e matriz)
+Menu **Status do WhatsApp**: servidor Evolution no ar (e versão), instância e número de cada loja, assistente ligado/desligado, equipe online, mensagens nas últimas 24 h e alertas (desconectada, assistente sem chave, conversas aguardando sem ninguém online). **Verificar agora** confere a situação real na Evolution e corrige o que estava gravado. A administração **reconecta** (QR code para o celular da loja) e **desconecta**; a matriz só consulta. `GET /api/admin/whatsapp`, `POST /api/admin/whatsapp/:lojaId/conectar|desconectar`, `GET …/qr`.
+
+### Testes
+```bash
+cd api && npm test
+```
+`node --test` (sem dependência extra): regras de período e proteções, leitura do formato real da API LocarX, texto das opções e roteiro de reserva do prompt.
+
 ---
 
 ## Como publicar (ordem: Railway primeiro, Netlify depois)

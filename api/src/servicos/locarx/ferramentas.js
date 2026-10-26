@@ -6,28 +6,13 @@ import * as locarx from './api-locarx.js';
 import { cifrar } from '../seguranca.js';
 import { registrarEvento } from '../crm/funis.js';
 import { normalizarValor } from '../crm/personalizacao.js';
+import { reais, validarPeriodo, normalizarProtecoes, periodoTexto, dataBr, rotuloGrupo, ordenarPorPreco, textoOpcoes } from './cotacao.js';
 
 export function cpfValido(cpf) {
   const d = String(cpf || '').replace(/\D/g, '');
   if (d.length !== 11 || /^(\d)\1{10}$/.test(d)) return false;
   const dv = (n) => { let s = 0; for (let i = 0; i < n; i++) s += Number(d[i]) * (n + 1 - i); const r = (s * 10) % 11; return r === 10 ? 0 : r; };
   return dv(9) === Number(d[9]) && dv(10) === Number(d[10]);
-}
-
-const reais = (v) => (v == null ? 'a confirmar' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }));
-const RE_DATA = /^\d{4}-\d{2}-\d{2}$/, RE_HORA = /^([01]\d|2[0-3]):[0-5]\d$/;
-
-function validarPeriodo(a) {
-  for (const [c, re] of [['data_retirada', RE_DATA], ['hora_retirada', RE_HORA], ['data_devolucao', RE_DATA], ['hora_devolucao', RE_HORA]]) {
-    if (!re.test(String(a[c] || ''))) throw new Error(`Informe ${c.replace('_', ' ')} no formato ${re === RE_DATA ? 'AAAA-MM-DD' : 'HH:MM'}.`);
-  }
-  // horário de Salvador (UTC-3, sem horário de verão)
-  const ini = new Date(`${a.data_retirada}T${a.hora_retirada}:00-03:00`), fim = new Date(`${a.data_devolucao}T${a.hora_devolucao}:00-03:00`);
-  // a API LocarX só mostra carros com pelo menos 24 h de antecedência
-  if (ini < new Date(Date.now() + 24 * 3_600_000)) throw new Error('Retirada com menos de 24 horas de antecedência não pode ser reservada pelo assistente. Avise o cliente e use chamar_atendente com o motivo "retirada em menos de 24 h".');
-  if (fim <= ini) throw new Error('A devolução precisa ser depois da retirada.');
-  if (fim - ini > 90 * 86_400_000) throw new Error('Períodos acima de 90 dias precisam ser tratados com um atendente.');
-  return { retirada: { date: a.data_retirada, time: a.hora_retirada }, devolucao: { date: a.data_devolucao, time: a.hora_devolucao }, ini, fim };
 }
 
 const PERIODO = {
@@ -89,16 +74,11 @@ export function ferramentasDaLoja(ctx) {
         if (a.cambio === 'automatico') grupos = grupos.filter((g) => /AUTO/i.test(g.cambio || ''));
         if (a.cambio === 'manual') grupos = grupos.filter((g) => /MANUAL/i.test(g.cambio || ''));
         if (!grupos.length) return `Não há carro com câmbio ${a.cambio} disponível para ${periodo}. Avise o cliente e ofereça as outras opções (consulte de novo sem o filtro de câmbio) ou chame um atendente.`;
-        grupos.sort((x, y) => (x.total ?? 1e9) - (y.total ?? 1e9));
+        grupos = ordenarPorPreco(grupos);
         const mostrar = a.mais_opcoes ? grupos.slice(3, 8) : grupos.slice(0, 3);
         if (!mostrar.length) return 'Não há mais opções além das já mostradas. Pergunte qual das opções o cliente prefere ou chame um atendente.';
         await marcarEtapa(ctx, 'cotacao');
-        const linhas = mostrar.map((g, i) => {
-          const rotulo = rotuloGrupo(g, i + (a.mais_opcoes ? 4 : 1));
-          return `*${rotulo.letra} – ${rotulo.nome}*\n${[g.exemplos, g.cambio ? 'câmbio ' + String(g.cambio).toLowerCase().replace('automatic', 'automático') : null].filter(Boolean).join(' · ')}\n${reais(g.diaria)} por diária · *Total ${reais(g.total)}*`;
-        });
-        const letras = mostrar.map((g, i) => rotuloGrupo(g, i + (a.mais_opcoes ? 4 : 1)).letra);
-        const texto = `🚗 *Opções para ${periodo}:*\n\n${linhas.join('\n\n')}\n\nO total já inclui a Proteção X e as taxas. Pagamento na loja, na retirada.\nQual você prefere? É só responder com ${letras.length > 1 ? 'a letra (' + letras.slice(0, -1).join(', ') + ' ou ' + letras.at(-1) + ')' : 'a letra ' + letras[0]}.${grupos.length > 3 && !a.mais_opcoes ? '\nSe quiser, mostro outras opções.' : ''}`;
+        const texto = textoOpcoes(mostrar, { periodo, inicio: a.mais_opcoes ? 4 : 1, haMais: grupos.length > 3 && !a.mais_opcoes });
         return {
           texto_para_cliente: texto,
           grupos: mostrar.map((g, i) => ({ letra: rotuloGrupo(g, i + (a.mais_opcoes ? 4 : 1)).letra, fleet_id: g.fleetId, grupo: g.grupo, cambio: g.cambio, total: reais(g.total) })),
@@ -278,24 +258,6 @@ export function ferramentasDaLoja(ctx) {
   return disponiveis;
 }
 
-function normalizarProtecoes(lista) {
-  const validas = ['PROTECAO_X', 'PROTECAO_SUPER_X', 'TERCEIROS', 'VIDROS', 'VIDROS_E_PNEUS'];
-  let p = [...new Set((Array.isArray(lista) ? lista : []).map((x) => String(x).toUpperCase().replace(/[^A-Z_]/g, '')).filter((x) => validas.includes(x)))];
-  if (!p.includes('PROTECAO_X') && !p.includes('PROTECAO_SUPER_X')) p.unshift('PROTECAO_X');
-  if (p.includes('PROTECAO_X') && p.includes('PROTECAO_SUPER_X')) p = p.filter((x) => x !== 'PROTECAO_X');
-  if (p.includes('VIDROS') && p.includes('VIDROS_E_PNEUS')) p = p.filter((x) => x !== 'VIDROS');
-  return p;
-}
-
-const periodoTexto = (a) => `${a.data_retirada.split('-').reverse().slice(0, 2).join('/')} ${a.hora_retirada} até ${a.data_devolucao.split('-').reverse().slice(0, 2).join('/')} ${a.hora_devolucao}`;
-const dataBr = (x) => `${x.date.split('-').reverse().join('/')} às ${x.time}`;
-// "B - COMPACTO COM AR" → letra B, nome "Compacto com ar". Sem letra no nome, usa o número da opção.
-function rotuloGrupo(g, n) {
-  const m = String(g.grupo || '').match(/^\s*([A-Z0-9]{1,3})\s*[-–.]\s*(.+)$/i);
-  const cap = (t) => t.toLowerCase().replace(/^./, (c) => c.toUpperCase());
-  return m ? { letra: m[1].toUpperCase(), nome: cap(m[2].trim()) } : { letra: String(n), nome: cap(String(g.grupo || 'Grupo')) };
-}
-
 // cliente pediu e não havia carro: etiqueta "Sem disponibilidade" (o dono enxerga a demanda perdida)
 async function etiquetarSemDisponibilidade(ctx) {
   if (ctx.simulacao || !ctx.contatoId) return;
@@ -309,18 +271,20 @@ async function marcarEtapa(ctx, evento, valor) {
   await comoSistema((c) => registrarEvento(c, { lojaId: ctx.lojaId, contatoId: ctx.contatoId, conversaId: ctx.conversaId, evento, valor: valor ?? null }));
 }
 
-async function registrarReserva(ctx, reserva, p, cliente, extra) {
-  await comoSistema(async (c) => {
+// Grava a reserva no Conecta (histórico, ficha do cliente e funil). Usada pelo assistente e pela equipe (rota de reservas).
+export async function registrarReserva(ctx, reserva, p, cliente, extra) {
+  return comoSistema(async (c) => {
     const r = (await c.query(
       `INSERT INTO reservas (loja_id, contato_id, conversa_id, codigo, status, retirada, devolucao, grupo, valor, origem, detalhes)
-       VALUES ($1, $2, $3, $4, 'confirmada', $5, $6, $7, $8, 'assistente', $9)
+       VALUES ($1, $2, $3, $4, 'confirmada', $5, $6, $7, $8, $10, $9)
        ON CONFLICT (loja_id, codigo) WHERE codigo IS NOT NULL DO UPDATE SET atualizada_em = now() RETURNING id`,
-      [ctx.lojaId, ctx.contatoId, ctx.conversaId, reserva.codigo, p.ini, p.fim, reserva.grupo, reserva.valor, { ...extra, cliente: { nome: cliente.nome, email: cliente.email } }])).rows[0];
+      [ctx.lojaId, ctx.contatoId, ctx.conversaId, reserva.codigo, p.ini, p.fim, reserva.grupo, reserva.valor, { ...extra, cliente: { nome: cliente.nome, email: cliente.email } }, ctx.origem || 'assistente'])).rows[0];
     if (ctx.contatoId) {
       await c.query(
         `UPDATE contatos SET nome = coalesce(nome, $2), email = coalesce(email, $3), cpf_cifrado = coalesce(cpf_cifrado, $4), cpf_final = coalesce(cpf_final, $5), atualizado_em = now() WHERE id = $1`,
         [ctx.contatoId, cliente.nome, cliente.email, cifrar(cliente.cpf), cliente.cpf.slice(-2)]);
       await registrarEvento(c, { lojaId: ctx.lojaId, contatoId: ctx.contatoId, conversaId: ctx.conversaId, evento: 'reserva', valor: reserva.valor, reservaId: r.id });
     }
+    return r.id;
   });
 }

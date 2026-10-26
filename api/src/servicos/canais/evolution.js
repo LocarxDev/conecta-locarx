@@ -43,6 +43,12 @@ async function configurarWebhook(instancia) {
 export const evolution = {
   nome: 'evolution',
 
+  // saúde do servidor da Evolution (painel da administração): { noAr, versao }
+  async saude() {
+    try { const d = await chamar('GET', '/'); return { noAr: true, versao: d?.version || null }; }
+    catch (e) { return { noAr: false, versao: null, erro: e.message }; }
+  },
+
   async criar(instancia) {
     try {
       await chamar('POST', '/instance/create', {
