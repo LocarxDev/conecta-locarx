@@ -162,9 +162,15 @@ export async function localidades(filtro = {}) {
 }
 
 // uma filial pelo id; null quando não existe neste ambiente (homologação × produção)
-export async function dadosDaFilial(branchId) {
+const cacheFilial = new Map();   // branchId → { em, dados } (1 h): nome, endereço e horários do portal mudam pouco
+export async function dadosDaFilial(branchId, { semCache = false } = {}) {
+  const k = String(branchId);
+  const c = cacheFilial.get(k);
+  if (!semCache && c && Date.now() - c.em < 3_600_000) return c.dados;
   const achadas = await localidades({ branchId: Number(branchId) });
-  return achadas.find((l) => Number(l.branchId) === Number(branchId)) || null;
+  const dados = achadas.find((l) => Number(l.branchId) === Number(branchId)) || null;
+  if (dados) cacheFilial.set(k, { em: Date.now(), dados });
+  return dados;
 }
 
 // ---------- políticas do portal (para a Base da rede) ----------

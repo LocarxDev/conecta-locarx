@@ -82,3 +82,10 @@ test('prompt: com mais de uma filial, o roteiro começa pela escolha da filial',
   assert.ok(!uma.includes('Passo 0'));
   assert.ok(duas.includes('Passo 0 — Filial') && duas.includes('Aeroporto, Centro'));
 });
+
+test('prompt: filiais com dados do portal entram no texto (endereço e horário)', () => {
+  const f = [{ id: 'a', nome: 'Aeroporto', principal: true, portal: { nome: 'LocarX Salvador Aeroporto', endereco: 'Av. Santos Dumont, 100', horarios: 'Seg a Sex 08:00–18:00\nSáb 08:00–12:00' } }, { id: 'b', nome: 'Centro', portal: null }];
+  const p = montarSistema({ ...base, filiais: f });
+  assert.ok(p.includes('FILIAIS DESTA LOJA') && p.includes('Av. Santos Dumont, 100') && p.includes('Seg a Sex 08:00–18:00; Sáb'));
+  assert.ok(p.includes('e suas 2 filiais'));
+});

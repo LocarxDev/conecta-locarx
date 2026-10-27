@@ -1,6 +1,6 @@
 // Lojas da rede (administração e matriz) e resumo da loja logada.
 import { Router } from 'express';
-import { filiaisDaLoja, filialPublica } from '../servicos/locarx/filiais.js';
+import { filiaisDaLoja, filiaisComPortal, filialPublica } from '../servicos/locarx/filiais.js';
 import { MODULOS, normalizarModulos } from '../servicos/modulos.js';
 import { z } from 'zod';
 import { comContexto, contextoDoUsuario } from '../banco/conexao.js';
@@ -52,7 +52,7 @@ admin.get('/lojas/:id', exigirPerfil('admin', 'matriz'), rota(async (req, res) =
     const l = (await c.query(`${SQL_LOJAS} WHERE l.id = $1`, [id])).rows[0];
     if (!l) return null;
     const usuarios = (await c.query('SELECT * FROM usuarios WHERE loja_id = $1 ORDER BY nome', [id])).rows;
-    const filiais = (await filiaisDaLoja(c, id, { soAtivas: false })).map(filialPublica);
+    const filiais = (await filiaisComPortal(c, id, { soAtivas: false })).map(filialPublica);
     return { ...lojaPublica(l), usuarios: usuarios.map(usuarioPublico), filiais };
   });
   if (!r) throw erro(404, 'Loja não encontrada.');

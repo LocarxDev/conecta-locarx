@@ -200,7 +200,8 @@ export async function detalhe(alvo, ctx) {
         ${ehAdmin ? html`<button class="btn btn-contorno" id="nova-filial">${icone('mais')}Adicionar filial</button>` : ''}</div>
       <div class="tabela-caixa"><table class="tabela"><thead><tr><th>Filial</th><th>Nº no portal</th><th>Situação</th><th><span class="sr-only">Ações</span></th></tr></thead>
         <tbody>${(loja.filiais || []).map((f) => html`<tr>
-          <td><strong>${f.nome}</strong>${f.principal ? html` <span class="selo marca sem-ponto">Principal</span>` : ''}</td>
+          <td><strong>${f.nome}</strong>${f.principal ? html` <span class="selo marca sem-ponto">Principal</span>` : ''}
+            ${f.portal ? html`<div class="sub">${f.portal.nome}${f.portal.tipo ? ` · ${f.portal.tipo}` : ''}${f.portal.endereco ? html`<br>${f.portal.endereco}` : ''}${f.portal.horarios ? html`<br>${f.portal.horarios.split('\n').join(' · ')}` : ''}</div>` : html`<div class="sub erro-texto">não encontrada no portal (ambiente atual)</div>`}</td>
           <td class="num">${f.branchId}</td>
           <td>${f.ativa ? html`<span class="selo ok">Ativa</span>` : html`<span class="selo neutro">Desativada</span>`}</td>
           <td><div class="acoes-linha">${ehAdmin && !f.principal ? html`<button class="btn btn-texto" data-filial-principal="${f.id}">Tornar principal</button><button class="btn btn-texto" data-filial-remover="${f.id}">Remover</button>` : ''}</div></td>
@@ -289,10 +290,31 @@ export async function detalhe(alvo, ctx) {
     const m = abrirModal({
       titulo: 'Adicionar filial',
       corpo: html`<form class="form" id="form-filial" novalidate>
+        <div class="campo"><label for="f-portal">Filial no portal LocarX</label>
+          <div class="filtros"><select id="f-portal" style="flex:1 1 260px"><option value="">Carregando filiais do portal…</option></select><button type="button" class="btn btn-contorno" id="f-recarregar">Consultar de novo</button></div>
+          <p class="ajuda">Lista do ambiente atual da API (homologação ou produção). Escolha e o número é preenchido sozinho.</p></div>
         <div class="campo"><label for="f-nome">Nome curto</label><input id="f-nome" name="nome" placeholder="Ex.: Centro" required><p class="ajuda">É assim que o assistente vai chamar a filial ("retirada no Aeroporto ou no Centro?").</p></div>
-        <div class="campo campo-curto"><label for="f-branch">Número da filial no portal (branchId)</label><input id="f-branch" name="branchId" inputmode="numeric" required><p class="ajuda">O Conecta confere no portal se a filial existe no ambiente atual.</p></div>
+        <div class="campo campo-curto"><label for="f-branch">Número da filial no portal (branchId)</label><input id="f-branch" name="branchId" inputmode="numeric" required><p class="ajuda">Preenchido pela lista acima; pode digitar se já souber.</p></div>
       </form>`,
       rodape: html`<button class="btn btn-contorno" data-fechar>Cancelar</button><button class="btn btn-primario" form="form-filial" type="submit">Adicionar</button>`,
+    });
+    // lista do portal: as já vinculadas a esta loja ficam de fora
+    let doPortal = [];
+    const usados = new Set((loja.filiais || []).map((x) => Number(x.branchId)));
+    const carregarPortal = async () => {
+      const sel = $('#f-portal', m.el);
+      try {
+        doPortal = (await api.filiaisLocarx()).filter((x) => !usados.has(Number(x.branchId)));
+        render(sel, html`<option value="">Escolha a filial (${doPortal.length} disponíveis)</option>${doPortal.map((x, i) => html`<option value="${i}">${x.nome} · ${x.cidade}/${x.uf} · ${x.codigo} (${x.branchId})</option>`)}`);
+      } catch (err) { render(sel, html`<option value="">Não foi possível consultar o portal: ${err.message}</option>`); }
+    };
+    carregarPortal();
+    $('#f-recarregar', m.el).addEventListener('click', (e) => comBotao(e.currentTarget, carregarPortal));
+    $('#f-portal', m.el).addEventListener('change', (e) => {
+      const x = doPortal[Number(e.target.value)]; if (!x) return;
+      const f = $('#form-filial', m.el);
+      f.elements.branchId.value = x.branchId;
+      if (!f.elements.nome.value.trim()) f.elements.nome.value = String(x.nome || '').replace(/^locarx\s*/i, '').replace(new RegExp('^' + (loja.cidade || '') + '\\s*', 'i'), '').trim().slice(0, 60) || x.nome;
     });
     $('#form-filial', m.el).addEventListener('submit', async (e) => {
       e.preventDefault();

@@ -13,7 +13,7 @@ import { registrarOcorrencia } from '../ocorrencias.js';
 import { pixDisponivel, verificarCobranca, contaDaLoja } from '../pagamentos/cobrancas.js';
 import { regrasDaLoja } from '../crm/funis.js';
 import { moduloLigado } from '../modulos.js';
-import { filiaisDaLoja, filialPublica } from '../locarx/filiais.js';
+import { filiaisComPortal, filialPublica } from '../locarx/filiais.js';
 
 const provedoresCanal = { evolution };
 const ESPERA_MS = 4000;              // espera o cliente terminar de digitar várias mensagens seguidas
@@ -130,6 +130,17 @@ export function textoReservaEmAndamento(cv) {
   return linhas.length ? `RESERVA EM ANDAMENTO (estado guardado pelo sistema)\n${linhas.map((l) => '- ' + l).join('\n')}` : '';
 }
 
+// Bloco com o que o portal diz de cada filial (nome oficial, endereço, horários): o bot responde endereço e horário sem precisar de ferramenta
+export function textoFiliais(filiais = []) {
+  const comDados = filiais.filter((f) => f.portal);
+  if (!comDados.length) return '';
+  const linhas = comDados.map((f) => {
+    const p = f.portal;
+    return `- ${f.nome}${p.nome && p.nome.toLowerCase() !== f.nome.toLowerCase() ? ` (no portal: ${p.nome})` : ''}${f.principal && filiais.length > 1 ? ' — principal' : ''}${p.endereco ? `. Endereço: ${p.endereco}` : ''}${p.horarios ? `. Horário: ${String(p.horarios).replace(/\n/g, '; ')}` : ''}${p.especiais ? `. Atendimento especial (fora do horário, com taxa): ${String(p.especiais).replace(/\n/g, '; ')}` : ''}`;
+  });
+  return `\nFILIAIS DESTA LOJA (dados oficiais do portal LocarX — use para endereço, horário e para perguntar onde o cliente retira):\n${linhas.join('\n')}`;
+}
+
 export function montarSistema({ loja, a, rede, contato, historicoReservas, crm, conversa = null, pix = false, filiais = [] }) {
   const agora = agoraBahia();
   const recorrente = historicoReservas.length
@@ -140,7 +151,7 @@ Agora em Salvador: ${agora.iso} (${agora.dia}). Use esta data para entender "ama
 
 REGRAS OBRIGATÓRIAS
 1. Português do Brasil, cordial, objetivo e curto (mensagem de WhatsApp: no máximo 3 parágrafos curtos). Pode usar *negrito* do WhatsApp com moderação. Não use títulos nem tabelas.
-2. Você trabalha SOMENTE para esta loja LocarX. Não fale de outras locadoras nem de outras lojas da rede.
+2. Você trabalha SOMENTE para esta loja LocarX${filiais.length > 1 ? ` e suas ${filiais.length} filiais (listadas abaixo)` : ''}. Não fale de outras locadoras nem de outras lojas da rede.${textoFiliais(filiais)}
 3. NUNCA invente preços, disponibilidade, proteções, regras, endereços ou horários. Regras e informações: use buscar_informacoes. Carros e preços: use consultar_disponibilidade e calcular_preco. Se não houver a informação, diga que vai confirmar com um atendente e use chamar_atendente.
 4. Retirada e devolução são sempre nesta mesma loja. ${pix ? 'O cliente pode pagar na loja, na retirada, ou pelo WhatsApp via Pix (você pergunta no Passo 4b). Se perguntarem se dá para pagar por aqui, a resposta é sim, via Pix.' : 'O pagamento é feito na loja, na retirada.'}
 5. Você mesmo faz a reserva, seguindo o ROTEIRO DE RESERVA abaixo. Nunca mande o cliente para o site ou para a loja fazer a reserva.
@@ -212,7 +223,7 @@ async function processarAgora(conversaId) {
     const contaPix = await contaDaLoja(conversa.loja_id, c);
     if (pixDisponivel()) conversa.pixPendente = (await c.query(`SELECT id, valor, expira_em, dev_mode FROM cobrancas WHERE conversa_id = $1 AND status = 'pendente' ORDER BY criada_em DESC LIMIT 1`, [conversa.id])).rows[0] || null;
     const regrasFunil = await regrasDaLoja(c, conversa.loja_id);
-    const filiais = (await filiaisDaLoja(c, conversa.loja_id)).map(filialPublica);
+    const filiais = (await filiaisComPortal(c, conversa.loja_id)).map(filialPublica);
     return { conversa, a, canal, loja, rede, msgs, historicoReservas, crm, regrasFunil, pix: contaPix.disponivel, filiais };
   });
   // Pix pendente nesta conversa: confere no provedor ANTES de responder (qualquer mensagem do cliente vale como "paguei?").

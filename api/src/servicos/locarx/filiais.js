@@ -1,6 +1,23 @@
 // Filiais de uma franquia (loja do Conecta). lojas.branch_id é a principal; as demais ficam em `filiais`.
 // Tudo o que precisa de um branchId (cotação, reserva, assistente, MCP) resolve a filial por aqui.
-export const filialPublica = (f) => ({ id: f.id, branchId: f.branch_id, nome: f.nome, principal: f.principal, ativa: f.ativa });
+import * as locarx from './api-locarx.js';
+import { config } from '../../config.js';
+
+export const filialPublica = (f) => ({ id: f.id, branchId: f.branch_id, nome: f.nome, principal: f.principal, ativa: f.ativa, ...(f.portal !== undefined ? { portal: f.portal } : {}) });
+
+/**
+ * Filiais da loja com o que o portal diz de cada uma (nome oficial, endereço, cidade, horários, atendimento especial).
+ * O portal é a fonte: se mudarem o nome ou o horário lá, muda aqui (cache de 1 h). Sem API ou filial não encontrada → portal: null.
+ */
+export async function filiaisComPortal(c, lojaId, { soAtivas = true } = {}) {
+  const lista = await filiaisDaLoja(c, lojaId, { soAtivas });
+  if (!config.locarx) return lista.map((f) => ({ ...f, portal: null }));
+  return Promise.all(lista.map(async (f) => {
+    let d = null;
+    try { d = await locarx.dadosDaFilial(f.branch_id); } catch { d = null; }
+    return { ...f, portal: d ? { nome: d.nome, nomeCompleto: d.nomeCompleto, tipo: d.tipo, endereco: d.endereco, cidade: d.cidade, uf: d.uf, horarios: d.horariosTexto || null, especiais: d.especiaisTexto || null } : null };
+  }));
+}
 
 export async function filiaisDaLoja(c, lojaId, { soAtivas = true } = {}) {
   const rows = (await c.query(`SELECT * FROM filiais WHERE loja_id = $1 ${soAtivas ? 'AND ativa' : ''} ORDER BY principal DESC, nome`, [lojaId])).rows;
