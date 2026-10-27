@@ -197,6 +197,7 @@ const _extra = {
   lojasDestino: () => chamar('GET', '/conversas/lojas-destino'),
   transferirConversa: (id, d) => chamar('POST', `/conversas/${encodeURIComponent(id)}/transferir-loja`, d),
   acessosLoja: (id) => chamar('GET', `/admin/lojas/${encodeURIComponent(id)}/acessos`),
+  candidatosAcessoLoja: (id) => chamar('GET', `/admin/lojas/${encodeURIComponent(id)}/candidatos-acesso`),
   darAcessoLoja: (id, d) => chamar('POST', `/admin/lojas/${encodeURIComponent(id)}/acessos`, d),
   tirarAcessoLoja: (id, usuarioId) => chamar('DELETE', `/admin/lojas/${encodeURIComponent(id)}/acessos/${encodeURIComponent(usuarioId)}`),
 };

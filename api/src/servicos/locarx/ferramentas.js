@@ -70,14 +70,15 @@ export function ferramentasDaLoja(ctx) {
       parametros: { type: 'object', properties: { ...PARAM_FILIAL } },
       executar: async (a = {}) => {
         const loja = await comoSistema(async (c) => (await c.query('SELECT nome, cidade, uf FROM lojas WHERE id = $1', [ctx.lojaId])).rows[0]);
-        let branch = ctx.branchId;
-        if (variasFiliais) { try { branch = await usarFilial(a.filial); } catch (e) { if (e.paraIa) branch = null; else throw e; } }
-        if (variasFiliais && !branch) {
-          // sem filial escolhida: devolve o resumo de todas (endereço e horário), para a IA perguntar qual
+        if (variasFiliais) {
+          // com várias filiais, SEMPRE devolve todas (nome oficial, endereço, horário); se uma foi pedida, marca qual é
+          let pedida = null;
+          if (a.filial) { try { await usarFilial(a.filial); pedida = ctx.filialNome; } catch (e) { if (!e.paraIa) throw e; } }
           const todas = [];
-          for (const f of ctx.filiais) { let d = null; try { d = await locarx.dadosDaFilial(f.branchId); } catch { /* segue */ } todas.push({ filial: f.nome, endereco: d?.endereco || null, horario_de_atendimento: d?.horariosTexto || null }); }
-          return { loja: loja?.nome, cidade: `${loja?.cidade}/${loja?.uf}`, filiais: todas, instrucao: 'Esta loja tem mais de uma filial. Pergunte em qual o cliente quer retirar antes de consultar.' };
+          for (const f of ctx.filiais) { let d = null; try { d = await locarx.dadosDaFilial(f.branchId); } catch { /* segue */ } todas.push({ filial: f.nome, nome_no_portal: d?.nome || null, principal: !!f.principal, endereco: d?.endereco || null, horario_de_atendimento: d?.horariosTexto || null, atendimento_especial: d?.especiaisTexto || null }); }
+          return { loja: loja?.nome, cidade: `${loja?.cidade}/${loja?.uf}`, quantidade_de_filiais: todas.length, filiais: todas, filial_escolhida: pedida || ctx.filialNome || null, instrucao: 'Esta loja tem mais de uma filial: ao falar de unidades, endereços ou horários, cite TODAS. Antes de consultar carros, pergunte em qual o cliente retira.' };
         }
+        const branch = ctx.branchId;
         let filial = null;
         try { filial = await locarx.dadosDaFilial(branch); } catch { /* sem API: segue com o cadastro */ }
         return {

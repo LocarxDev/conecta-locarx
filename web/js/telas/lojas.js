@@ -208,8 +208,8 @@ export async function detalhe(alvo, ctx) {
         </tr>`)}</tbody></table></div>
     </section>
     <section class="painel" id="acessos-loja">
-      <div class="painel-cab"><div><h2>Donos de outras lojas com acesso aqui</h2><span class="sub">Para quem tem mais de uma loja: a pessoa entra com o mesmo login e troca de loja no topo da tela.</span></div>
-        ${ehAdmin ? html`<button class="btn btn-contorno" id="dar-acesso">${icone('mais')}Dar acesso</button>` : ''}</div>
+      <div class="painel-cab"><div><h2>Donos vinculados de outras lojas</h2><span class="sub">Para quem tem mais de uma loja: escolha a pessoa na lista e ela passa a ver esta loja também (troca no topo da tela).</span></div>
+        ${ehAdmin ? html`<button class="btn btn-contorno" id="dar-acesso">${icone('mais')}Vincular dono</button>` : ''}</div>
       <div id="lista-acessos"><div class="painel-corpo"><p class="sub">Carregando…</p></div></div>
     </section>
     <div id="equipe-loja"></div>`);
@@ -229,16 +229,20 @@ export async function detalhe(alvo, ctx) {
     } catch (err) { render(listaAcessos, html`<div class="painel-corpo"><p class="sub">${err.message}</p></div>`); }
   };
   carregarAcessos();
-  $('#dar-acesso', alvo)?.addEventListener('click', () => {
+  $('#dar-acesso', alvo)?.addEventListener('click', async () => {
+    let cand = [];
+    try { cand = await api.candidatosAcessoLoja(lojaId); } catch (err) { avisar(err.message, 'erro'); return; }
     const m = abrirModal({
-      titulo: 'Dar acesso a esta loja',
-      corpo: html`<form class="form" id="form-acesso" novalidate>
-        <div class="campo"><label for="a-email">E-mail de um dono ou atendente que já existe em outra loja</label><input id="a-email" name="email" type="email" required placeholder="dono@franquia.com.br"><p class="ajuda">Para alguém novo, use "Convidar" na equipe.</p></div>
+      titulo: 'Vincular dono a esta loja',
+      corpo: cand.length ? html`<form class="form" id="form-acesso" novalidate>
+        <div class="campo"><label for="a-email">Quem passa a acessar esta loja</label>
+          <select id="a-email" name="email" required>${cand.map((u) => html`<option value="${u.email}">${u.nome} (${u.perfil === 'dono' ? 'dono' : 'atendente'} em ${u.loja_principal || '—'}) · ${u.email}</option>`)}</select>
+          <p class="ajuda">Depois de vincular, a pessoa entra com o mesmo login e troca de loja no topo da tela.</p></div>
         <div class="campo"><label for="a-perfil">Nível nesta loja</label><select id="a-perfil" name="perfil"><option value="dono">Dono da loja</option><option value="atendente">Atendente</option></select></div>
-      </form>`,
-      rodape: html`<button class="btn btn-contorno" data-fechar>Cancelar</button><button class="btn btn-primario" form="form-acesso" type="submit">Dar acesso</button>`,
+      </form>` : html`<p class="sub">Não há ninguém de outras lojas para vincular. Para cadastrar uma pessoa nova, use "Convidar" na equipe da loja.</p>`,
+      rodape: cand.length ? html`<button class="btn btn-contorno" data-fechar>Cancelar</button><button class="btn btn-primario" form="form-acesso" type="submit">Vincular</button>` : html`<button class="btn btn-contorno" data-fechar>Fechar</button>`,
     });
-    $('#form-acesso', m.el).addEventListener('submit', async (e) => {
+    $('#form-acesso', m.el)?.addEventListener('submit', async (e) => {
       e.preventDefault();
       const f = e.target; const d = dadosDoForm(f);
       await comBotao($('[type=submit]', m.el), async () => {

@@ -138,7 +138,7 @@ export function textoFiliais(filiais = []) {
     const p = f.portal;
     return `- ${f.nome}${p.nome && p.nome.toLowerCase() !== f.nome.toLowerCase() ? ` (no portal: ${p.nome})` : ''}${f.principal && filiais.length > 1 ? ' — principal' : ''}${p.endereco ? `. Endereço: ${p.endereco}` : ''}${p.horarios ? `. Horário: ${String(p.horarios).replace(/\n/g, '; ')}` : ''}${p.especiais ? `. Atendimento especial (fora do horário, com taxa): ${String(p.especiais).replace(/\n/g, '; ')}` : ''}`;
   });
-  return `\nFILIAIS DESTA LOJA (dados oficiais do portal LocarX — use para endereço, horário e para perguntar onde o cliente retira):\n${linhas.join('\n')}`;
+  return `\nFILIAIS DESTA LOJA (dados oficiais do portal LocarX — use para endereço, horário e para perguntar onde o cliente retira). Se perguntarem quais lojas/unidades/filiais existem, liste TODAS as ${comDados.length}, nunca só a principal:\n${linhas.join('\n')}`;
 }
 
 export function montarSistema({ loja, a, rede, contato, historicoReservas, crm, conversa = null, pix = false, filiais = [] }) {
@@ -382,16 +382,18 @@ export function iniciarVarreduras() {
 
 // ---------- teste pelo painel (não envia nada ao cliente, não cria reserva) ----------
 export async function testarAssistente(lojaId, historico) {
-  const { a, loja, rede, crm } = await comoSistema(async (c) => ({
+  const { a, loja, rede, crm, filiais, pix } = await comoSistema(async (c) => ({
     a: (await c.query('SELECT * FROM assistentes WHERE loja_id = $1', [lojaId])).rows[0],
     loja: (await c.query('SELECT * FROM lojas WHERE id = $1', [lojaId])).rows[0],
     rede: (await c.query('SELECT * FROM rede_config LIMIT 1')).rows[0] || {},
     crm: await crmDoAssistente(c, lojaId, null),
+    filiais: (await filiaisComPortal(c, lojaId)).map(filialPublica),   // o teste usa o mesmo prompt da conversa real (filiais, Pix)
+    pix: (await contaDaLoja(lojaId, c)).disponivel,
   }));
   if (!a?.chave_cifrada && !config.iaSimulada) { const e = new Error('Cadastre a chave da IA antes de testar.'); e.status = 400; throw e; }
   let chamou = null;
-  const ferramentas = ferramentasDaLoja({ lojaId, branchId: loja.branch_id, locarxDisponivel: !!config.locarx, simulacao: true, campos: crm.campos, etiquetas: crm.etiquetas, aoChamarAtendente: async (x) => { chamou = x; } });
-  const opcoes = { provedor: a.provedor, modelo: a.modelo, chave: a.chave_cifrada ? decifrar(a.chave_cifrada) : null, sistema: montarSistema({ loja, a, rede, contato: { nome: null }, historicoReservas: [], crm }), historico, ferramentas };
+  const ferramentas = ferramentasDaLoja({ lojaId, branchId: loja.branch_id, filiais, locarxDisponivel: !!config.locarx, simulacao: true, campos: crm.campos, etiquetas: crm.etiquetas, aoChamarAtendente: async (x) => { chamou = x; } });
+  const opcoes = { provedor: a.provedor, modelo: a.modelo, chave: a.chave_cifrada ? decifrar(a.chave_cifrada) : null, sistema: montarSistema({ loja, a, rede, contato: { nome: null }, historicoReservas: [], crm, pix, filiais }), historico, ferramentas };
   const r = config.iaSimulada ? await simularIa(opcoes) : await conversarComIa(opcoes);
   return { resposta: r.texto, ferramentas: r.usadas, chamouAtendente: chamou, eventos: r.eventos || [] };
 }

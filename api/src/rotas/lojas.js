@@ -3,7 +3,7 @@ import { Router } from 'express';
 import { filiaisDaLoja, filiaisComPortal, filialPublica } from '../servicos/locarx/filiais.js';
 import { MODULOS, normalizarModulos } from '../servicos/modulos.js';
 import { z } from 'zod';
-import { comContexto, contextoDoUsuario } from '../banco/conexao.js';
+import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js';
 import { rota, erro, validar, zUuid, exigirPerfil, lojaPublica, usuarioPublico, registrar } from '../http.js';
 import { config } from '../config.js';
 import * as locarx from '../servicos/locarx/api-locarx.js';
@@ -155,13 +155,22 @@ admin.delete('/lojas/:id', exigirPerfil('admin'), rota(async (req, res) => {
   // desliga o WhatsApp na Evolution (se existir) antes de apagar o canal
   const canal = await comoSistema(async (c) => (await c.query('SELECT * FROM canais WHERE loja_id = $1', [id])).rows[0]);
   if (canal?.instancia) { try { await evolution.desconectar(canal.instancia); } catch { /* já desconectado ou Evolution fora */ } }
-  await comoSistema(async (c) => {
-    await c.query('DELETE FROM sessoes WHERE usuario_id IN (SELECT id FROM usuarios WHERE loja_id = $1)', [id]);
-    await c.query('DELETE FROM oportunidades WHERE loja_id = $1', [id]);   // referencia funis/etapas com RESTRICT: sai antes do cascade
-    await c.query('DELETE FROM usuarios WHERE loja_id = $1', [id]);
-    await c.query('DELETE FROM lojas WHERE id = $1', [id]);
-    await c.query(`INSERT INTO auditoria (usuario_id, acao, alvo, detalhes) VALUES ($1, 'excluiu_loja', $2, $3)`, [req.usuario.id, id, { nome: l.nome, branchId: l.branch_id }]);
-  });
+  try {
+    await comoSistema(async (c) => {
+      await c.query('DELETE FROM sessoes WHERE usuario_id IN (SELECT id FROM usuarios WHERE loja_id = $1)', [id]);
+      await c.query('DELETE FROM oportunidades WHERE loja_id = $1', [id]);   // referencia funis/etapas com RESTRICT: sai antes do cascade
+      await c.query('DELETE FROM tarefas WHERE loja_id = $1', [id]);
+      await c.query('UPDATE conversas SET loja_atendimento_id = NULL, transferida_por = NULL WHERE loja_atendimento_id = $1', [id]);   // conversas de outras lojas transferidas para cá voltam à origem
+      await c.query('DELETE FROM usuario_lojas WHERE loja_id = $1', [id]);
+      await c.query('DELETE FROM usuarios WHERE loja_id = $1', [id]);
+      await c.query('DELETE FROM lojas WHERE id = $1', [id]);
+      await c.query(`INSERT INTO auditoria (usuario_id, acao, alvo, detalhes) VALUES ($1, 'excluiu_loja', $2, $3)`, [req.usuario.id, id, { nome: l.nome, branchId: l.branch_id }]);
+    });
+  } catch (e) {
+    // violação de chave: diz qual tabela segurou, em vez de um 500 genérico
+    if (e.code === '23503' || e.code === '23001') throw erro(409, `Não deu para excluir: ainda há registros ligados a esta loja (${e.table || e.constraint || 'tabela'}: ${String(e.detail || e.message).slice(0, 160)}).`);
+    throw e;
+  }
   res.status(204).end();
 }));
 
@@ -191,6 +200,17 @@ admin.delete('/lojas/:id/acessos/:usuarioId', exigirPerfil('admin'), rota(async 
     await registrar(c, req, 'tirou_acesso_loja', { alvo: uid, lojaId: id });
   });
   res.status(204).end();
+}));
+// quem pode ser vinculado a esta loja: donos/atendentes ativos de outras lojas que ainda não têm acesso aqui
+admin.get('/lojas/:id/candidatos-acesso', exigirPerfil('admin'), rota(async (req, res) => {
+  const id = idValido(req.params.id);
+  const rows = await comContexto(ctx(req), async (c) => (await c.query(
+    `SELECT u.id, u.nome, u.email, u.perfil, l.nome AS loja_principal
+       FROM usuarios u LEFT JOIN lojas l ON l.id = u.loja_id
+      WHERE u.perfil IN ('dono', 'atendente') AND u.status <> 'inativo' AND u.loja_id <> $1
+        AND NOT EXISTS (SELECT 1 FROM usuario_lojas ul WHERE ul.usuario_id = u.id AND ul.loja_id = $1)
+      ORDER BY (u.perfil = 'dono') DESC, u.nome`, [id])).rows);
+  res.json(rows);
 }));
 admin.get('/lojas/:id/acessos', exigirPerfil('admin', 'matriz'), rota(async (req, res) => {
   const id = idValido(req.params.id);
