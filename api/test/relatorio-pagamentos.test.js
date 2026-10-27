@@ -14,7 +14,9 @@ const linha = (extra) => rel.itemRelatorio({ id: 'c1', loja_id: 'l1', loja_nome:
 test('totais somam só as pagas e separam estornos', () => {
   const itens = [linha(), linha({ id: 'c2', valor: '100.00', taxa: null, usuario_nome: 'Ana', origem: 'equipe' }), linha({ id: 'c3', status: 'estornada', valor: '50.00' })];
   const t = rel.totais(itens);
-  assert.deepEqual(t, { quantidade: 2, bruto: 450, taxas: 0.8, liquido: 449.2, estornadas: 1, valorEstornado: 50 });
+  assert.deepEqual(t, { quantidade: 2, bruto: 450, taxas: 0.8, liquido: 449.2, estornadas: 1, valorEstornado: 50, aRepassar: 449.2, naContaDaLoja: 0 });
+  const t2 = rel.totais([linha({ conta: 'loja' })]);
+  assert.equal(t2.aRepassar, 0); assert.equal(t2.naContaDaLoja, 349.2);
   assert.equal(itens[0].por, 'Assistente');
   assert.equal(itens[1].por, 'Ana');
   assert.equal(itens[0].liquido, 349.2);

@@ -207,3 +207,19 @@ test('textoOpcoes: com Pix ligado, oferece pagar pelo WhatsApp', () => {
   assert.ok(sem.includes('Pagamento na loja, na retirada.'));
   assert.ok(com.includes('via Pix') && !com.includes('Pagamento na loja, na retirada.'));
 });
+
+test('validarPeriodo: data que já passou pede a data certa, sem mandar para atendente', () => {
+  assert.throws(() => validarPeriodo({ data_retirada: '2026-10-13', hora_retirada: '12:00', data_devolucao: '2026-10-13', hora_devolucao: '18:00' }), /já passou.*Não consulte nem chame atendente/);
+});
+
+test('ferramentas: com várias filiais, consultar_disponibilidade exige a filial e aceita pelo nome', async () => {
+  const { ferramentasDaLoja } = await import('../src/servicos/locarx/ferramentas.js');
+  const ctx = { lojaId: 'l1', branchId: 5, filiais: [{ id: 'a', branchId: 5, nome: 'Aeroporto', principal: true }, { id: 'b', branchId: 9, nome: 'Centro' }], simulacao: true, locarxDisponivel: true };
+  const f = ferramentasDaLoja(ctx).find((x) => x.nome === 'consultar_disponibilidade');
+  assert.ok(f.parametros.required.includes('filial'));
+  const r = await f.executar({ data_retirada: '2099-01-10', hora_retirada: '10:00', data_devolucao: '2099-01-12', hora_devolucao: '10:00' });
+  assert.match(String(r), /Pergunte ao cliente em qual filial/);
+  const r2 = await f.executar({ data_retirada: '2099-01-10', hora_retirada: '10:00', data_devolucao: '2099-01-12', hora_devolucao: '10:00', filial: 'centro' }).catch((e) => e);
+  assert.equal(ctx.branchId, 9);   // escolha aplicada antes de falar com o portal
+  assert.equal(ctx.filialNome, 'Centro');
+});

@@ -27,3 +27,18 @@ export async function enviarAoCliente(conversaId, texto, { autor = 'assistente',
     return true;
   });
 }
+
+// Envia um documento (ex.: comprovante em PDF) ao cliente e registra na conversa.
+export async function enviarDocumentoAoCliente(conversaId, { buffer, mimetype = 'application/pdf', nomeArquivo, legenda = '' }, { autor = 'assistente' } = {}) {
+  return comoSistema(async (c) => {
+    const cv = (await c.query('SELECT cv.id, cv.loja_id, ct.telefone FROM conversas cv JOIN contatos ct ON ct.id = cv.contato_id WHERE cv.id = $1', [conversaId])).rows[0];
+    if (!cv) return false;
+    const canal = (await c.query('SELECT * FROM canais WHERE loja_id = $1', [cv.loja_id])).rows[0];
+    if (!canal || canal.status !== 'conectado') return false;
+    const externoId = await provedores[canal.provedor].enviarMidia(canal.instancia, cv.telefone, { tipo: 'documento', mimetype, base64: buffer.toString('base64'), nomeArquivo, legenda });
+    await c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto, externo_id, midia) VALUES ($1, $2, 'saida', $3, 'documento', $4, $5, $6)`,
+      [cv.id, cv.loja_id, autor, legenda || nomeArquivo, externoId, { mimetype, nome: nomeArquivo, tamanho: buffer.length }]);
+    await c.query(`UPDATE conversas SET ultima_previa = $2, ultima_mensagem_em = now(), atualizada_em = now() WHERE id = $1`, [cv.id, `📎 ${nomeArquivo}`]);
+    return true;
+  });
+}

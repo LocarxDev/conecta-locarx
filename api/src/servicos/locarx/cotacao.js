@@ -21,10 +21,16 @@ export function validarPeriodo(a, { antecedenciaHoras = 24 } = {}) {
   const retirada = { date: a.data_retirada, time: a.hora_retirada }, devolucao = { date: a.data_devolucao, time: a.hora_devolucao };
   const ini = instante(retirada), fim = instante(devolucao);
   if (Number.isNaN(ini.getTime()) || Number.isNaN(fim.getTime())) throw new Error('Data inválida.');
+  // data que já passou: não é caso de atendente, é pedir a data certa (o cliente costuma errar o mês ou o ano)
+  if (ini < new Date()) {
+    const hoje = new Date(Date.now() - 3 * 3_600_000).toISOString().slice(0, 10).split('-').reverse().join('/');
+    const data = retirada.date.split('-').reverse().join('/');
+    if (antecedenciaHoras <= 0) throw new Error(`A retirada precisa ser no futuro: ${data} já passou (hoje é ${hoje}).`);
+    throw new Error(`A data de retirada ${data} já passou (hoje é ${hoje}). Não consulte nem chame atendente: diga ao cliente que essa data já passou e pergunte a data correta de retirada.`);
+  }
   if (antecedenciaHoras > 0 && ini < new Date(Date.now() + antecedenciaHoras * 3_600_000)) {
     throw new Error(`Retirada com menos de ${antecedenciaHoras} horas de antecedência não pode ser reservada pelo assistente. Avise o cliente e use chamar_atendente com o motivo "retirada em menos de ${antecedenciaHoras} h".`);
   }
-  if (antecedenciaHoras <= 0 && ini < new Date()) throw new Error('A retirada precisa ser no futuro.');
   if (fim <= ini) throw new Error('A devolução precisa ser depois da retirada.');
   if (fim - ini > 90 * 86_400_000) throw new Error('Períodos acima de 90 dias precisam ser tratados com um atendente.');
   return { retirada, devolucao, ini, fim };

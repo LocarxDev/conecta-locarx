@@ -75,3 +75,10 @@ test('prompt: com Pix, nenhuma regra fixa diz que o pagamento é só na loja', (
   assert.ok(!com.includes('O pagamento é feito na loja, na retirada.'));
   assert.ok(com.includes('Passo 4b') && com.includes('Passo 7b') && com.includes('via Pile'.replace('Pile', 'Pix')));
 });
+
+test('prompt: com mais de uma filial, o roteiro começa pela escolha da filial', () => {
+  const uma = montarSistema({ ...base, filiais: [{ id: 'a', nome: 'Aeroporto', principal: true }] });
+  const duas = montarSistema({ ...base, filiais: [{ id: 'a', nome: 'Aeroporto', principal: true }, { id: 'b', nome: 'Centro' }] });
+  assert.ok(!uma.includes('Passo 0'));
+  assert.ok(duas.includes('Passo 0 — Filial') && duas.includes('Aeroporto, Centro'));
+});

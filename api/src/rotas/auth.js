@@ -37,7 +37,7 @@ async function criarSessao(c, req, res, usuario) {
 
 async function usuarioComLoja(c, id) {
   const { rows } = await c.query(
-    `SELECT u.*, l.nome AS loja_nome, l.cidade AS loja_cidade, l.uf AS loja_uf
+    `SELECT u.*, l.nome AS loja_nome, l.cidade AS loja_cidade, l.uf AS loja_uf, l.modulos AS loja_modulos
        FROM usuarios u LEFT JOIN lojas l ON l.id = u.loja_id WHERE u.id = $1`, [id]);
   return rows[0];
 }

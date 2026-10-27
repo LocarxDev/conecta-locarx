@@ -1,13 +1,19 @@
 // Relatórios: da loja (dono) e da rede (administração e matriz). Só números, sem conteúdo de conversas.
 import { api } from '../api.js';
-import { html, render, $, $$, icone, seguro } from '../util.js';
+import { html, render, $, $$, icone, seguro, paginar, ligarPaginacao } from '../util.js';
 
 const reais = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
 const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
 const minutos = (m) => (m == null ? '—' : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`);
 
+function painelGrupos(grupos, { sub }) {
+  const max = Math.max(1, ...grupos.map((g) => g.reservas));
+  return html`<section class="painel"><div class="painel-cab"><div><h2>Grupos mais reservados</h2><span class="sub">${sub}</span></div></div>
+    ${grupos.length ? html`<div class="painel-corpo barras-grupos">${grupos.map((g) => html`<div class="barra-grupo"><div class="barra-rotulo"><span>${g.grupo}</span><strong class="num">${g.reservas} · ${g.pct}%</strong></div><div class="barra-trilho"><div class="barra-cheia" style="width:${Math.round((g.reservas / max) * 100)}%"></div></div><span class="sub num">${reais(g.valor)}</span></div>`)}</div>` : html`<div class="estado"><p>Nenhuma reserva no período.</p></div>`}</section>`;
+}
+
 function seletorPeriodo(dias) {
-  return html`<div class="abas" role="tablist" aria-label="Período">${[[7, '7 dias'], [30, '30 dias'], [90, '90 dias']].map(([d, t]) => html`<button role="tab" data-dias="${d}" class="${d === dias ? 'ativa' : ''}" aria-selected="${d === dias}">${t}</button>`)}</div>`;
+  return html`<div class="abas" role="tablist" aria-label="Período">${[[7, '7 dias'], [15, '15 dias'], [30, 'Mês'], [90, '90 dias']].map(([d, t]) => html`<button role="tab" data-dias="${d}" class="${d === dias ? 'ativa' : ''}" aria-selected="${d === dias}">${t}</button>`)}</div>`;
 }
 
 // gráfico de barras simples (uma série, um eixo), com dica ao passar o mouse
@@ -38,16 +44,18 @@ function aplicarLarguras(raiz) { $$('[style-h-w]', raiz).forEach((b) => { b.styl
 
 // ---------------- loja ----------------
 export async function loja(alvo, ctx) {
-  let dias = 30;
+  let dias = 30, filial = '', filiais = [];
+  try { filiais = await api.filiais(); } catch { filiais = []; }
+  const seletorFilial = () => (filiais.length > 1 ? html`<select class="select-filial" id="filial-rel" aria-label="Filial"><option value="">Todas as filiais</option>${filiais.map((f) => html`<option value="${f.branchId}" ${String(filial) === String(f.branchId) ? 'selected' : ''}>${f.nome}</option>`)}</select>` : '');
   async function carregar() {
     render(alvo, html`<div class="cabecalho-pagina"><div class="titulos"><h1>Relatórios</h1><p>Carregando…</p></div>${seletorPeriodo(dias)}</div>`);
     let r;
-    try { r = await api.relatorioLoja(dias); } catch (err) {
+    try { r = await api.relatorioLoja(dias, filial || undefined); } catch (err) {
       if (err.status === 401) return ctx.sessaoExpirou();
       return render(alvo, html`<div class="painel"><div class="estado">${icone('alerta')}<h3>Não foi possível carregar</h3><p>${err.message}</p></div></div>`);
     }
     render(alvo, html`
-      <div class="cabecalho-pagina"><div class="titulos"><h1>Relatórios</h1><p>Atendimento da ${ctx.usuario.loja?.nome || 'loja'} nos últimos ${dias} dias.</p></div>${seletorPeriodo(dias)}</div>
+      <div class="cabecalho-pagina"><div class="titulos"><h1>Relatórios</h1><p>Atendimento da ${ctx.usuario.loja?.nome || 'loja'} nos últimos ${dias} dias${filial ? ` · reservas da filial ${filiais.find((f) => String(f.branchId) === String(filial))?.nome || filial}` : ''}.</p></div><div class="filtros">${seletorFilial()}${seletorPeriodo(dias)}</div></div>
       <div class="resumo">
         <div class="resumo-item"><span class="rotulo">Conversas com clientes</span><span class="valor">${r.conversas}</span><span class="detalhe">${pct(r.soAssistente, r.conversas)}% resolvidas só pelo assistente</span></div>
         <div class="resumo-item"><span class="rotulo">Reservas</span><span class="valor">${r.reservas}</span><span class="detalhe">${r.reservasAssistente} feitas pelo assistente</span></div>
@@ -64,6 +72,7 @@ export async function loja(alvo, ctx) {
         <section class="painel"><div class="painel-cab"><h2>Por que não fecharam</h2></div>
           ${r.perdas.length ? html`<div class="lista-simples">${r.perdas.map((p) => html`<div><span>${p.motivo || 'Sem motivo'}</span><strong class="num">${p.n}</strong></div>`)}</div>` : html`<div class="estado"><p>Nenhuma perda registrada no período.</p></div>`}</section>
       </div>
+      ${painelGrupos(r.grupos || [], { sub: 'reservas feitas nos últimos ' + dias + ' dias (sem as canceladas)' })}
       <div class="duas-colunas">
         <section class="painel"><div class="painel-cab"><h2>Equipe</h2></div>
           ${r.equipe.length ? html`<div class="tabela-caixa"><table class="tabela"><thead><tr><th>Pessoa</th><th>Conversas atendidas</th><th>Mensagens</th></tr></thead>
@@ -80,13 +89,14 @@ export async function loja(alvo, ctx) {
           <tbody>${r.porDia.map((d) => html`<tr><td class="num">${new Date(d.dia + 'T12:00:00').toLocaleDateString('pt-BR')}</td><td class="num">${d.conversas}</td><td class="num">${d.reservas}</td></tr>`)}</tbody></table></div></details>`);
     aplicarAlturas(alvo); aplicarLarguras(alvo);
     $$('[data-dias]', alvo).forEach((b) => b.addEventListener('click', () => { dias = Number(b.dataset.dias); carregar(); }));
+    $('#filial-rel', alvo)?.addEventListener('change', (e) => { filial = e.target.value; carregar(); });
   }
   carregar();
 }
 
 // ---------------- rede ----------------
 export async function rede(alvo, ctx) {
-  let dias = 30, ordem = 'reservas';
+  let dias = 30, ordem = 'reservas', busca = '', pagina = 1;
   async function carregar() {
     render(alvo, html`<div class="cabecalho-pagina"><div class="titulos"><h1>Relatórios da rede</h1><p>Carregando…</p></div>${seletorPeriodo(dias)}</div>`);
     let r;
@@ -95,16 +105,20 @@ export async function rede(alvo, ctx) {
       return render(alvo, html`<div class="painel"><div class="estado">${icone('alerta')}<h3>Não foi possível carregar</h3><p>${err.message}</p></div></div>`);
     }
     const desenhar = () => {
-      const lojas = [...r.lojas].sort((a, b) => (b[ordem] ?? -1) - (a[ordem] ?? -1));
+      const q = busca.trim().toLowerCase();
+      const ordenadas = [...r.lojas].sort((a, b) => (b[ordem] ?? -1) - (a[ordem] ?? -1)).map((l, i) => ({ ...l, posicao: i + 1 }));
+      const filtradas = q ? ordenadas.filter((l) => `${l.nome} ${l.cidade} ${l.uf}`.toLowerCase().includes(q)) : ordenadas;
+      const pg = paginar(filtradas, pagina, 15, { rotulo: 'lojas' }); pagina = pg.pagina; const lojas = pg.fatia;
       render($('#ranking', alvo), html`<table class="tabela"><thead><tr><th>#</th><th>Loja</th>
         ${[['conversas', 'Conversas'], ['reservas', 'Reservas'], ['valor', 'Valor'], ['conversao', 'Conversão']].map(([k, t]) => html`<th><button class="ordenar ${ordem === k ? 'ativa' : ''}" data-ordem="${k}">${t}</button></th>`)}
         <th class="col-opcional">WhatsApp</th><th class="col-opcional">Assistente</th><th class="col-opcional">Resposta da equipe</th></tr></thead>
-        <tbody>${lojas.map((l, i) => html`<tr><td class="num sub">${i + 1}</td><td><strong>${l.nome}</strong><div class="sub">${l.cidade}/${l.uf}${l.ativa ? '' : ' · desativada'}</div></td>
+        <tbody>${lojas.map((l) => html`<tr><td class="num sub">${l.posicao}</td><td><strong>${l.nome}</strong><div class="sub">${l.cidade}/${l.uf}${l.ativa ? '' : ' · desativada'}</div></td>
           <td class="num">${l.conversas}</td><td class="num">${l.reservas}</td><td class="num">${reais(l.valor)}</td><td class="num">${l.conversao}%</td>
           <td class="col-opcional">${l.whatsapp === 'conectado' ? html`<span class="selo ok">Conectado</span>` : html`<span class="selo neutro">Desconectado</span>`}</td>
           <td class="col-opcional">${l.assistente ? html`<span class="selo ok">Ligado</span>` : html`<span class="selo neutro">Desligado</span>`}</td>
-          <td class="col-opcional num">${minutos(l.respostaMedianaMin)}</td></tr>`)}</tbody></table>`);
-      $$('[data-ordem]', alvo).forEach((b) => b.addEventListener('click', () => { ordem = b.dataset.ordem; desenhar(); }));
+          <td class="col-opcional num">${minutos(l.respostaMedianaMin)}</td></tr>`)}</tbody></table>${pg.controles}`);
+      $$('[data-ordem]', alvo).forEach((b) => b.addEventListener('click', () => { ordem = b.dataset.ordem; pagina = 1; desenhar(); }));
+      ligarPaginacao($('#ranking', alvo), (d) => { pagina += d; desenhar(); });
     };
     render(alvo, html`
       <div class="cabecalho-pagina"><div class="titulos"><h1>Relatórios da rede</h1><p>Todas as lojas LocarX no Conecta, últimos ${dias} dias. Só números: as conversas ficam com cada loja.</p></div>${seletorPeriodo(dias)}</div>
@@ -114,8 +128,10 @@ export async function rede(alvo, ctx) {
         <div class="resumo-item"><span class="rotulo">Valor reservado</span><span class="valor">${reais(r.total.valor)}</span><span class="detalhe">soma das lojas</span></div>
         <div class="resumo-item"><span class="rotulo">Conversão da rede</span><span class="valor">${pct(r.total.reservas, r.total.conversas)}%</span><span class="detalhe">conversas que viraram reserva</span></div>
       </div>
-      <section class="painel"><div class="painel-cab"><h2>Ranking das lojas</h2><span class="sub">Clique no título da coluna para ordenar</span></div><div class="tabela-caixa" id="ranking"></div></section>`);
+      ${painelGrupos(r.grupos || [], { sub: 'toda a rede, últimos ' + dias + ' dias (sem as canceladas)' })}
+      <section class="painel"><div class="painel-cab"><div><h2>Ranking das lojas</h2><span class="sub">Clique no título da coluna para ordenar</span></div><label class="busca"><span class="sr-only">Buscar loja</span>${icone('busca')}<input id="busca-loja-rede" type="search" placeholder="Buscar loja ou cidade" value="${busca}"></label></div><div class="tabela-caixa" id="ranking"></div></section>`);
     desenhar();
+    $('#busca-loja-rede', alvo)?.addEventListener('input', (e) => { busca = e.target.value; pagina = 1; desenhar(); });
     $$('[data-dias]', alvo).forEach((b) => b.addEventListener('click', () => { dias = Number(b.dataset.dias); carregar(); }));
   }
   carregar();

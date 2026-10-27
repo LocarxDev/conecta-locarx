@@ -1,6 +1,7 @@
 // Peças comuns das rotas: erros, sessão por cookie, CSRF, origem, perfis e formatos de resposta.
 import { z } from 'zod';
 import { config } from './config.js';
+import { moduloLigado, normalizarModulos } from './servicos/modulos.js';
 import { comoSistema } from './banco/conexao.js';
 import { hashToken, iguais } from './servicos/seguranca.js';
 
@@ -69,8 +70,11 @@ export async function carregarSessao(req, res, next) {
   try {
     const achado = await comoSistema(async (c) => {
       const { rows } = await c.query(
-        `SELECT s.id AS sessao_id, s.csrf, s.ultimo_uso, u.*, l.nome AS loja_nome, l.cidade AS loja_cidade, l.uf AS loja_uf, l.ativa AS loja_ativa
-           FROM sessoes s JOIN usuarios u ON u.id = s.usuario_id LEFT JOIN lojas l ON l.id = u.loja_id
+        `SELECT s.id AS sessao_id, s.csrf, s.ultimo_uso, u.*, coalesce(s.loja_id, u.loja_id) AS loja_id, u.loja_id AS loja_principal_id, coalesce(ul.perfil, u.perfil) AS perfil,
+                l.nome AS loja_nome, l.cidade AS loja_cidade, l.uf AS loja_uf, l.ativa AS loja_ativa, l.modulos AS loja_modulos,
+                (SELECT count(*)::int FROM usuario_lojas ul JOIN lojas lx ON lx.id = ul.loja_id AND lx.ativa WHERE ul.usuario_id = u.id) AS qtd_lojas
+           FROM sessoes s JOIN usuarios u ON u.id = s.usuario_id LEFT JOIN lojas l ON l.id = coalesce(s.loja_id, u.loja_id)
+           LEFT JOIN usuario_lojas ul ON ul.usuario_id = u.id AND ul.loja_id = coalesce(s.loja_id, u.loja_id) AND u.perfil IN ('dono', 'atendente')
           WHERE s.token_hash = $1 AND s.tipo = 'sessao' AND s.expira_em > now()
             AND s.ultimo_uso > now() - make_interval(hours => $2)`,
         [hashToken(token), config.sessaoInatividadeHoras],
@@ -112,6 +116,13 @@ export function exigirCsrf(req, res, next) {
   next();
 }
 
+// módulo liberado para a loja do usuário (administração/matriz passam sempre)
+export const exigirModulo = (chave) => (req, res, next) => {
+  if (!req.usuario) return next(erro(401, 'Sua sessão terminou. Entre novamente.'));
+  if (!req.usuario.loja_id || moduloLigado(req.usuario.loja_modulos, chave)) return next();
+  next(erro(403, 'Este recurso não está liberado para a sua loja. Fale com a administração da rede.'));
+};
+
 export const exigirPerfil = (...perfis) => (req, res, next) => {
   if (!perfis.includes(req.usuario?.perfil)) return next(erro(403, 'Você não tem acesso a esta área.'));
   next();
@@ -123,7 +134,8 @@ export function usuarioPublico(u) {
     id: u.id, nome: u.nome, email: u.email, perfil: u.perfil, lojaId: u.loja_id, status: u.status,
     doisFatores: !!u.totp_ativo, ultimoAcesso: u.ultimo_acesso,
     ...(u.loja_id ? { disponivel: !!u.disponivel, naRoleta: u.na_roleta !== false } : {}),
-    ...(u.loja_nome !== undefined ? { loja: u.loja_id ? { id: u.loja_id, nome: u.loja_nome, cidade: u.loja_cidade, uf: u.loja_uf } : null } : {}),
+    ...(u.loja_nome !== undefined ? { loja: u.loja_id ? { id: u.loja_id, nome: u.loja_nome, cidade: u.loja_cidade, uf: u.loja_uf, modulos: normalizarModulos(u.loja_modulos) } : null } : {}),
+    ...(u.qtd_lojas > 1 ? { variasLojas: true } : {}),
   };
 }
 
@@ -132,6 +144,8 @@ export function lojaPublica(l) {
     id: l.id, nome: l.nome, cidade: l.cidade, uf: l.uf,
     filial: { branchId: l.branch_id, branchCode: l.branch_code, tipo: l.tipo },
     ativa: l.ativa, whatsapp: l.whatsapp, assistente: l.assistente, criadaEm: l.criada_em,
+    modulos: normalizarModulos(l.modulos),
+    pix: { proprio: !!l.pix_proprio, temChave: !!l.abacatepay_chave_cifrada, chaveFinal: l.abacatepay_chave_final || null, devMode: l.abacatepay_dev ?? null },
     ...(l.qtd_usuarios !== undefined ? { usuarios: Number(l.qtd_usuarios), dono: l.dono_nome || null } : {}),
   };
 }

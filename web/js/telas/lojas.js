@@ -1,6 +1,6 @@
 // Lojas da rede (administração e matriz): lista, cadastro e detalhe com a equipe da loja.
 import { api } from '../api.js';
-import { html, render, $, $$, icone, data, avisar, abrirModal, confirmar, dadosDoForm, marcarErros, comBotao } from '../util.js';
+import { html, render, $, $$, icone, data, avisar, abrirModal, confirmar, dadosDoForm, marcarErros, comBotao, paginar, ligarPaginacao } from '../util.js';
 import { painelEquipe } from './equipe.js';
 
 const UFS = 'AC AL AP AM BA CE DF ES GO MA MT MS MG PA PB PR PE PI RJ RN RS RO RR SC SP SE TO'.split(' ');
@@ -85,7 +85,7 @@ function abrirFormLoja(loja, aoSalvar) {
 export async function lista(alvo, ctx) {
   const ehAdmin = ctx.usuario.perfil === 'admin';
   let lojas = [];
-  let busca = '';
+  let busca = '', pagina = 1;
 
   render(alvo, html`
     <div class="cabecalho-pagina">
@@ -110,15 +110,17 @@ export async function lista(alvo, ctx) {
       return;
     }
     if (!vis.length) { render(area, html`<div class="estado">${icone('busca')}<h3>Nada encontrado</h3><p>Nenhuma loja corresponde a essa busca.</p></div>`); return; }
+    const pg = paginar(vis, pagina, 20, { rotulo: 'lojas' }); pagina = pg.pagina;
     render(area, html`<div class="tabela-caixa"><table class="tabela">
       <thead><tr><th>Loja</th><th class="col-opcional">Filial no portal</th><th class="col-opcional">Dono</th><th class="col-opcional">WhatsApp</th><th>Situação</th></tr></thead>
-      <tbody>${vis.map((l) => html`<tr class="clicavel" data-id="${l.id}" tabindex="0">
+      <tbody>${pg.fatia.map((l) => html`<tr class="clicavel" data-id="${l.id}" tabindex="0">
         <td><strong>${l.nome}</strong><div class="sub">${l.cidade} · ${l.uf} · ${l.usuarios} ${l.usuarios === 1 ? 'pessoa' : 'pessoas'}</div></td>
         <td class="col-opcional">${filial(l.filial)}</td>
         <td class="col-opcional">${l.dono || html`<span class="sub">Sem dono convidado</span>`}</td>
         <td class="col-opcional">${seloWhats(l.whatsapp)}</td>
         <td>${seloAtiva(l.ativa)}</td>
-      </tr>`)}</tbody></table></div>`);
+      </tr>`)}</tbody></table></div>${pg.controles}`);
+    ligarPaginacao(area, (d) => { pagina += d; desenhar(); });
     $$('tr.clicavel', area).forEach((tr) => {
       const ir = () => ctx.navegar(`lojas/${tr.dataset.id}`);
       tr.addEventListener('click', ir);
@@ -126,7 +128,7 @@ export async function lista(alvo, ctx) {
     });
   };
 
-  $('#busca-loja', alvo).addEventListener('input', (e) => { busca = e.target.value; desenhar(); });
+  $('#busca-loja', alvo).addEventListener('input', (e) => { busca = e.target.value; pagina = 1; desenhar(); });
   const novo = () => abrirFormLoja(null, (l) => ctx.navegar(`lojas/${l.id}`));
   $('#nova-loja', alvo)?.addEventListener('click', novo);
 
@@ -167,6 +169,7 @@ export async function detalhe(alvo, ctx) {
         <button class="btn btn-contorno" id="testar-api">Testar API LocarX</button>
         <button class="btn btn-contorno" id="editar-loja">${icone('editar')}Editar</button>
         <button class="btn ${loja.ativa ? 'btn-perigo' : 'btn-primario'}" id="situacao-loja">${loja.ativa ? 'Desativar loja' : 'Reativar loja'}</button>
+        ${!loja.ativa ? html`<button class="btn btn-texto" id="excluir-loja" title="Apaga a loja e tudo o que é dela (para lojas de teste)">Excluir loja</button>` : ''}
       </div>` : ''}
     </div>
     ${loja.filialPortal?.encontrada === false ? html`<div class="alerta-caixa erro">${icone('alerta')}<span><strong>Filial ${loja.filial.branchId} não existe no ambiente atual da API LocarX (${loja.filialPortal.ambiente}).</strong> Os ids mudam entre homologação e produção: edite a loja e escolha a filial de novo em "Buscar filiais no portal". Até lá, cotações e reservas desta loja falham.</span></div>` : ''}
@@ -179,11 +182,146 @@ export async function detalhe(alvo, ctx) {
         <div class="dado"><dt>WhatsApp da loja</dt><dd>${seloWhats(loja.whatsapp)}</dd></div>
         <div class="dado"><dt>Assistente virtual</dt><dd><span class="selo neutro">Desligado</span></dd></div>
         <div class="dado"><dt>Pessoas com acesso</dt><dd class="num">${loja.usuarios.filter((u) => u.status === 'ativo').length} ativas</dd></div>
+        <div class="dado"><dt>Recebimento do Pix</dt><dd>${loja.pix?.proprio
+          ? html`<span class="selo marca sem-ponto">Conta própria</span> <span class="sub">${loja.pix.temChave ? `chave …${loja.pix.chaveFinal}${loja.pix.devMode === true ? ' · sandbox' : loja.pix.devMode === false ? ' · produção' : ''}` : 'a loja ainda não cadastrou a chave'}</span>`
+          : html`<span class="selo neutro">Conta da rede</span> <span class="sub">repasse pelo relatório</span>`}
+          ${ehAdmin ? html`<div><button class="btn btn-texto" id="pix-proprio">${loja.pix?.proprio ? 'Voltar para a conta da rede' : 'Liberar conta própria (AbacatePay da loja)'}</button></div>` : ''}</dd></div>
       </dl></div>
+    </section>
+    <section class="painel" id="modulos-loja">
+      <div class="painel-cab"><div><h2>Módulos do plano</h2><span class="sub">O que esta loja pode usar no Conecta. Desligado some do menu da loja e a API bloqueia. A equipe entra de novo ao salvar.</span></div>
+        ${ehAdmin ? html`<div class="filtros"><button class="btn btn-texto" data-plano="todos">Marcar tudo</button><button class="btn btn-texto" data-plano="basico">Plano básico</button></div>` : ''}</div>
+      <form class="painel-corpo" id="form-modulos" novalidate><div class="lista-modulos" data-lista-modulos><div class="esqueleto"></div></div>
+        ${ehAdmin ? html`<div class="acoes-form"><button class="btn btn-primario" type="submit">Salvar módulos</button><span class="sub">${Object.values(loja.modulos || {}).every(Boolean) ? 'Hoje: tudo liberado.' : 'Hoje: plano com restrições.'}</span></div>` : ''}
+      </form>
+    </section>
+    <section class="painel" id="filiais-loja">
+      <div class="painel-cab"><div><h2>Filiais da franquia</h2><span class="sub">Várias filiais do portal LocarX no mesmo WhatsApp e na mesma equipe (ex.: Aeroporto e Centro). A principal é a padrão.</span></div>
+        ${ehAdmin ? html`<button class="btn btn-contorno" id="nova-filial">${icone('mais')}Adicionar filial</button>` : ''}</div>
+      <div class="tabela-caixa"><table class="tabela"><thead><tr><th>Filial</th><th>Nº no portal</th><th>Situação</th><th><span class="sr-only">Ações</span></th></tr></thead>
+        <tbody>${(loja.filiais || []).map((f) => html`<tr>
+          <td><strong>${f.nome}</strong>${f.principal ? html` <span class="selo marca sem-ponto">Principal</span>` : ''}</td>
+          <td class="num">${f.branchId}</td>
+          <td>${f.ativa ? html`<span class="selo ok">Ativa</span>` : html`<span class="selo neutro">Desativada</span>`}</td>
+          <td><div class="acoes-linha">${ehAdmin && !f.principal ? html`<button class="btn btn-texto" data-filial-principal="${f.id}">Tornar principal</button><button class="btn btn-texto" data-filial-remover="${f.id}">Remover</button>` : ''}</div></td>
+        </tr>`)}</tbody></table></div>
+    </section>
+    <section class="painel" id="acessos-loja">
+      <div class="painel-cab"><div><h2>Donos de outras lojas com acesso aqui</h2><span class="sub">Para quem tem mais de uma loja: a pessoa entra com o mesmo login e troca de loja no topo da tela.</span></div>
+        ${ehAdmin ? html`<button class="btn btn-contorno" id="dar-acesso">${icone('mais')}Dar acesso</button>` : ''}</div>
+      <div id="lista-acessos"><div class="painel-corpo"><p class="sub">Carregando…</p></div></div>
     </section>
     <div id="equipe-loja"></div>`);
 
+  // acessos extras (multiloja)
+  const listaAcessos = $('#lista-acessos', alvo);
+  const carregarAcessos = async () => {
+    try {
+      const rows = await api.acessosLoja(lojaId);
+      render(listaAcessos, rows.length ? html`<div class="tabela-caixa"><table class="tabela"><thead><tr><th>Pessoa</th><th>Nível aqui</th><th class="col-opcional">Loja principal</th><th><span class="sr-only">Ações</span></th></tr></thead>
+        <tbody>${rows.map((u) => html`<tr><td><strong>${u.nome}</strong><div class="sub">${u.email}</div></td><td>${u.perfil === 'dono' ? 'Dono da loja' : 'Atendente'}</td><td class="col-opcional">${u.loja_principal || '—'}</td>
+          <td><div class="acoes-linha">${ehAdmin ? html`<button class="btn btn-texto" data-tirar-acesso="${u.id}">Tirar acesso</button>` : ''}</div></td></tr>`)}</tbody></table></div>` : html`<div class="painel-corpo"><p class="sub">Ninguém de outra loja tem acesso a esta.</p></div>`);
+      $$('[data-tirar-acesso]', listaAcessos).forEach((b) => b.addEventListener('click', async () => {
+        if (!(await confirmar({ titulo: 'Tirar acesso', texto: 'A pessoa deixa de ver esta loja (continua na loja principal dela).', botao: 'Tirar acesso', perigo: true }))) return;
+        try { await api.tirarAcessoLoja(lojaId, b.dataset.tirarAcesso); carregarAcessos(); } catch (err) { avisar(err.message, 'erro'); }
+      }));
+    } catch (err) { render(listaAcessos, html`<div class="painel-corpo"><p class="sub">${err.message}</p></div>`); }
+  };
+  carregarAcessos();
+  $('#dar-acesso', alvo)?.addEventListener('click', () => {
+    const m = abrirModal({
+      titulo: 'Dar acesso a esta loja',
+      corpo: html`<form class="form" id="form-acesso" novalidate>
+        <div class="campo"><label for="a-email">E-mail de um dono ou atendente que já existe em outra loja</label><input id="a-email" name="email" type="email" required placeholder="dono@franquia.com.br"><p class="ajuda">Para alguém novo, use "Convidar" na equipe.</p></div>
+        <div class="campo"><label for="a-perfil">Nível nesta loja</label><select id="a-perfil" name="perfil"><option value="dono">Dono da loja</option><option value="atendente">Atendente</option></select></div>
+      </form>`,
+      rodape: html`<button class="btn btn-contorno" data-fechar>Cancelar</button><button class="btn btn-primario" form="form-acesso" type="submit">Dar acesso</button>`,
+    });
+    $('#form-acesso', m.el).addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const f = e.target; const d = dadosDoForm(f);
+      await comBotao($('[type=submit]', m.el), async () => {
+        try { const r = await api.darAcessoLoja(lojaId, d); m.fechar(); avisar(`${r.nome} agora acessa esta loja.`); carregarAcessos(); } catch (err) { if (err.campos) marcarErros(f, err.campos); avisar(err.message, 'erro'); }
+      });
+    });
+  });
+
+  // módulos do plano
+  (async () => {
+    let catalogo = [];
+    try { catalogo = await api.modulosCatalogo(); } catch { catalogo = []; }
+    const listaEl = $('[data-lista-modulos]', alvo);
+    const atual = loja.modulos || {};
+    const BASICO = { clientes: true, automacoes: true, base: true };
+    render(listaEl, html`${catalogo.map((m) => html`<label class="modulo-item"><label class="interruptor"><input type="checkbox" name="${m.chave}" ${atual[m.chave] !== false ? 'checked' : ''} ${ehAdmin ? '' : 'disabled'}><span class="sr-only">${m.nome}</span><span class="trilho"></span></label><span><strong>${m.nome}</strong><span class="sub">${m.descricao}</span></span></label>`)}`);
+    $$('[data-plano]', alvo).forEach((b) => b.addEventListener('click', () => {
+      const todos = b.dataset.plano === 'todos';
+      $$('input[type=checkbox]', listaEl).forEach((i) => { i.checked = todos || !!BASICO[i.name]; });
+    }));
+    $('#form-modulos', alvo).addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const modulos = Object.fromEntries($$('input[type=checkbox]', listaEl).map((i) => [i.name, i.checked]));
+      await comBotao($('[type=submit]', e.target), async () => {
+        try { await api.salvarModulosLoja(lojaId, modulos); avisar('Módulos salvos. A equipe da loja entra de novo com o menu atualizado.'); detalhe(alvo, ctx); } catch (err) { avisar(err.message, 'erro'); }
+      });
+    });
+  })();
+
+  $('#excluir-loja', alvo)?.addEventListener('click', () => {
+    const m = abrirModal({
+      titulo: 'Excluir loja',
+      corpo: html`<form class="form" id="form-excluir" novalidate>
+        <div class="alerta-caixa erro">${icone('alerta')}<span>Apaga <strong>${loja.nome}</strong> com equipe, conversas, clientes, reservas, cobranças de teste, base e funil. Não tem volta. Lojas com pagamentos Pix reais não podem ser excluídas (fique com ela desativada).</span></div>
+        <div class="campo"><label for="ex-nome">Para confirmar, digite o nome da loja</label><input id="ex-nome" name="confirmacao" autocomplete="off" placeholder="${loja.nome}"></div>
+      </form>`,
+      rodape: html`<button class="btn btn-contorno" data-fechar>Cancelar</button><button class="btn btn-perigo" form="form-excluir" type="submit">Excluir definitivamente</button>`,
+    });
+    $('#form-excluir', m.el).addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const f = e.target;
+      await comBotao($('[type=submit]', m.el), async () => {
+        try { await api.excluirLoja(lojaId, f.elements.confirmacao.value); m.fechar(); avisar('Loja excluída.'); ctx.navegar('lojas'); } catch (err) { if (err.campos) marcarErros(f, err.campos); avisar(err.message, 'erro'); }
+      });
+    });
+  });
+
+  $('#nova-filial', alvo)?.addEventListener('click', () => {
+    const m = abrirModal({
+      titulo: 'Adicionar filial',
+      corpo: html`<form class="form" id="form-filial" novalidate>
+        <div class="campo"><label for="f-nome">Nome curto</label><input id="f-nome" name="nome" placeholder="Ex.: Centro" required><p class="ajuda">É assim que o assistente vai chamar a filial ("retirada no Aeroporto ou no Centro?").</p></div>
+        <div class="campo campo-curto"><label for="f-branch">Número da filial no portal (branchId)</label><input id="f-branch" name="branchId" inputmode="numeric" required><p class="ajuda">O Conecta confere no portal se a filial existe no ambiente atual.</p></div>
+      </form>`,
+      rodape: html`<button class="btn btn-contorno" data-fechar>Cancelar</button><button class="btn btn-primario" form="form-filial" type="submit">Adicionar</button>`,
+    });
+    $('#form-filial', m.el).addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const f = e.target; const d = dadosDoForm(f);
+      if (!marcarErros(f, { ...(d.nome?.trim().length >= 2 ? {} : { nome: 'Dê um nome curto.' }), ...(/^\d+$/.test(d.branchId || '') ? {} : { branchId: 'Use só números.' }) })) return;
+      await comBotao($('[type=submit]', m.el), async () => {
+        try { await api.adicionarFilial(lojaId, d); m.fechar(); avisar('Filial adicionada.'); detalhe(alvo, ctx); } catch (err) { if (err.campos) marcarErros(f, err.campos); avisar(err.message, 'erro'); }
+      });
+    });
+  });
+  $$('[data-filial-principal]', alvo).forEach((b) => b.addEventListener('click', async () => {
+    if (!(await confirmar({ titulo: 'Tornar principal', texto: 'A filial principal é a padrão da loja (cotações sem escolha, teste da API, políticas importadas).', botao: 'Tornar principal' }))) return;
+    try { await api.editarFilial(lojaId, b.dataset.filialPrincipal, { principal: true }); avisar('Filial principal alterada.'); detalhe(alvo, ctx); } catch (err) { avisar(err.message, 'erro'); }
+  }));
+  $$('[data-filial-remover]', alvo).forEach((b) => b.addEventListener('click', async () => {
+    if (!(await confirmar({ titulo: 'Remover filial', texto: 'As reservas já feitas continuam registradas. Só deixa de aparecer como opção.', botao: 'Remover', perigo: true }))) return;
+    try { await api.removerFilial(lojaId, b.dataset.filialRemover); avisar('Filial removida.'); detalhe(alvo, ctx); } catch (err) { avisar(err.message, 'erro'); }
+  }));
+
   painelEquipe($('#equipe-loja', alvo), { ctx, lojaId, podeGerir: ehAdmin, podeConvidarDono: ehAdmin, titulo: 'Equipe da loja' });
+
+  $('#pix-proprio', alvo)?.addEventListener('click', async () => {
+    const ligar = !loja.pix?.proprio;
+    const ok = await confirmar({ titulo: ligar ? 'Liberar conta própria' : 'Voltar para a conta da rede', texto: ligar
+      ? 'A loja passa a receber os Pix do WhatsApp na própria conta AbacatePay. O dono cadastra a chave da conta em "Pagamentos online"; até lá, o Pix fica indisponível para esta loja. Ela sai do relatório de repasse.'
+      : 'Os próximos Pix desta loja voltam a cair na conta da rede (repasse pelo relatório). A chave cadastrada pela loja deixa de ser usada.', botao: ligar ? 'Liberar' : 'Voltar para a rede' });
+    if (!ok) return;
+    try { await api.pixProprioLoja(lojaId, ligar); avisar(ligar ? 'Conta própria liberada. Avise o dono para cadastrar a chave.' : 'Loja de volta à conta da rede.'); detalhe(alvo, ctx); } catch (err) { avisar(err.message, 'erro'); }
+  });
 
   const NOMES_DIAG = { ambiente: 'Ambiente', locality: 'GET /locality', availabilities: 'GET /availabilities/external', prices_calculate: 'POST /prices/calculate', reservations: 'GET /reservations', reservations_new_TESTE: 'POST /reservations/new (reserva de teste, cancelada em seguida)' };
   async function testarApi(comReserva) {

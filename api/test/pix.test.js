@@ -79,3 +79,21 @@ test('descrição do Pix sem travessão nem acento (AbacatePay recusa U+2014)', 
   assert.equal(textoSeguro('Reserva LocarX Loja — grupo C1 Econômico, 01/11 às 10:00'), 'Reserva LocarX Loja - grupo C1 Economico, 01/11 as 10:00');
   assert.equal(textoSeguro(''), 'Reserva LocarX');
 });
+
+test('código curto do pagamento: PG- + 6 caracteres legíveis, único', async () => {
+  const { gerarCodigo } = await import('../src/servicos/pagamentos/cobrancas.js');
+  const vistos = new Set();
+  for (let i = 0; i < 500; i++) { const c = gerarCodigo(); assert.match(c, /^PG-[A-HJ-NP-Z2-9]{6}$/); vistos.add(c); }
+  assert.equal(vistos.size, 500);
+});
+
+test('comprovante em PDF: gera uma página com código, valor e CPF só com o final', async () => {
+  const { gerarComprovantePdf } = await import('../src/servicos/pagamentos/comprovante.js');
+  const pdf = await gerarComprovantePdf({ lojaNome: 'LocarX Salvador', codigo: 'PG-ABC234', valor: 428.84, pagaEm: '2026-10-26T21:40:00Z', externoId: 'pix_char_x', devMode: true,
+    cliente: { nome: 'Silas Teste', cpfFinal: '18' }, cotacao: { grupo: 'B - Compacto com ar', retirada: { date: '2026-10-28', time: '10:00' }, devolucao: { date: '2026-10-31', time: '10:00' }, protecoes: ['PROTECAO_SUPER_X'], nomesProtecoes: ['Proteção Super X'] }, reservaCodigo: 'SSA1628675' });
+  assert.ok(Buffer.isBuffer(pdf) && pdf.length > 1000);
+  assert.equal(pdf.subarray(0, 5).toString(), '%PDF-');
+  const { PDFParse } = await import('pdf-parse');
+  const p = new PDFParse({ data: pdf }); const t = (await p.getText()).text; await p.destroy();
+  assert.match(t, /PG-ABC234/); assert.match(t, /SSA1628675/); assert.match(t, /\*\*\*\.\*\*\*\.\*\*\*-18/); assert.ok(!/\d{11}/.test(t.replace(/SSA\d+/, '')));
+});

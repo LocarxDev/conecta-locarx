@@ -7,6 +7,7 @@ import { criarApp } from './app.js';
 import { iniciarVarreduras } from './servicos/ia/assistente.js';
 import { iniciarAutomacoes } from './servicos/crm/modelos.js';
 import { iniciarVarreduraPix } from './servicos/pagamentos/cobrancas.js';
+import { aplicarRegrasFunil } from './servicos/crm/funis.js';
 
 async function criarAdminInicial() {
   if (!config.adminInicial) return;
@@ -31,6 +32,9 @@ async function iniciar() {
   iniciarVarreduras();
   iniciarAutomacoes();
   iniciarVarreduraPix();
+  // regras automáticas do funil (perdido sem resposta / concluído na retirada): a cada 10 min
+  const funil = () => comoSistema(aplicarRegrasFunil).then((f) => { if (f.perdidas || f.concluidas) console.log(`[funil] automático: ${f.perdidas} perdida(s), ${f.concluidas} concluída(s)`); }).catch((e) => console.error('[funil] regras:', e.message));
+  setTimeout(funil, 20_000); setInterval(funil, 10 * 60_000).unref();
   const servidor = criarApp().listen(config.porta, () => console.log(`[inicio] Conecta LocarX API na porta ${config.porta}`));
   const encerrar = () => { servidor.close(() => pool.end().then(() => process.exit(0))); setTimeout(() => process.exit(1), 10_000).unref(); };
   process.on('SIGTERM', encerrar);

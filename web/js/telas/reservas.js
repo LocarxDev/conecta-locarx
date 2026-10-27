@@ -7,7 +7,16 @@ const dataHora = (iso) => (iso ? new Date(iso).toLocaleString('pt-BR', { day: '2
 const SITUACAO = { confirmada: 'ok', 'em andamento': 'marca', concluida: 'neutro', cancelada: 'erro' };
 
 export async function montar(alvo, ctx) {
-  let periodo = 'proximas', busca = '', lista = [], espera = null;
+  let periodo = 'proximas', busca = '', lista = [], espera = null, variasFiliais = false, filial = '';
+  api.filiais().then((f) => {
+    variasFiliais = f.length > 1;
+    if (!variasFiliais) return;
+    const sel = document.createElement('select'); sel.id = 'filial-res'; sel.className = 'select-filial'; sel.setAttribute('aria-label', 'Filial');
+    render(sel, html`<option value="">Todas as filiais</option>${f.map((x) => html`<option value="${x.branchId}">${x.nome}</option>`)}`);
+    $('.painel-cab .abas', alvo).after(sel);
+    sel.addEventListener('change', () => { filial = sel.value; carregar(); });
+    if (lista.length) desenhar();
+  }).catch(() => {});
   render(alvo, html`
     <div class="cabecalho-pagina"><div class="titulos"><h1>Reservas</h1><p>Reservas feitas pelo WhatsApp da loja e enviadas ao portal LocarX.</p></div></div>
     <div id="cobrancas-pix" hidden></div>
@@ -25,7 +34,7 @@ export async function montar(alvo, ctx) {
     render(area, html`<div class="tabela-caixa"><table class="tabela">
       <thead><tr><th>Reserva</th><th>Cliente</th><th class="col-opcional">Retirada</th><th class="col-opcional">Devolução</th><th class="col-opcional">Valor</th><th>Situação</th><th><span class="sr-only">Ações</span></th></tr></thead>
       <tbody>${lista.map((r) => html`<tr>
-        <td><strong class="num">${r.codigo || '—'}</strong><div class="sub">${r.grupo || ''}${r.origem === 'assistente' ? ' · pelo assistente' : ''}</div></td>
+        <td><strong class="num">${r.codigo || '—'}</strong><div class="sub">${r.grupo || ''}${r.filial && variasFiliais ? ` · 📍 ${r.filial}` : ''}${r.origem === 'assistente' ? ' · pelo assistente' : ''}${r.pagamento === 'pix' ? ' · Pix' : ''}</div></td>
         <td>${r.contato ? html`${r.contato.nome || '+' + r.contato.telefone}${r.conversaId ? html`<div class="sub"><a href="#/conversas/${r.conversaId}">abrir conversa</a></div>` : ''}` : '—'}</td>
         <td class="col-opcional num">${dataHora(r.retirada)}</td><td class="col-opcional num">${dataHora(r.devolucao)}</td>
         <td class="col-opcional num">${reais(r.valor)}</td>
@@ -38,7 +47,7 @@ export async function montar(alvo, ctx) {
   }
 
   async function carregar() {
-    try { lista = await api.reservas({ periodo, busca: busca || undefined }); desenhar(); } catch (err) {
+    try { lista = await api.reservas({ periodo, busca: busca || undefined, filial: filial || undefined }); desenhar(); } catch (err) {
       if (err.status === 401) return ctx.sessaoExpirou();
       render(area, html`<div class="estado">${icone('alerta')}<h3>Não foi possível carregar</h3><p>${err.message}</p></div>`);
     }
@@ -51,20 +60,30 @@ export async function montar(alvo, ctx) {
   const areaPix = $('#cobrancas-pix', alvo);
   const SELO_PIX = { pendente: 'alerta', paga: 'ok', expirada: 'neutro', cancelada: 'neutro', estornada: 'erro', falhou: 'erro' };
   let timerPix = null;
+  let infoPix = null;   // { varredura: { ativa, intervaloSegundos, ultimaEm, erro }, versao }
+  const textoVarredura = () => {
+    const v = infoPix?.varredura;
+    if (!v) return 'verificação automática: sem informação (API antiga?)';
+    if (!v.ativa) return 'verificação automática DESLIGADA';
+    const ha = v.ultimaEm ? Math.round((Date.now() - new Date(v.ultimaEm)) / 1000) : null;
+    return `verificação automática a cada ${v.intervaloSegundos} s${ha != null ? ` · última há ${ha} s` : ' · ainda não rodou'}${v.erro ? ` · erro: ${v.erro}` : ''}${infoPix.versao ? ` · API ${infoPix.versao}` : ''}`;
+  };
   async function carregarPix() {
+    try { infoPix = await api.pagamentos(); } catch { infoPix = null; }
     let lista;
-    try { lista = await api.cobrancas({}); } catch (err) { if (err.status === 404) return; areaPix.hidden = true; return; }
+    if (ctx.usuario.loja?.modulos?.pix === false) { areaPix.hidden = true; return; }
+    try { lista = await api.cobrancas({}); } catch (err) { if (err.status === 404 || err.status === 403) return; areaPix.hidden = true; return; }
     if (!lista.length) { areaPix.hidden = true; return; }
     areaPix.hidden = false;
     render(areaPix, html`<section class="painel">
-      <div class="painel-cab"><h2>Pagamentos via Pix</h2><span class="sub">${lista.filter((c) => c.status === 'pendente').length} pendente(s) · atualiza sozinho</span></div>
+      <div class="painel-cab"><h2>Pagamentos via Pix</h2><span class="sub">${lista.filter((c) => c.status === 'pendente').length} pendente(s) · ${textoVarredura()}</span></div>
       <div class="tabela-caixa"><table class="tabela">
         <thead><tr><th>Quando</th><th>Cliente</th><th class="col-opcional">Reserva</th><th>Valor</th><th>Situação</th><th><span class="sr-only">Ações</span></th></tr></thead>
         <tbody>${lista.slice(0, 30).map((c) => html`<tr>
           <td class="num nowrap">${dataHora(c.criadaEm)}<div class="sub">${c.origem === 'equipe' ? 'pela equipe' : 'pelo assistente'}${c.devMode ? ' · teste' : ''}</div></td>
           <td>${c.cliente?.nome || '—'}${c.conversaId ? html`<div class="sub"><a href="#/conversas/${c.conversaId}">abrir conversa</a></div>` : ''}</td>
           <td class="col-opcional"><div class="sub">${c.grupo || ''}${c.periodo ? html`<br>${c.periodo.retirada.date.split('-').reverse().slice(0, 2).join('/')} ${c.periodo.retirada.time} → ${c.periodo.devolucao.date.split('-').reverse().slice(0, 2).join('/')} ${c.periodo.devolucao.time}` : ''}</div></td>
-          <td class="num"><strong>${reais(c.valor)}</strong></td>
+          <td class="num"><strong>${reais(c.valor)}</strong>${c.codigo ? html`<div class="sub num">${c.codigo}</div>` : ''}</td>
           <td><span class="selo ${SELO_PIX[c.status] || 'neutro'}">${c.status}</span><div class="sub">${c.status === 'pendente' ? 'vence ' + dataHora(c.expiraEm) : c.status === 'paga' ? 'pago ' + dataHora(c.pagaEm) : ''}${c.erro ? html`<div class="erro-texto">${c.erro}</div>` : ''}</div></td>
           <td><div class="acoes-linha">
             ${c.status === 'pendente' ? html`<button class="btn btn-texto" data-verificar="${c.id}" title="Consulta o AbacatePay agora">Verificar</button>` : ''}

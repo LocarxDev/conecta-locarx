@@ -189,6 +189,9 @@ export function painelEquipe(alvo, { ctx, lojaId, podeGerir, podeConvidarDono, t
       corpo: html`<form class="form" id="form-pessoa" novalidate>
         <div class="campo"><label for="p-nome">Nome</label><input id="p-nome" name="nome" value="${p.nome}" required></div>
         <div class="campo"><label for="p-email">E-mail</label><input id="p-email" value="${p.email}" disabled><p class="ajuda">O e-mail é trocado pela própria pessoa, em Meu perfil.</p></div>
+        <div class="campo"><label for="p-perfil">Nível de acesso</label>
+          <select id="p-perfil" name="perfil"><option value="atendente" ${p.perfil === 'atendente' ? 'selected' : ''}>Atendente — conversas, clientes, funil, cotação e reservas</option><option value="dono" ${p.perfil === 'dono' ? 'selected' : ''}>Dono da loja — tudo da loja: equipe, WhatsApp, assistente, relatórios e pagamentos</option></select>
+          <p class="ajuda">Ao mudar o nível, a pessoa é desconectada e entra de novo já com o acesso novo.</p></div>
         <div class="lista-simples painel">
           ${p.status === 'convidado' ? html`<div><span>Convite ainda não aceito</span><button type="button" class="btn btn-texto" data-reenviar>Reenviar convite</button></div>` : ''}
           ${p.status === 'ativo' ? html`<div><span>Bloquear o acesso desta pessoa</span><button type="button" class="btn btn-texto" data-situacao="inativo">Desativar</button></div>` : ''}
@@ -204,9 +207,10 @@ export function painelEquipe(alvo, { ctx, lojaId, podeGerir, podeConvidarDono, t
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const nome = form.elements.nome.value;
+      const perfil = form.elements.perfil.value;
       if (!marcarErros(form, nome.trim() ? {} : { nome: 'Informe o nome.' })) return;
       await comBotao($('[type=submit]', modal.el), async () => {
-        try { trocar(await api.atualizarUsuario(p.id, { nome })); modal.fechar(); avisar('Alterações salvas.'); } catch (err) { avisar(err.message, 'erro'); }
+        try { trocar(await api.atualizarUsuario(p.id, { nome, ...(perfil !== p.perfil ? { perfil } : {}) })); modal.fechar(); avisar(perfil !== p.perfil ? `${p.nome} agora é ${PAPEL[perfil].toLowerCase()}.` : 'Alterações salvas.'); } catch (err) { avisar(err.message, 'erro'); }
       });
     });
     $('[data-reenviar]', form)?.addEventListener('click', async () => {

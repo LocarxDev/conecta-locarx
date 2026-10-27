@@ -170,3 +170,63 @@ export async function registrarEvento(c, { lojaId, contatoId, conversaId, evento
      WHERE id = $1`,
     [o.id, avanca ? alvo.id : o.etapa_id, valor, reservaId, cotou, reservou, conversaId || null]);
 }
+
+// =====================================================================
+// Regras automáticas: perdido / concluído sem ninguém mexer (parâmetros em lojas.regras_funil)
+// =====================================================================
+export const REGRAS_PADRAO = { perdidoSemRespostaHoras: 48, perdidoPeloAssistente: true, concluidoAoPagar: true, concluidoNaRetirada: true };
+export const zRegrasFunil = z.object({
+  perdidoSemRespostaHoras: z.number().int().min(0).max(720),
+  perdidoPeloAssistente: z.boolean(),
+  concluidoAoPagar: z.boolean(),
+  concluidoNaRetirada: z.boolean(),
+});
+export async function regrasDaLoja(c, lojaId) {
+  const r = (await c.query('SELECT regras_funil FROM lojas WHERE id = $1', [lojaId])).rows[0]?.regras_funil;
+  return { ...REGRAS_PADRAO, ...(r || {}) };
+}
+
+/**
+ * Fecha a oportunidade aberta do contato no funil principal: move para a etapa de ganho/perdido e grava resultado.
+ * Não mexe em oportunidade já fechada nem em funil sem a etapa. Devolve true se fechou.
+ */
+export async function fecharOportunidade(c, { lojaId, contatoId, oportunidadeId = null, resultado, motivo = null, por = 'automatico' }) {
+  const o = oportunidadeId
+    ? (await c.query('SELECT * FROM oportunidades WHERE id = $1 AND loja_id = $2 AND fechada_em IS NULL FOR UPDATE', [oportunidadeId, lojaId])).rows[0]
+    : (await c.query(`SELECT o.* FROM oportunidades o JOIN funis f ON f.id = o.funil_id WHERE o.contato_id = $1 AND o.loja_id = $2 AND o.fechada_em IS NULL AND f.principal ORDER BY o.criada_em DESC LIMIT 1 FOR UPDATE OF o`, [contatoId, lojaId])).rows[0];
+  if (!o) return false;
+  const etapa = (await c.query('SELECT id FROM etapas_funil WHERE funil_id = $1 AND tipo = $2 LIMIT 1', [o.funil_id, resultado])).rows[0];
+  if (!etapa) return false;
+  await c.query(
+    `UPDATE oportunidades SET etapa_id = $2, resultado = $3, fechada_em = now(), motivo_perda = CASE WHEN $3 = 'perdido' THEN $4 ELSE NULL END, fechada_por = $5, atualizada_em = now() WHERE id = $1`,
+    [o.id, etapa.id, resultado, motivo ? String(motivo).slice(0, 200) : null, por]);
+  return true;
+}
+
+/**
+ * Varredura (a cada 10 min): aplica as regras de cada loja.
+ * - perdido: oportunidade aberta, sem reserva, cuja conversa está parada há N h com a última palavra nossa (o cliente não respondeu).
+ * - concluído: oportunidade aberta com reserva não cancelada cuja retirada já passou.
+ */
+export async function aplicarRegrasFunil(c) {
+  const lojas = (await c.query(`SELECT id, regras_funil FROM lojas WHERE ativa`)).rows;
+  const feito = { perdidas: 0, concluidas: 0 };
+  for (const l of lojas) {
+    const r = { ...REGRAS_PADRAO, ...(l.regras_funil || {}) };
+    if (r.perdidoSemRespostaHoras > 0) {
+      const paradas = (await c.query(
+        `SELECT o.id FROM oportunidades o JOIN funis f ON f.id = o.funil_id JOIN conversas cv ON cv.id = o.conversa_id
+          WHERE o.loja_id = $1 AND o.fechada_em IS NULL AND o.reservou_em IS NULL AND f.principal
+            AND cv.ultima_do_cliente IS NOT NULL AND cv.ultima_do_cliente < now() - make_interval(hours => $2)
+            AND cv.ultima_mensagem_em > cv.ultima_do_cliente LIMIT 200`, [l.id, r.perdidoSemRespostaHoras])).rows;
+      for (const o of paradas) if (await fecharOportunidade(c, { lojaId: l.id, oportunidadeId: o.id, resultado: 'perdido', motivo: `Sem resposta há ${r.perdidoSemRespostaHoras} h` })) feito.perdidas++;
+    }
+    if (r.concluidoNaRetirada) {
+      const retiradas = (await c.query(
+        `SELECT o.id FROM oportunidades o JOIN reservas rs ON rs.id = o.reserva_id
+          WHERE o.loja_id = $1 AND o.fechada_em IS NULL AND rs.status <> 'cancelada' AND rs.retirada < now() LIMIT 200`, [l.id])).rows;
+      for (const o of retiradas) if (await fecharOportunidade(c, { lojaId: l.id, oportunidadeId: o.id, resultado: 'ganho' })) feito.concluidas++;
+    }
+  }
+  return feito;
+}

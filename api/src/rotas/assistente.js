@@ -9,7 +9,9 @@ import { testarAssistente } from '../servicos/ia/assistente.js';
 import { dividirEmBlocos } from '../servicos/ia/conhecimento.js';
 import { extrairTexto } from '../servicos/arquivos/extrair-texto.js';
 import * as locarx from '../servicos/locarx/api-locarx.js';
+import { resolverFilial, filiaisDaLoja } from '../servicos/locarx/filiais.js';
 import { rota, erro, validar, zUuid, exigirPerfil, registrar } from '../http.js';
+import { moduloLigado } from '../servicos/modulos.js';
 
 export const assistente = Router();   // /api/loja/...
 export const conhecimento = Router(); // /api/conhecimento
@@ -150,6 +152,12 @@ function quemAprova(u, escopo) { return escopo === 'rede' ? ['admin', 'matriz'].
 function podeEditar(u, escopo) { return escopo === 'rede' ? ['admin', 'matriz'].includes(u.perfil) : ['dono', 'atendente'].includes(u.perfil); }
 const itemPublico = (k) => ({ id: k.id, escopo: k.escopo, titulo: k.titulo, conteudo: k.conteudo, status: k.status, autor: k.autor_nome || null, criadoEm: k.criado_em, atualizadoEm: k.atualizado_em });
 
+// base da loja só com o módulo liberado (a da rede continua visível para todos)
+conhecimento.use((req, res, next) => {
+  const escopo = req.query?.escopo || req.body?.escopo || (Array.isArray(req.body?.itens) ? req.body.itens[0]?.escopo : null) || 'loja';
+  if (escopo === 'loja' && req.usuario?.loja_id && !moduloLigado(req.usuario.loja_modulos, 'base')) return next(erro(403, 'A base de conhecimento da loja não está liberada para a sua loja. Fale com a administração da rede.'));
+  next();
+});
 conhecimento.get('/', rota(async (req, res) => {
   const q = validar(z.object({ escopo: z.enum(['rede', 'loja']).default('loja'), status: z.enum(['pendente', 'aprovado', 'arquivado', 'todos']).default('todos'), busca: z.string().trim().max(80).optional() }), req.query);
   if (q.escopo === 'loja' && !req.usuario.loja_id) throw erro(400, 'Base de loja só existe para usuários de loja.');
@@ -224,6 +232,38 @@ conhecimento.post('/:id/:acao(aprovar|arquivar)', rota(async (req, res) => {
 }));
 
 // importar: texto colado ou arquivo (PDF/Word) → blocos para revisar antes de salvar
+// Importa do portal, para a base DESTA loja, o endereço, os horários e as políticas de uma filial (com várias filiais, cada
+// uma ganha os próprios itens, com o nome da filial no título). Entra como pendente até o dono aprovar.
+conhecimento.post('/importar-portal', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
+  if (!config.locarx) throw erro(503, 'API LocarX não configurada no servidor.');
+  const { filialId } = validar(z.object({ filialId: z.string().max(60).optional() }), req.body || {});
+  const filial = await comContexto(ctx(req), async (c) => { try { return await resolverFilial(c, req.usuario.loja_id, filialId); } catch (e) { throw erro(422, e.message); } });
+  if (!filial) throw erro(409, 'Esta loja ainda não está vinculada a uma filial do portal.');
+  const varias = (await comContexto(ctx(req), (c) => filiaisDaLoja(c, req.usuario.loja_id))).length > 1;
+  const sufixo = varias ? ` — ${filial.nome}` : '';
+  const itens = [];
+  let dados = null;
+  try { dados = await locarx.dadosDaFilial(filial.branchId); } catch (e) { throw erro(502, `Não foi possível ler a filial no portal: ${e.motivo || e.message}`); }
+  if (dados) {
+    const linhas = [dados.nome ? `Filial: ${dados.nome}` : null, dados.endereco ? `Endereço: ${dados.endereco}` : null, dados.horariosTexto ? `Horário de atendimento:\n${dados.horariosTexto}` : null, dados.especiaisTexto ? `Atendimento especial (fora do horário):\n${dados.especiaisTexto}` : null].filter(Boolean);
+    if (linhas.length) itens.push({ titulo: `Endereço e horários${sufixo}`, conteudo: linhas.join('\n\n').slice(0, 6000) });
+  }
+  try { for (const it of await locarx.politicasDoPortal(filial.branchId)) itens.push({ titulo: `${it.titulo}${sufixo}`.slice(0, 200), conteudo: it.conteudo }); } catch { /* políticas são opcionais aqui */ }
+  if (!itens.length) throw erro(409, 'O portal não devolveu informações para esta filial.');
+  const r = await comContexto(ctx(req), async (c) => {
+    const existentes = new Set((await c.query(`SELECT lower(titulo) AS t FROM conhecimento WHERE escopo = 'loja' AND loja_id = $1 AND status <> 'arquivado'`, [req.usuario.loja_id])).rows.map((x) => x.t));
+    const incluidos = [], ignorados = [];
+    for (const it of itens) {
+      if (existentes.has(it.titulo.toLowerCase())) { ignorados.push(it.titulo); continue; }
+      await c.query(`INSERT INTO conhecimento (escopo, loja_id, titulo, conteudo, status, criado_por) VALUES ('loja', $1, $2, $3, 'pendente', $4)`, [req.usuario.loja_id, it.titulo, it.conteudo, req.usuario.id]);
+      incluidos.push(it.titulo);
+    }
+    await registrar(c, req, 'conhecimento_importado_portal', { lojaId: req.usuario.loja_id, detalhes: { incluidos: incluidos.length, ignorados: ignorados.length, filial: filial.branchId } });
+    return { incluidos, ignorados };
+  });
+  res.json({ ...r, filial: filial.nome });
+}));
+
 conhecimento.post('/importar', rota(async (req, res) => {
   const d = validar(z.object({
     texto: z.string().max(400_000).optional(),
@@ -267,7 +307,11 @@ rede.put('/rede', exigirPerfil('admin', 'matriz'), rota(async (req, res) => {
 // Não duplica: título já existente (não arquivado) é ignorado. A administração revisa, edita e aprova na tela.
 rede.post('/rede/importar-politicas', exigirPerfil('admin', 'matriz'), rota(async (req, res) => {
   if (!config.locarx) throw erro(503, 'API LocarX não configurada no servidor.');
-  const loja = await comContexto(ctx(req), async (c) => (await c.query('SELECT branch_id, nome FROM lojas WHERE ativa AND branch_id IS NOT NULL ORDER BY criada_em LIMIT 1')).rows[0]);
+  // de qual filial ler (as políticas são da rede, mas o portal as devolve por filial): escolhida ou a primeira loja ativa
+  const { branchId } = validar(z.object({ branchId: z.coerce.number().int().positive().optional() }), req.body || {});
+  const loja = await comContexto(ctx(req), async (c) => branchId
+    ? (await c.query('SELECT f.branch_id, f.nome FROM filiais f WHERE f.branch_id = $1 UNION SELECT branch_id, nome FROM lojas WHERE branch_id = $1 LIMIT 1', [branchId])).rows[0] || { branch_id: branchId, nome: `filial ${branchId}` }
+    : (await c.query('SELECT branch_id, nome FROM lojas WHERE ativa AND branch_id IS NOT NULL ORDER BY criada_em LIMIT 1')).rows[0]);
   if (!loja) throw erro(409, 'Cadastre pelo menos uma loja vinculada a uma filial do portal para importar as políticas.');
   let itens;
   try { itens = await locarx.politicasDoPortal(loja.branch_id); }
@@ -305,6 +349,7 @@ rede.delete('/sinonimos/:id', exigirPerfil('admin', 'matriz'), rota(async (req, 
 rede.get('/assistente/monitor', exigirPerfil('admin'), rota(async (req, res) => {
   const q = validar(z.object({
     desde: z.coerce.number().int().nonnegative().optional(),
+    antes: z.coerce.number().int().positive().optional(),
     loja: zUuid.optional(),
     so: z.enum(['tudo', 'erros']).default('tudo'),
     limite: z.coerce.number().int().min(1).max(200).default(60),
@@ -312,6 +357,7 @@ rede.get('/assistente/monitor', exigirPerfil('admin'), rota(async (req, res) => 
   const params = [q.limite];
   let filtro = '';
   if (q.desde) { params.push(q.desde); filtro += ` AND u.id > $${params.length}`; }
+  if (q.antes) { params.push(q.antes); filtro += ` AND u.id < $${params.length}`; }
   if (q.loja) { params.push(q.loja); filtro += ` AND u.loja_id = $${params.length}`; }
   if (q.so === 'erros') filtro += ' AND (u.ok = false OR u.erro IS NOT NULL)';
   const r = await comContexto(ctx(req), async (c) => ({
@@ -346,10 +392,11 @@ rede.get('/assistente/monitor', exigirPerfil('admin'), rota(async (req, res) => 
 
 // Ocorrências de reservas e cotações (equipe e assistente), com o motivo. Administração.
 rede.get('/ocorrencias', exigirPerfil('admin'), rota(async (req, res) => {
-  const q = validar(z.object({ desde: z.coerce.number().int().nonnegative().optional(), loja: zUuid.optional(), nivel: z.enum(['tudo', 'erro']).default('tudo'), limite: z.coerce.number().int().min(1).max(200).default(60) }), req.query);
+  const q = validar(z.object({ desde: z.coerce.number().int().nonnegative().optional(), antes: z.coerce.number().int().positive().optional(), loja: zUuid.optional(), nivel: z.enum(['tudo', 'erro']).default('tudo'), limite: z.coerce.number().int().min(1).max(200).default(60) }), req.query);
   const params = [q.limite];
   let filtro = '';
   if (q.desde) { params.push(q.desde); filtro += ` AND o.id > $${params.length}`; }
+  if (q.antes) { params.push(q.antes); filtro += ` AND o.id < $${params.length}`; }
   if (q.loja) { params.push(q.loja); filtro += ` AND o.loja_id = $${params.length}`; }
   if (q.nivel === 'erro') filtro += ` AND o.nivel IN ('erro', 'aviso')`;
   const rows = await comContexto(ctx(req), async (c) => (await c.query(

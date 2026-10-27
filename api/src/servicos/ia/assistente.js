@@ -10,7 +10,10 @@ import { ferramentasDaLoja } from '../locarx/ferramentas.js';
 import { listarCampos, listarEtiquetas } from '../crm/personalizacao.js';
 import { distribuir } from '../crm/roleta.js';
 import { registrarOcorrencia } from '../ocorrencias.js';
-import { pixDisponivel } from '../pagamentos/cobrancas.js';
+import { pixDisponivel, verificarCobranca, contaDaLoja } from '../pagamentos/cobrancas.js';
+import { regrasDaLoja } from '../crm/funis.js';
+import { moduloLigado } from '../modulos.js';
+import { filiaisDaLoja, filialPublica } from '../locarx/filiais.js';
 
 const provedoresCanal = { evolution };
 const ESPERA_MS = 4000;              // espera o cliente terminar de digitar várias mensagens seguidas
@@ -114,6 +117,7 @@ export function textoReservaEmAndamento(cv) {
     const p = cv.opcoes.periodo;
     linhas.push(`Última consulta: ${p.data_retirada} ${p.hora_retirada} → ${p.data_devolucao} ${p.hora_devolucao}. Opções mostradas (letra = fleet_id): ${cv.opcoes.grupos.map((g) => `${g.letra} = ${g.fleet_id} (${g.grupo})`).join('; ')}. Use o fleet_id numérico em calcular_preco.`);
   }
+  if (cv.opcoes?.filialNome || cv.cotacao?.filialNome) linhas.push(`Filial escolhida: ${cv.cotacao?.filialNome || cv.opcoes?.filialNome}.`);
   if (cv.cotacao?.total != null) {
     linhas.push(`Cotação atual (é a que criar_reserva vai reservar): ${cv.cotacao.grupo || 'grupo'} fleet_id ${cv.cotacao.fleetId}, ${cv.cotacao.retirada?.date} ${cv.cotacao.retirada?.time} → ${cv.cotacao.devolucao?.date} ${cv.cotacao.devolucao?.time}, proteções ${(cv.cotacao.nomesProtecoes || cv.cotacao.protecoes || []).join(', ')}, total R$ ${Number(cv.cotacao.total).toFixed(2).replace('.', ',')}.${cv.resumo_enviado_em ? ' O RESUMO já foi enviado: se o cliente confirmar, chame criar_reserva com cliente_confirmou = true.' : ''}`);
   }
@@ -126,7 +130,7 @@ export function textoReservaEmAndamento(cv) {
   return linhas.length ? `RESERVA EM ANDAMENTO (estado guardado pelo sistema)\n${linhas.map((l) => '- ' + l).join('\n')}` : '';
 }
 
-export function montarSistema({ loja, a, rede, contato, historicoReservas, crm, conversa = null, pix = false }) {
+export function montarSistema({ loja, a, rede, contato, historicoReservas, crm, conversa = null, pix = false, filiais = [] }) {
   const agora = agoraBahia();
   const recorrente = historicoReservas.length
     ? `Cliente recorrente: já alugou ${historicoReservas.length}x nesta loja; última vez grupo ${historicoReservas[0].grupo || 'não informado'} em ${new Date(historicoReservas[0].retirada).toLocaleDateString('pt-BR')}. Cumprimente pelo nome e, se fizer sentido, sugira o mesmo grupo.`
@@ -145,11 +149,13 @@ REGRAS OBRIGATÓRIAS
 8. Assuntos que não são aluguel de carros: diga com educação que só pode ajudar com a locação.
 9. Se o cliente pedir atendente, estiver irritado, ou o assunto for reclamação, multa, acidente, cobrança, contrato ou documento recusado, use chamar_atendente. CANCELAMENTO ou alteração de reserva já criada: você não cancela nem altera — diga que um atendente vai cuidar disso e use chamar_atendente com o motivo "cancelamento de reserva <código>" (ou "alteração de reserva"). Pode consultar a reserva antes (consultar_reserva) para confirmar o código.
 10. Não peça dados pessoais (CPF, CNH, e-mail) antes da hora de fechar a reserva (passo 5 do roteiro).
+11a. Se o cliente disser claramente que NÃO vai alugar (desistiu, fechou com outra, achou caro), use cliente_desistiu com o motivo e responda com cordialidade, sem insistir. Silêncio ou dúvida não é desistência.
+11b. Fotos, vídeos, documentos e figurinhas: você NÃO consegue ver o conteúdo. Nunca finja que viu. Se o cliente mandar uma foto ou arquivo: (a) se parecer documento (CNH, RG, comprovante, contrato) pelo contexto ou pela legenda, agradeça, diga que um atendente vai conferir e use chamar_atendente com o motivo "cliente enviou documento/foto"; (b) se for figurinha ou foto sem relação, siga a conversa normalmente; (c) caso contrário, diga que não consegue abrir imagens por aqui e peça para escrever a informação (datas, dúvida). Nunca peça foto de documento: a CNH é conferida na loja, na retirada.
 11. Se a consulta não encontrar carro nas datas pedidas, NÃO procure outras datas por conta própria: avise o cliente e chame um atendente. Só consulte outra data se o próprio cliente pedir.
 12. Reservas pelo assistente só com retirada a partir de 24 horas de agora. Para retirada antes disso, chame um atendente.
 
 ROTEIRO DE RESERVA (uma etapa por mensagem; se o cliente já deu a informação, não pergunte de novo)
-Passo 1 — Período. Você precisa de 4 coisas: data e hora da retirada, data e hora da devolução. Pergunte o que faltar em uma mensagem só (ex.: "Para qual dia e horário você quer retirar, e quando devolve?"). Converta "sexta", "dia 15", "de manhã" para data e hora reais usando a data de hoje; se a hora não vier, pergunte (não chute). Repita o período entendido em uma linha antes de consultar ("Então retirada 15/11 às 10h e devolução 18/11 às 10h, certo?") — pode consultar na mesma resposta se o cliente já foi claro.
+${filiais.length > 1 ? `Passo 0 — Filial. Esta loja tem ${filiais.length} filiais: ${filiais.map((f) => f.nome).join(', ')}. Antes de consultar, pergunte em qual delas o cliente quer retirar (se ele já disse, não pergunte) e informe filial nas ferramentas. Retirada e devolução na mesma filial.\n` : ''}Passo 1 — Período. Você precisa de 4 coisas: data e hora da retirada, data e hora da devolução. Pergunte o que faltar em uma mensagem só (ex.: "Para qual dia e horário você quer retirar, e quando devolve?"). Converta "sexta", "dia 15", "de manhã" para data e hora reais usando a data de hoje; se a hora não vier, pergunte (não chute). Se a data informada já passou (antes de hoje), NÃO consulte nem chame atendente: diga que essa data já passou e pergunte a data certa (ex.: "13/10 já passou — você quis dizer 13/11?"). Repita o período entendido em uma linha antes de consultar ("Então retirada 15/11 às 10h e devolução 18/11 às 10h, certo?") — pode consultar na mesma resposta se o cliente já foi claro.
 Passo 2 — Opções. Use consultar_disponibilidade e envie ao cliente o texto_para_cliente EXATAMENTE como veio (não mude valores, não resuma, não acrescente opções). Se o cliente pediu câmbio automático ou manual, use o filtro cambio. Se pedir "outras opções", consulte de novo com mais_opcoes = true. Guarde o fleet_id (número) de cada letra: é ele que vai em calcular_preco.
 Passo 3 — Escolha. O cliente responde com a letra (ou com o nome do carro). Se a resposta for ambígua ("o mais barato", "o segundo"), confirme qual letra é antes de seguir.
 Passo 4 — Proteção. Pergunte em uma mensagem: "O total mostrado já inclui a Proteção X. Quer manter a Proteção X ou prefere a Super X (cobertura maior)? Também temos opcionais: proteção a terceiros e vidros." Use os valores de protecoes_disponiveis se o cliente perguntar quanto custa cada uma. Depois da resposta, use calcular_preco com o fleet_id escolhido e informe o total ("Com a Super X, fica R$ X no total.")${pix ? ' e siga para o Passo 4b' : ' e diga que o pagamento é na loja, na retirada'}. Se o cliente mudar de carro ou de datas depois disso, consulte e calcule de novo.
@@ -194,7 +200,7 @@ async function processarAgora(conversaId) {
     const a = (await c.query('SELECT * FROM assistentes WHERE loja_id = $1', [conversa.loja_id])).rows[0];
     const canal = (await c.query('SELECT * FROM canais WHERE loja_id = $1', [conversa.loja_id])).rows[0];
     const loja = (await c.query('SELECT * FROM lojas WHERE id = $1', [conversa.loja_id])).rows[0];
-    if (!a?.ativo || !canal || canal.status !== 'conectado' || !loja?.ativa) return null;
+    if (!a?.ativo || !canal || canal.status !== 'conectado' || !loja?.ativa || !moduloLigado(loja.modulos, 'assistente')) return null;
     if (!a.chave_cifrada && !config.iaSimulada) return { repassar: 'assistente sem chave de IA configurada', conversa };
     const hoje = (await c.query(`SELECT count(*)::int AS n FROM uso_ia WHERE loja_id = $1 AND criado_em >= now() - interval '24 hours'`, [conversa.loja_id])).rows[0].n;
     if (a.limite_diario && hoje >= a.limite_diario) return { repassar: 'limite diário de respostas do assistente atingido', conversa };
@@ -203,9 +209,21 @@ async function processarAgora(conversaId) {
       `SELECT * FROM (SELECT * FROM mensagens WHERE conversa_id = $1 AND direcao <> 'interna' ORDER BY criada_em DESC LIMIT 30) x ORDER BY criada_em`, [conversaId])).rows;
     const historicoReservas = (await c.query(`SELECT grupo, retirada FROM reservas WHERE contato_id = $1 AND status <> 'cancelada' ORDER BY retirada DESC LIMIT 3`, [conversa.contato_id])).rows;
     const crm = await crmDoAssistente(c, conversa.loja_id, conversa.contato_id);
-    if (pixDisponivel()) conversa.pixPendente = (await c.query(`SELECT valor, expira_em, dev_mode FROM cobrancas WHERE conversa_id = $1 AND status = 'pendente' ORDER BY criada_em DESC LIMIT 1`, [conversa.id])).rows[0] || null;
-    return { conversa, a, canal, loja, rede, msgs, historicoReservas, crm };
+    const contaPix = await contaDaLoja(conversa.loja_id, c);
+    if (pixDisponivel()) conversa.pixPendente = (await c.query(`SELECT id, valor, expira_em, dev_mode FROM cobrancas WHERE conversa_id = $1 AND status = 'pendente' ORDER BY criada_em DESC LIMIT 1`, [conversa.id])).rows[0] || null;
+    const regrasFunil = await regrasDaLoja(c, conversa.loja_id);
+    const filiais = (await filiaisDaLoja(c, conversa.loja_id)).map(filialPublica);
+    return { conversa, a, canal, loja, rede, msgs, historicoReservas, crm, regrasFunil, pix: contaPix.disponivel, filiais };
   });
+  // Pix pendente nesta conversa: confere no provedor ANTES de responder (qualquer mensagem do cliente vale como "paguei?").
+  // Se já estiver pago, o sistema confirma, manda código + comprovante, e a IA nem precisa responder.
+  if (prep?.conversa?.pixPendente) {
+    try {
+      const r = await verificarCobranca(prep.conversa.pixPendente.id);
+      if (r.status === 'paga') return;
+      if (r.status !== 'pendente') prep.conversa.pixPendente = null;
+    } catch (e) { console.error('[assistente] conferência do Pix:', e.message); }
+  }
   if (!prep) return;
   if (prep.repassar) {
     await comoSistema((c) => repassar(c, prep.conversa, prep.repassar));
@@ -250,8 +268,9 @@ async function processarAgora(conversaId) {
   // 4) ferramentas da loja
   let pedidoAtendente = null;
   const ctxFerramentas = {
-    lojaId: loja.id, branchId: loja.branch_id, conversaId: conversa.id, contatoId: conversa.contato_id, telefone: conversa.telefone,
-    locarxDisponivel: !!config.locarx, pixDisponivel: pixDisponivel(), simulacao: false, campos: crm.campos, etiquetas: crm.etiquetas, opcoesAnteriores: conversa.opcoes?.grupos || [],
+    lojaId: loja.id, branchId: conversa.opcoes?.branchId || conversa.cotacao?.branchId || loja.branch_id, branchEscolhido: !!(conversa.opcoes?.branchId || conversa.cotacao?.branchId), filialNome: conversa.opcoes?.filialNome || conversa.cotacao?.filialNome || null, filiais: prep.filiais,
+    conversaId: conversa.id, contatoId: conversa.contato_id, telefone: conversa.telefone,
+    locarxDisponivel: !!config.locarx, pixDisponivel: prep.pix, regrasFunil: prep.regrasFunil, simulacao: false, campos: crm.campos, etiquetas: crm.etiquetas, opcoesAnteriores: conversa.opcoes?.grupos || [],
     enviarDepois: [],   // mensagens que o sistema manda logo após a resposta da IA (ex.: código Pix em mensagem própria)
     aoChamarAtendente: async (args) => { pedidoAtendente = args; },
   };
@@ -263,7 +282,7 @@ async function processarAgora(conversaId) {
   try {
     const opcoes = {
       provedor: a.provedor, modelo: a.modelo, chave: a.chave_cifrada ? decifrar(a.chave_cifrada) : null,
-      sistema: montarSistema({ loja, a, rede, contato: { nome: conversa.contato_nome }, historicoReservas, crm, conversa, pix: pixDisponivel() }), historico, ferramentas,
+      sistema: montarSistema({ loja, a, rede, contato: { nome: conversa.contato_nome }, historicoReservas, crm, conversa, pix: prep.pix, filiais: prep.filiais }), historico, ferramentas,
     };
     resposta = config.iaSimulada ? await simularIa(opcoes) : await conversarComIa(opcoes);
   } catch (e) { erroIa = e; console.error('[assistente] IA:', e.message); }
@@ -299,7 +318,7 @@ async function processarAgora(conversaId) {
     // a conversa pode ter sido assumida por alguém enquanto a IA pensava
     const atual = (await c.query('SELECT estado FROM conversas WHERE id = $1', [conversa.id])).rows[0];
     if (atual?.estado !== 'assistente') return;
-    if (resposta.texto) {
+    if (resposta.texto && !ctxFerramentas.suprimirResposta) {
       try { await enviarComoAssistente(c, conversa, canal, resposta.texto); } catch (e) { console.error('[assistente] envio:', e.message); }
     }
     for (const extra of ctxFerramentas.enviarDepois || []) {

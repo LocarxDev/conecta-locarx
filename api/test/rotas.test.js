@@ -29,3 +29,39 @@ test('webhook e MCP continuam no lugar', async () => {
   assert.equal((await post('/api/webhooks/evolution/segredo-errado', {})).status, 404);
   assert.equal((await post('/api/mcp', { jsonrpc: '2.0', method: 'initialize' })).status, 401);
 });
+
+test('mensagem do atendente sai assinada com o primeiro nome', async () => {
+  const { assinar } = await import('../src/rotas/conversas.js');
+  assert.equal(assinar({ nome: 'Carla Souza' }, 'Bom dia! Já vi sua reserva.'), '*Carla:* Bom dia! Já vi sua reserva.');
+  assert.equal(assinar({ nome: '' }, 'oi'), 'oi');
+});
+
+test('regras do funil: validação e padrão', async () => {
+  const { zRegrasFunil, REGRAS_PADRAO } = await import('../src/servicos/crm/funis.js');
+  assert.equal(REGRAS_PADRAO.perdidoSemRespostaHoras, 48);
+  assert.ok(zRegrasFunil.safeParse({ perdidoSemRespostaHoras: 24, perdidoPeloAssistente: false, concluidoAoPagar: true, concluidoNaRetirada: true }).success);
+  assert.ok(!zRegrasFunil.safeParse({ perdidoSemRespostaHoras: -1, perdidoPeloAssistente: true, concluidoAoPagar: true, concluidoNaRetirada: true }).success);
+  assert.equal((await fetch(base + '/api/crm/funis/regras')).status, 401);
+});
+
+test('módulos por loja: ausente = ligado; desligado bloqueia; administração passa', async () => {
+  const { normalizarModulos, moduloLigado, CHAVES } = await import('../src/servicos/modulos.js');
+  assert.ok(CHAVES.includes('pix') && CHAVES.includes('assistente'));
+  assert.equal(moduloLigado(null, 'pix'), true);
+  assert.equal(moduloLigado({ pix: false }, 'pix'), false);
+  assert.equal(normalizarModulos({ pix: false, lixo: true }).lixo, undefined);
+  const { exigirModulo } = await import('../src/http.js');
+  const chama = (usuario) => new Promise((resolve) => exigirModulo('pix')({ usuario }, {}, (e) => resolve(e ? e.status : 'ok')));
+  assert.equal(await chama({ loja_id: 'l1', loja_modulos: { pix: false } }), 403);
+  assert.equal(await chama({ loja_id: 'l1', loja_modulos: {} }), 'ok');
+  assert.equal(await chama({ loja_id: null, perfil: 'admin' }), 'ok');
+  assert.equal((await get('/api/admin/modulos')).status, 401);
+});
+
+test('multiloja: rotas de troca de loja, transferência e acessos exigem login', async () => {
+  assert.equal((await get('/api/eu/lojas')).status, 401);
+  assert.equal((await post('/api/eu/loja', { lojaId: '00000000-0000-0000-0000-000000000000' })).status, 401);
+  assert.equal((await get('/api/conversas/lojas-destino')).status, 401);
+  assert.equal((await post('/api/conversas/00000000-0000-0000-0000-000000000000/transferir-loja', { lojaId: '00000000-0000-0000-0000-000000000000' })).status, 401);
+  assert.equal((await get('/api/admin/lojas/00000000-0000-0000-0000-000000000000/acessos')).status, 401);
+});

@@ -129,6 +129,7 @@ export function painelBase(alvo, { ctx, escopo, titulo, podeEditar, podeAprovar,
         <label class="busca"><span class="sr-only">Buscar</span>${icone('busca')}<input type="search" data-busca placeholder="Buscar"></label>
         ${podeAprovar ? html`<div class="abas">${[['todos', 'Todas'], ['pendente', 'Para aprovar']].map(([v, t]) => html`<button data-filtro="${v}" class="${v === filtro ? 'ativa' : ''}">${t}</button>`)}</div>` : ''}
         ${importarPortal ? html`<button class="btn btn-contorno" data-importar-portal title="Traz as políticas oficiais do portal LocarX (clientes, cancelamento, pagamento, km, proteções, serviços) como itens pendentes para você aprovar">${icone('reservas')}Importar do portal LocarX</button>` : ''}
+        ${escopo === 'loja' && podeEditar ? html`<button class="btn btn-contorno" data-importar-filial title="Traz do portal o endereço, os horários e as políticas da filial como itens pendentes">${icone('reservas')}Importar da filial</button>` : ''}
         ${podeEditar ? html`<button class="btn btn-contorno" data-importar>Importar arquivo</button><button class="btn btn-primario" data-novo>${icone('mais')}Nova informação</button>` : ''}
       </div></div>
     <div data-lista><div class="painel-corpo"><div class="esqueleto"></div></div></div></section>`);
@@ -168,13 +169,50 @@ export function painelBase(alvo, { ctx, escopo, titulo, podeEditar, podeAprovar,
   $$('[data-filtro]', alvo).forEach((b) => b.addEventListener('click', () => { filtro = b.dataset.filtro; $$('[data-filtro]', alvo).forEach((x) => x.classList.toggle('ativa', x === b)); desenhar(); }));
   $('[data-novo]', alvo)?.addEventListener('click', () => editarItem({ escopo }, carregar));
   $('[data-importar]', alvo)?.addEventListener('click', () => importar(escopo, carregar));
-  $('[data-importar-portal]', alvo)?.addEventListener('click', (e) => comBotao(e.currentTarget, async () => {
+  // loja: importa endereço/horários/políticas de UMA filial (escolhe quando a franquia tem mais de uma)
+  $('[data-importar-filial]', alvo)?.addEventListener('click', async (e) => {
+    const botao = e.currentTarget;
+    let filiais = []; try { filiais = await api.filiais(); } catch { /* segue sem lista */ }
+    const importar = (filialId) => comBotao(botao, async () => {
+      try {
+        const r = await api.importarPortalLoja(filialId);
+        avisar(r.incluidos.length ? `${r.incluidos.length} item(ns) da filial ${r.filial} entraram como pendentes.${r.ignorados.length ? ` ${r.ignorados.length} já existiam.` : ''} Revise e aprove.` : `Nada novo: a filial ${r.filial} já está na base.`);
+        carregar();
+      } catch (err) { if (err.status === 401) return ctx.sessaoExpirou(); avisar(err.message, 'erro'); }
+    });
+    if (filiais.length < 2) return importar(undefined);
+    const m = abrirModal({
+      titulo: 'Importar da filial',
+      corpo: html`<form class="form" id="form-imp-filial"><div class="campo"><label for="imp-filial">Qual filial?</label><select id="imp-filial" name="filialId">${filiais.map((f) => html`<option value="${f.id}">${f.nome}${f.principal ? ' (principal)' : ''}</option>`)}</select><p class="ajuda">Cada filial entra com os próprios itens (ex.: "Endereço e horários — Centro").</p></div></form>`,
+      rodape: html`<button class="btn btn-contorno" data-fechar>Cancelar</button><button class="btn btn-primario" form="form-imp-filial" type="submit">Importar</button>`,
+    });
+    $('#form-imp-filial', m.el).addEventListener('submit', (ev) => { ev.preventDefault(); const id = ev.target.elements.filialId.value; m.fechar(); importar(id); });
+  });
+  $('[data-importar-portal]', alvo)?.addEventListener('click', async (e) => {
+    const botao = e.currentTarget;
+    // rede: escolhe de qual filial do portal ler as políticas (padrão: primeira loja ativa)
+    let lista = []; try { lista = await api.filiaisLocarx(); } catch { /* sem lista: usa o padrão */ }
+    let branchId;
+    if (lista.length > 1) {
+      branchId = await new Promise((resolve) => {
+        const m = abrirModal({
+          titulo: 'Importar políticas do portal',
+          corpo: html`<form class="form" id="form-imp-rede"><div class="campo"><label for="imp-branch">Ler as políticas de qual filial?</label><select id="imp-branch" name="branchId">${lista.map((f) => html`<option value="${f.branchId ?? f.id}">${f.nome || f.name} (${f.branchId ?? f.id})</option>`)}</select><p class="ajuda">As políticas da rede costumam ser iguais em todas; escolha uma de referência.</p></div></form>`,
+          rodape: html`<button class="btn btn-contorno" data-fechar>Cancelar</button><button class="btn btn-primario" form="form-imp-rede" type="submit">Importar</button>`,
+        });
+        $$('[data-fechar]', m.el).forEach((b) => b.addEventListener('click', () => resolve(null)));
+        $('#form-imp-rede', m.el).addEventListener('submit', (ev) => { ev.preventDefault(); const v = Number(ev.target.elements.branchId.value); m.fechar(); resolve(v); });
+      });
+      if (branchId === null) return;
+    }
+    comBotao(botao, async () => {
     try {
-      const r = await api.importarPoliticasLocarx();
+      const r = await api.importarPoliticasLocarx(branchId);
       avisar(r.incluidos.length ? `${r.incluidos.length} item(ns) do portal entraram como pendentes (filial ${r.filial}).${r.ignorados.length ? ` ${r.ignorados.length} já existiam.` : ''} Revise e aprove.` : 'Nada novo: todas as políticas do portal já estão na base.');
       if (r.incluidos.length && podeAprovar) { filtro = 'pendente'; $$('[data-filtro]', alvo).forEach((x) => x.classList.toggle('ativa', x.dataset.filtro === 'pendente')); }
       carregar();
     } catch (err) { if (err.status === 401) return ctx.sessaoExpirou(); avisar(err.message, 'erro'); }
-  }));
+    });
+  });
   carregar();
 }

@@ -796,3 +796,95 @@ ALTER TABLE reservas ADD COLUMN IF NOT EXISTS cobranca_id uuid;
 
 -- taxa cobrada pelo provedor (platformFee) para a conciliação do repasse loja × franqueador
 ALTER TABLE cobrancas ADD COLUMN IF NOT EXISTS taxa numeric(12, 2);
+
+-- Código curto do pagamento (ex.: PG-7K3M9Q): vai nas observações da reserva no portal e no painel do AbacatePay (metadata),
+-- no lugar do id longo do provedor. Quem vê o portal confere o pagamento no Conecta por esse código.
+ALTER TABLE cobrancas ADD COLUMN IF NOT EXISTS codigo text;
+CREATE UNIQUE INDEX IF NOT EXISTS cobrancas_codigo ON cobrancas (codigo) WHERE codigo IS NOT NULL;
+UPDATE cobrancas SET codigo = 'PG-' || upper(substr(md5(random()::text || id::text), 1, 6)) WHERE codigo IS NULL;
+ALTER TABLE cobrancas ADD COLUMN IF NOT EXISTS verificada_em timestamptz;
+
+-- Regras automáticas do funil (por loja): quando marcar "perdido" e "concluído" sem ninguém mexer.
+-- perdidoSemRespostaHoras: 0 desliga. perdidoPeloAssistente: o assistente marca perdido quando o cliente diz que não quer.
+-- concluidoAoPagar: Pix confirmado → concluído. concluidoNaRetirada: data de retirada passou e a reserva não foi cancelada → concluído.
+ALTER TABLE lojas ADD COLUMN IF NOT EXISTS regras_funil jsonb NOT NULL DEFAULT '{"perdidoSemRespostaHoras":48,"perdidoPeloAssistente":true,"concluidoAoPagar":true,"concluidoNaRetirada":true}'::jsonb;
+ALTER TABLE oportunidades ADD COLUMN IF NOT EXISTS fechada_por text;   -- 'equipe' | 'assistente' | 'automatico'
+
+-- Conta AbacatePay própria da loja (ligada pela administração; a loja cadastra a chave, cifrada). Com conta própria,
+-- o Pix cai direto na loja e ela sai do relatório de repasse. cobrancas.conta diz onde cada pagamento caiu.
+ALTER TABLE lojas ADD COLUMN IF NOT EXISTS pix_proprio boolean NOT NULL DEFAULT false;
+ALTER TABLE lojas ADD COLUMN IF NOT EXISTS abacatepay_chave_cifrada text;
+ALTER TABLE lojas ADD COLUMN IF NOT EXISTS abacatepay_chave_final text;
+ALTER TABLE lojas ADD COLUMN IF NOT EXISTS abacatepay_dev boolean;
+ALTER TABLE lojas ADD COLUMN IF NOT EXISTS abacatepay_testada_em timestamptz;
+ALTER TABLE cobrancas ADD COLUMN IF NOT EXISTS conta text NOT NULL DEFAULT 'rede' CHECK (conta IN ('rede', 'loja'));
+
+-- =====================================================================
+-- FILIAIS: uma franquia (loja no Conecta: um WhatsApp, uma equipe, um funil) pode ter várias filiais no portal LocarX
+-- (ex.: Salvador Aeroporto e Salvador Centro). lojas.branch_id continua sendo a filial principal (padrão).
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS filiais (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  loja_id    uuid NOT NULL REFERENCES lojas(id) ON DELETE CASCADE,
+  branch_id  integer NOT NULL UNIQUE CHECK (branch_id > 0),
+  nome       text NOT NULL CHECK (length(nome) BETWEEN 2 AND 60),
+  principal  boolean NOT NULL DEFAULT false,
+  ativa      boolean NOT NULL DEFAULT true,
+  criada_em  timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS filiais_principal ON filiais (loja_id) WHERE principal;
+GRANT SELECT, INSERT, UPDATE, DELETE ON filiais TO conecta_app;
+ALTER TABLE filiais ENABLE ROW LEVEL SECURITY;
+ALTER TABLE filiais FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS filiais_ver ON filiais;
+CREATE POLICY filiais_ver ON filiais FOR SELECT USING (ctx_perfil() IN ('admin', 'matriz', 'sistema') OR loja_id = ctx_loja());
+DROP POLICY IF EXISTS filiais_alterar ON filiais;
+CREATE POLICY filiais_alterar ON filiais FOR ALL USING (ctx_perfil() IN ('admin', 'sistema')) WITH CHECK (ctx_perfil() IN ('admin', 'sistema'));
+-- toda loja existente vira uma filial principal (migração idempotente)
+INSERT INTO filiais (loja_id, branch_id, nome, principal)
+  SELECT l.id, l.branch_id, left(l.nome, 60), true FROM lojas l
+   WHERE NOT EXISTS (SELECT 1 FROM filiais f WHERE f.loja_id = l.id) AND NOT EXISTS (SELECT 1 FROM filiais f WHERE f.branch_id = l.branch_id);
+-- reservas e cobranças guardam em qual filial foram feitas
+ALTER TABLE reservas ADD COLUMN IF NOT EXISTS branch_id integer;
+UPDATE reservas r SET branch_id = l.branch_id FROM lojas l WHERE l.id = r.loja_id AND r.branch_id IS NULL;
+
+-- Módulos liberados por loja (plano): jsonb { assistente, cotacao, pix, funil, clientes, relatorios, automacoes, base, mcp } — ausente = ligado.
+ALTER TABLE lojas ADD COLUMN IF NOT EXISTS modulos jsonb NOT NULL DEFAULT '{}'::jsonb;
+
+-- =====================================================================
+-- MULTILOJA: dono com várias lojas (troca de loja na sessão) e transferência de atendimento entre lojas
+-- =====================================================================
+-- Lojas que um usuário pode acessar (hoje: donos com mais de uma loja). usuarios.loja_id continua sendo a principal.
+CREATE TABLE IF NOT EXISTS usuario_lojas (
+  usuario_id uuid NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+  loja_id    uuid NOT NULL REFERENCES lojas(id) ON DELETE CASCADE,
+  perfil     text NOT NULL DEFAULT 'dono' CHECK (perfil IN ('dono', 'atendente')),
+  criado_em  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (usuario_id, loja_id)
+);
+GRANT SELECT, INSERT, UPDATE, DELETE ON usuario_lojas TO conecta_app;
+ALTER TABLE usuario_lojas ENABLE ROW LEVEL SECURITY;
+ALTER TABLE usuario_lojas FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS usuario_lojas_ver ON usuario_lojas;
+CREATE POLICY usuario_lojas_ver ON usuario_lojas FOR SELECT USING (ctx_perfil() IN ('admin', 'matriz', 'sistema') OR loja_id = ctx_loja() OR usuario_id = nullif(current_setting('app.usuario_id', true), '')::uuid);
+DROP POLICY IF EXISTS usuario_lojas_alterar ON usuario_lojas;
+CREATE POLICY usuario_lojas_alterar ON usuario_lojas FOR ALL USING (ctx_perfil() IN ('admin', 'sistema')) WITH CHECK (ctx_perfil() IN ('admin', 'sistema'));
+INSERT INTO usuario_lojas (usuario_id, loja_id, perfil) SELECT id, loja_id, perfil FROM usuarios WHERE loja_id IS NOT NULL AND perfil IN ('dono', 'atendente') ON CONFLICT DO NOTHING;
+-- loja em uso na sessão (NULL = a principal do usuário)
+ALTER TABLE sessoes ADD COLUMN IF NOT EXISTS loja_id uuid REFERENCES lojas(id) ON DELETE SET NULL;
+
+-- Conversa transferida para outra loja: continua no WhatsApp da loja de origem (loja_id), mas quem atende é loja_atendimento_id.
+ALTER TABLE conversas ADD COLUMN IF NOT EXISTS loja_atendimento_id uuid REFERENCES lojas(id) ON DELETE SET NULL;
+ALTER TABLE conversas ADD COLUMN IF NOT EXISTS transferida_em timestamptz;
+ALTER TABLE conversas ADD COLUMN IF NOT EXISTS transferida_por uuid REFERENCES usuarios(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS conversas_atendimento ON conversas (loja_atendimento_id) WHERE loja_atendimento_id IS NOT NULL;
+-- a loja que atende enxerga a conversa, as mensagens e o contato dela (e grava mensagens nela)
+DROP POLICY IF EXISTS conversas_transferida ON conversas;
+CREATE POLICY conversas_transferida ON conversas FOR ALL USING (loja_atendimento_id = ctx_loja()) WITH CHECK (loja_atendimento_id = ctx_loja());
+DROP POLICY IF EXISTS mensagens_transferida ON mensagens;
+CREATE POLICY mensagens_transferida ON mensagens FOR ALL
+  USING (EXISTS (SELECT 1 FROM conversas cv WHERE cv.id = mensagens.conversa_id AND cv.loja_atendimento_id = ctx_loja()))
+  WITH CHECK (EXISTS (SELECT 1 FROM conversas cv WHERE cv.id = mensagens.conversa_id AND cv.loja_atendimento_id = ctx_loja()));
+DROP POLICY IF EXISTS contatos_transferida ON contatos;
+CREATE POLICY contatos_transferida ON contatos FOR SELECT
+  USING (EXISTS (SELECT 1 FROM conversas cv WHERE cv.contato_id = contatos.id AND cv.loja_atendimento_id = ctx_loja()));

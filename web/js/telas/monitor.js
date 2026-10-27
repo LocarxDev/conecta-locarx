@@ -1,7 +1,7 @@
 // Monitor do assistente (administração): acompanha cada resposta da IA em tempo real — loja, modelo, tempo,
 // ferramentas chamadas, erros da API LocarX/IA e "promessas sem ação". Não mostra o conteúdo das conversas.
 import { api } from '../api.js';
-import { html, render, $, $$, icone, avisar, quando, abrirModal } from '../util.js';
+import { html, render, $, $$, icone, avisar, quando, abrirModal, comBotao, paginar, ligarPaginacao } from '../util.js';
 
 const hora = (iso) => new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 const ms = (v) => (v == null ? '—' : v >= 1000 ? (v / 1000).toFixed(1).replace('.', ',') + ' s' : v + ' ms');
@@ -59,12 +59,14 @@ function detalhar(u) {
   });
 }
 
+const POR_PAGINA = 20;
+
 export async function montar(alvo, ctx) {
-  let itens = [], ultimoId = 0, filtroLoja = '', soErros = false, timer = null, lojas = [];
+  let itens = [], ultimoId = 0, filtroLoja = '', soErros = false, timer = null, lojas = [], pagIa = 1, pagOc = 1, fimIa = false, fimOc = false;
   render(alvo, html`
     <div class="cabecalho-pagina">
       <div class="titulos"><h1>Monitor do assistente</h1><p>Cada resposta da IA, em tempo real: ferramentas chamadas, erros da API LocarX e da IA, tempo e tokens. Sem conteúdo das conversas.</p></div>
-      <span class="selo ok" id="ao-vivo">Ao vivo</span>
+      <div class="filtros"><select id="filtro-loja" aria-label="Loja" class="select-filial"><option value="">Todas as lojas</option></select><span class="selo ok" id="ao-vivo">Ao vivo</span></div>
     </div>
     <div class="resumo" id="resumo-monitor"><div class="resumo-item"><div class="esqueleto"></div></div><div class="resumo-item"><div class="esqueleto"></div></div><div class="resumo-item"><div class="esqueleto"></div></div><div class="resumo-item"><div class="esqueleto"></div></div></div>
     <section class="painel">
@@ -77,10 +79,7 @@ export async function montar(alvo, ctx) {
     <section class="painel">
       <div class="painel-cab">
         <h2>Respostas da IA</h2>
-        <div class="filtros">
-          <select id="filtro-loja" aria-label="Loja"><option value="">Todas as lojas</option></select>
-          <label class="checkbox"><input type="checkbox" id="so-erros"> Só com erro</label>
-        </div>
+        <div class="filtros"><label class="checkbox"><input type="checkbox" id="so-erros"> Só com erro</label></div>
       </div>
       <div id="lista-monitor"><div class="painel-corpo"><div class="esqueleto"></div></div></div>
     </section>`);
@@ -111,8 +110,10 @@ export async function montar(alvo, ctx) {
   }
 
   function desenharOcorrencias() {
-    const vis = ocorrencias.filter((o) => (!filtroLoja || o.loja.id === filtroLoja) && (!soFalhas || o.nivel !== 'info'));
-    if (!vis.length) return render(listaOc, html`<div class="estado">${icone('reservas')}<h3>Nenhuma ocorrência</h3><p>Reservas e cotações feitas (ou que falharam) pela equipe e pelo assistente aparecem aqui, com o motivo.</p></div>`);
+    const todas = ocorrencias.filter((o) => !soFalhas || o.nivel !== 'info');
+    if (!todas.length) return render(listaOc, html`<div class="estado">${icone('reservas')}<h3>Nenhuma ocorrência</h3><p>Reservas e cotações feitas (ou que falharam) pela equipe e pelo assistente aparecem aqui, com o motivo.</p></div>`);
+    const pg = paginar(todas, pagOc, POR_PAGINA, { rotulo: 'ocorrências', extra: !fimOc && pagOc === pg_fim(todas) ? html`<button class="btn btn-texto" data-mais-oc>Carregar mais antigas</button>` : '' });
+    pagOc = pg.pagina; const vis = pg.fatia;
     render(listaOc, html`<div class="tabela-caixa"><table class="tabela tabela-monitor">
       <thead><tr><th>Quando</th><th>Loja</th><th>Tipo</th><th>O que aconteceu</th><th class="col-opcional">Quem</th><th><span class="sr-only">Detalhes</span></th></tr></thead>
       <tbody>${vis.map((o) => html`<tr class="clicavel" data-oc="${o.id}">
@@ -122,21 +123,28 @@ export async function montar(alvo, ctx) {
         <td class="${o.nivel === 'erro' ? 'erro-texto' : ''}">${o.mensagem}</td>
         <td class="col-opcional"><span class="sub">${o.quem}</span></td>
         <td><button class="btn btn-texto btn-icone" aria-label="Ver detalhes">${icone('seta')}</button></td>
-      </tr>`)}</tbody></table></div>`);
+      </tr>`)}</tbody></table></div>${pg.controles}`);
     $$('tr[data-oc]', listaOc).forEach((tr) => tr.addEventListener('click', () => detalharOcorrencia(ocorrencias.find((o) => o.id === Number(tr.dataset.oc)))));
+    ligarPaginacao(listaOc, (d) => { pagOc += d; desenharOcorrencias(); });
+    $('[data-mais-oc]', listaOc)?.addEventListener('click', (e) => comBotao(e.currentTarget, () => carregarOcorrencias('antigas')));
   }
+  const pg_fim = (lista) => Math.max(1, Math.ceil(lista.length / POR_PAGINA));
 
-  async function carregarOcorrencias(incremental) {
+  // modo: false = carga inicial (zera), true = só novas (ao vivo), 'antigas' = página seguinte no servidor
+  async function carregarOcorrencias(modo) {
     try {
-      const r = await api.ocorrencias({ desde: incremental ? ultimaOc : undefined, limite: incremental ? 50 : 80 });
+      const antigas = modo === 'antigas';
+      const r = await api.ocorrencias({ desde: modo === true ? ultimaOc : undefined, antes: antigas ? Math.min(...ocorrencias.map((o) => o.id)) : undefined, loja: filtroLoja || undefined, limite: modo === true ? 50 : 100 });
+      if (modo === false) { ocorrencias = []; ultimaOc = 0; fimOc = false; pagOc = 1; }
+      if (antigas && r.length < 100) fimOc = true;
       if (r.length) {
         const novos = r.filter((o) => !ocorrencias.some((x) => x.id === o.id));
-        ocorrencias = [...novos, ...ocorrencias].slice(0, 300);
+        ocorrencias = antigas ? [...ocorrencias, ...novos] : [...novos, ...ocorrencias];
         ultimaOc = Math.max(ultimaOc, ...r.map((o) => o.id));
-        if (incremental && novos.some((o) => o.nivel === 'erro')) avisar(novos.find((o) => o.nivel === 'erro').mensagem, 'erro');
-      }
+        if (modo === true && novos.some((o) => o.nivel === 'erro')) avisar(novos.find((o) => o.nivel === 'erro').mensagem, 'erro');
+      } else if (antigas) fimOc = true;
       desenharOcorrencias();
-    } catch (err) { if (err.status === 401) return ctx.sessaoExpirou(); if (!incremental) render(listaOc, html`<div class="estado">${icone('alerta')}<h3>Não foi possível carregar</h3><p>${err.message}</p></div>`); }
+    } catch (err) { if (err.status === 401) return ctx.sessaoExpirou(); if (modo === false) render(listaOc, html`<div class="estado">${icone('alerta')}<h3>Não foi possível carregar</h3><p>${err.message}</p></div>`); }
   }
 
   function desenharResumo(r, porLoja) {
@@ -152,8 +160,10 @@ export async function montar(alvo, ctx) {
   }
 
   function desenharLista() {
-    const vis = itens.filter((u) => (!filtroLoja || u.loja.id === filtroLoja) && (!soErros || u.erro || !u.ok));
-    if (!vis.length) return render(lista, html`<div class="estado">${icone('robo')}<h3>Nenhuma resposta ainda</h3><p>Assim que o assistente de alguma loja responder, aparece aqui.</p></div>`);
+    const todas = itens.filter((u) => !soErros || u.erro || !u.ok);
+    if (!todas.length) return render(lista, html`<div class="estado">${icone('robo')}<h3>Nenhuma resposta ainda</h3><p>Assim que o assistente de alguma loja responder, aparece aqui.</p></div>`);
+    const pg = paginar(todas, pagIa, POR_PAGINA, { rotulo: 'respostas', extra: !fimIa && pagIa === pg_fim(todas) ? html`<button class="btn btn-texto" data-mais-ia>Carregar mais antigas</button>` : '' });
+    pagIa = pg.pagina; const vis = pg.fatia;
     render(lista, html`<div class="tabela-caixa"><table class="tabela tabela-monitor">
       <thead><tr><th>Quando</th><th>Loja</th><th>Situação</th><th>Ferramentas</th><th class="col-opcional">Tempo</th><th class="col-opcional">Modelo</th><th><span class="sr-only">Detalhes</span></th></tr></thead>
       <tbody>${vis.map((u) => { const st = situacao(u); return html`<tr class="clicavel" data-id="${u.id}">
@@ -164,32 +174,38 @@ export async function montar(alvo, ctx) {
         <td class="col-opcional num">${ms(u.duracaoMs)}<div class="sub">${num(u.tokens.entrada + u.tokens.saida)} tokens</div></td>
         <td class="col-opcional"><span class="sub">${u.modelo}</span></td>
         <td><button class="btn btn-texto btn-icone" aria-label="Ver detalhes">${icone('seta')}</button></td>
-      </tr>`; })}</tbody></table></div>`);
+      </tr>`; })}</tbody></table></div>${pg.controles}`);
     $$('tr[data-id]', lista).forEach((tr) => tr.addEventListener('click', () => detalhar(itens.find((u) => u.id === Number(tr.dataset.id)))));
+    ligarPaginacao(lista, (d) => { pagIa += d; desenharLista(); });
+    $('[data-mais-ia]', lista)?.addEventListener('click', (e) => comBotao(e.currentTarget, () => carregar('antigas')));
   }
 
-  async function carregar(incremental) {
+  async function carregar(modo) {
     try {
-      const r = await api.monitorAssistente({ desde: incremental ? ultimoId : undefined, limite: incremental ? 50 : 80 });
+      const antigas = modo === 'antigas';
+      const r = await api.monitorAssistente({ desde: modo === true ? ultimoId : undefined, antes: antigas ? Math.min(...itens.map((u) => u.id)) : undefined, loja: filtroLoja || undefined, limite: modo === true ? 50 : 100 });
       desenharResumo(r.resumo, r.porLoja);
+      if (modo === false) { itens = []; ultimoId = 0; fimIa = false; pagIa = 1; }
+      if (antigas && r.itens.length < 100) fimIa = true;
       if (r.itens.length) {
         const novos = r.itens.filter((u) => !itens.some((x) => x.id === u.id));
-        itens = [...novos, ...itens].slice(0, 300);
+        itens = antigas ? [...itens, ...novos] : [...novos, ...itens];
         ultimoId = Math.max(ultimoId, ...r.itens.map((u) => u.id));
-        if (incremental && novos.some((u) => u.erro)) avisar(`${novos.filter((u) => u.erro).length} resposta(s) com erro no assistente.`, 'erro');
-      }
+        if (modo === true && novos.some((u) => u.erro)) avisar(`${novos.filter((u) => u.erro).length} resposta(s) com erro no assistente.`, 'erro');
+      } else if (antigas) fimIa = true;
       desenharLista();
       $('#ao-vivo', alvo).className = 'selo ok';
     } catch (err) {
       if (err.status === 401) return ctx.sessaoExpirou();
       $('#ao-vivo', alvo).className = 'selo erro'; $('#ao-vivo', alvo).textContent = 'Sem conexão';
-      if (!incremental) render(lista, html`<div class="estado">${icone('alerta')}<h3>Não foi possível carregar</h3><p>${err.message}</p></div>`);
+      if (modo === false) render(lista, html`<div class="estado">${icone('alerta')}<h3>Não foi possível carregar</h3><p>${err.message}</p></div>`);
     }
   }
 
-  sel.addEventListener('change', () => { filtroLoja = sel.value; desenharLista(); desenharOcorrencias(); });
-  $('#so-erros', alvo).addEventListener('change', (e) => { soErros = e.target.checked; desenharLista(); });
-  $('#so-falhas', alvo).addEventListener('change', (e) => { soFalhas = e.target.checked; desenharOcorrencias(); });
+  // filtro por loja vale para as duas listas e é aplicado no servidor (não só no que já carregou)
+  sel.addEventListener('change', () => { filtroLoja = sel.value; carregar(false); carregarOcorrencias(false); });
+  $('#so-erros', alvo).addEventListener('change', (e) => { soErros = e.target.checked; pagIa = 1; desenharLista(); });
+  $('#so-falhas', alvo).addEventListener('change', (e) => { soFalhas = e.target.checked; pagOc = 1; desenharOcorrencias(); });
   await Promise.all([carregar(false), carregarOcorrencias(false)]);
   timer = setInterval(() => { if (!document.hidden) { carregar(true); carregarOcorrencias(true); } }, 5000);
   return () => clearInterval(timer);

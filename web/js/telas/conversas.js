@@ -239,14 +239,14 @@ export async function montar(alvo, ctx) {
     render(cab, html`
       <a class="btn btn-texto btn-icone voltar" href="#/conversas" aria-label="Voltar para a lista">${icone('voltar')}</a>
       <span class="avatar">${c.contato.nome ? iniciais(c.contato.nome) : '#'}</span>
-      <div class="quem"><strong>${nomeDe(c)}</strong><span>${telefoneBonito(c.contato.telefone)}${c.atendente ? ` · com ${c.atendente.nome}` : ''}</span></div>
+      <div class="quem"><strong>${nomeDe(c)}</strong><span>${telefoneBonito(c.contato.telefone)}${c.atendente ? ` · com ${c.atendente.nome}` : ''}${c.transferida ? (c.transferida.atendimento.id === ctx.usuario.loja?.id ? ` · 📍 veio de ${c.transferida.origem.nome}` : ` · 📍 atendida por ${c.transferida.atendimento.nome}`) : ''}</span></div>
       <div class="acoes-chat">
         ${ESTADO[c.estado]}
         <button class="btn btn-contorno" data-lateral aria-pressed="${lateralAberta}" title="Funil, etiquetas e informações do cliente">${icone('painel')}<span class="rotulo-lateral">Dados do cliente</span></button>
-        ${c.estado !== 'encerrada' ? html`<button class="btn btn-contorno" data-cotacao title="Consultar valores da tabela vigente e enviar ao cliente, sem sair da conversa">${icone('busca')}<span class="rotulo-lateral">Cotação</span></button>` : ''}
+        ${c.estado !== 'encerrada' && ctx.usuario.loja?.modulos?.cotacao !== false ? html`<button class="btn btn-contorno" data-cotacao title="Consultar valores da tabela vigente e enviar ao cliente, sem sair da conversa">${icone('busca')}<span class="rotulo-lateral">Cotação</span></button>` : ''}
         ${!minha && c.estado !== 'encerrada' ? html`<button class="btn btn-primario" data-acao="assumir">Assumir</button>` : ''}
         ${c.estado === 'humano' ? html`<button class="btn btn-contorno" data-acao="devolver" title="O assistente virtual entra na etapa 3">Devolver ao assistente</button>` : ''}
-        ${eu.perfil === 'dono' && c.estado !== 'encerrada' ? html`<button class="btn btn-contorno" data-acao="transferir">Transferir</button>` : ''}
+        ${c.estado !== 'encerrada' && (eu.perfil === 'dono' || minha) ? html`<button class="btn btn-contorno" data-acao="transferir">Transferir</button>` : ''}
         ${c.estado !== 'encerrada' ? html`<button class="btn btn-contorno" data-acao="encerrar">Encerrar</button>` : ''}
       </div>`);
     $$('[data-acao]', cab).forEach((b) => b.addEventListener('click', () => acao(b.dataset.acao, b)));
@@ -289,19 +289,33 @@ export async function montar(alvo, ctx) {
   }
 
   async function transferir() {
-    let equipe;
-    try { equipe = await api.equipeAtiva(); } catch (err) { return avisar(err.message, 'erro'); }
+    let equipe = [], lojas = [];
+    try { [equipe, lojas] = await Promise.all([api.equipeAtiva(), api.lojasDestino().catch(() => [])]); } catch (err) { return avisar(err.message, 'erro'); }
+    const origem = aberta.transferida?.origem;
     const m = abrirModal({
       titulo: 'Transferir conversa',
-      corpo: html`<form class="form" id="form-transferir"><div class="campo"><label for="t-pessoa">Passar para</label>
-        <select id="t-pessoa" name="atendenteId">${equipe.map((p) => html`<option value="${p.id}" ${p.id === aberta.atendente?.id ? 'selected' : ''}>${p.nome}${p.id === eu.id ? ' (você)' : ''}</option>`)}</select></div></form>`,
+      corpo: html`<form class="form" id="form-transferir">
+        ${eu.perfil === 'dono' ? html`<div class="campo"><label for="t-pessoa">Passar para alguém desta loja</label>
+          <select id="t-pessoa" name="atendenteId"><option value="">— escolher —</option>${equipe.map((p) => html`<option value="${p.id}">${p.nome}${p.id === eu.id ? ' (você)' : ''}</option>`)}</select></div>` : html`<input type="hidden" name="atendenteId" value="">`}
+        ${lojas.length ? html`<div class="campo"><label for="t-loja">Ou para outra loja</label>
+          <select id="t-loja" name="lojaId"><option value="">— escolher —</option>${origem ? html`<option value="${origem.id}">↩ Devolver para ${origem.nome} (origem)</option>` : ''}${lojas.filter((l) => l.id !== origem?.id).map((l) => html`<option value="${l.id}">${l.nome} · ${l.cidade}/${l.uf}</option>`)}</select>
+          <p class="ajuda">A conversa continua neste mesmo WhatsApp; a equipe da outra loja passa a ver e responder por ele. Vai para a fila de lá.</p></div>
+        <div class="campo"><label for="t-nota">Recado para quem vai atender (opcional)</label><input id="t-nota" name="nota" maxlength="300" placeholder="Ex.: cliente quer retirar em Feira de Santana dia 12"></div>` : ''}
+      </form>`,
       rodape: html`<button class="btn btn-contorno" data-fechar>Cancelar</button><button class="btn btn-primario" type="submit" form="form-transferir">Transferir</button>`,
     });
     $('#form-transferir', m.el).addEventListener('submit', async (e) => {
       e.preventDefault();
+      const f = e.target; const atendenteId = f.elements.atendenteId.value; const lojaId = f.elements.lojaId?.value;
+      if (!atendenteId && !lojaId) return avisar('Escolha uma pessoa ou uma loja.', 'erro');
       await comBotao($('[type=submit]', m.el), async () => {
         try {
-          aberta = await api.acaoConversa(aberta.id, 'transferir', { atendenteId: e.target.elements.atendenteId.value });
+          if (lojaId) {
+            const r = await api.transferirConversa(aberta.id, { lojaId, nota: f.elements.nota?.value || undefined });
+            m.fechar(); store.mapa.delete(aberta.id); aberta = null; desenharLista(); ctx.navegar('conversas'); avisar(`Conversa transferida para ${r.para.nome}.`);
+            return;
+          }
+          aberta = await api.acaoConversa(aberta.id, 'transferir', { atendenteId });
           store.mapa.set(aberta.id, aberta); m.fechar(); desenharCabecalho(); desenharLista(); await buscarNovas(); avisar('Conversa transferida.');
         } catch (err) { avisar(err.message, 'erro'); }
       });

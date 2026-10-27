@@ -742,3 +742,19 @@ details[open] summary { margin-bottom: 10px; }
 /* ---------- pagamentos online / repasses Pix — mesmos componentes do sistema ---------- */
 .filtros .campo-data { flex: 0 1 170px; }
 .filtros .campo-data input { min-height: 40px; }
+
+/* ---------- regras automáticas do funil ---------- */
+.opcao-caixa { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; color: var(--texto); line-height: 1.4; }
+.opcao-caixa input { margin-top: 3px; accent-color: var(--vermelho); }
+.barras-grupos { display: grid; gap: 10px; }
+.barra-grupo { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: center; }
+.barra-grupo .barra-rotulo { display: flex; justify-content: space-between; font-size: 13.5px; grid-column: 1; }
+.barra-grupo .barra-trilho { grid-column: 1; height: 8px; border-radius: 99px; background: var(--superficie-2); overflow: hidden; }
+.barra-grupo .barra-cheia { height: 100%; background: var(--vermelho); border-radius: 99px; }
+.barra-grupo > .sub { grid-column: 2; grid-row: 1 / span 2; font-size: 12.5px; color: var(--texto-3); }
+.select-filial { min-height: 36px; padding: 0 10px; border-radius: var(--raio); border: 1px solid var(--borda-forte); background: var(--superficie); color: var(--texto); font: 500 13px var(--fonte-texto); }
+.lista-modulos { display: grid; gap: 12px; margin-bottom: 14px; }
+.modulo-item { display: flex; gap: 12px; align-items: flex-start; cursor: pointer; }
+.modulo-item > span { display: grid; gap: 2px; font-size: 14px; }
+.modulo-item .sub { font-size: 12.5px; color: var(--texto-3); }
+.select-loja { border: 0; background: transparent; color: var(--texto); font: 700 15px var(--fonte-texto); padding: 0; max-width: 260px; cursor: pointer; }

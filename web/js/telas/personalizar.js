@@ -49,8 +49,8 @@ const trilhaEtapas = (f) => html`<div class="trilha-etapas">${f.etapas.map((e) =
 // =====================================================================
 async function funisDaLoja(area, { ctx }) {
   carregando(area);
-  let funis;
-  try { funis = await api.funis(); } catch (err) { return falhou(area, err, ctx); }
+  let funis, regras;
+  try { [funis, regras] = await Promise.all([api.funis(), api.regrasFunil()]); } catch (err) { return falhou(area, err, ctx); }
   render(area, html`
     <div class="alerta-caixa info">${icone('info')}<span>O <strong>funil principal</strong> é o que o assistente usa: ele coloca cada conversa nova na primeira etapa e move o cliente sozinho nas etapas marcadas com ${icone('robo')}. Os outros funis a equipe usa como quiser (ex.: mensalistas, empresas).</span></div>
     <div class="lista-funis">${funis.map((f) => html`
@@ -61,7 +61,23 @@ async function funisDaLoja(area, { ctx }) {
             ${f.principal ? '' : html`<button class="btn btn-texto" data-arquivar="${f.id}">Arquivar</button>`}</div></div>
         <div class="painel-corpo">${trilhaEtapas(f)}</div>
       </section>`)}</div>
-    <button class="btn btn-primario" id="novo-funil">${icone('mais')}Novo funil</button>`);
+    <button class="btn btn-primario" id="novo-funil">${icone('mais')}Novo funil</button>
+    <section class="painel" id="regras-funil"><div class="painel-cab"><div><h2>Regras automáticas</h2><span class="sub">Quando o Conecta marca o cliente como perdido ou concluído sem ninguém mexer (funil principal).</span></div></div>
+      <form class="form painel-corpo" id="form-regras" novalidate>
+        <div class="campo campo-curto"><label for="rg-horas">Marcar como <strong>perdido</strong> quando o cliente ficar sem responder por</label>
+          <select id="rg-horas" name="perdidoSemRespostaHoras">${[[0, 'Nunca (só manualmente)'], [24, '24 horas'], [48, '48 horas'], [72, '3 dias'], [168, '7 dias']].map(([v, t]) => html`<option value="${v}" ${Number(regras.perdidoSemRespostaHoras) === v ? 'selected' : ''}>${t}</option>`)}</select>
+          <p class="ajuda">Conta a partir da última mensagem do cliente, só quando a última palavra foi nossa (assistente ou equipe) e ainda não há reserva.</p></div>
+        <label class="opcao-caixa"><input type="checkbox" name="perdidoPeloAssistente" ${regras.perdidoPeloAssistente ? 'checked' : ''}><span><strong>Assistente marca perdido</strong> quando o cliente diz que não vai alugar (fechou com outra, achou caro, mudou de planos) — com o motivo.</span></label>
+        <label class="opcao-caixa"><input type="checkbox" name="concluidoAoPagar" ${regras.concluidoAoPagar ? 'checked' : ''}><span><strong>Concluído ao pagar</strong>: Pix confirmado pelo WhatsApp fecha a oportunidade como ganha.</span></label>
+        <label class="opcao-caixa"><input type="checkbox" name="concluidoNaRetirada" ${regras.concluidoNaRetirada ? 'checked' : ''}><span><strong>Concluído na retirada</strong>: passou a data de retirada e a reserva não foi cancelada → ganha.</span></label>
+        <div><button class="btn btn-primario" type="submit">Salvar regras</button></div>
+      </form></section>`);
+  $('#form-regras', area).addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const d = { perdidoSemRespostaHoras: Number(f.elements.perdidoSemRespostaHoras.value), perdidoPeloAssistente: f.elements.perdidoPeloAssistente.checked, concluidoAoPagar: f.elements.concluidoAoPagar.checked, concluidoNaRetirada: f.elements.concluidoNaRetirada.checked };
+    await comBotao($('[type=submit]', f), async () => { try { await api.salvarRegrasFunil(d); avisar('Regras salvas.'); } catch (err) { avisar(err.message, 'erro'); } });
+  });
   $$('[data-editar]', area).forEach((b) => b.addEventListener('click', () => editarFunil({ funil: funis.find((f) => f.id === b.dataset.editar), escopo: 'loja' }, () => funisDaLoja(area, { ctx }))));
   $$('[data-arquivar]', area).forEach((b) => b.addEventListener('click', async () => {
     const f = funis.find((x) => x.id === b.dataset.arquivar);

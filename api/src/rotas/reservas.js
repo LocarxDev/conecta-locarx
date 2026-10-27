@@ -7,8 +7,11 @@ import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js
 import * as locarx from '../servicos/locarx/api-locarx.js';
 import * as cotacao from '../servicos/locarx/cotacao.js';
 import { registrarOcorrencia, detalhesDoErro } from '../servicos/ocorrencias.js';
+import { resolverFilial } from '../servicos/locarx/filiais.js';
+import { moduloLigado } from '../servicos/modulos.js';
 import * as cobrancas from '../servicos/pagamentos/cobrancas.js';
 import { cobrancaPublica } from './pagamentos.js';
+import { assinar } from './conversas.js';
 import { enviarAoCliente } from '../servicos/canais/envio.js';
 import { ferramentasDaLoja, cpfValido, registrarReserva } from '../servicos/locarx/ferramentas.js';
 import { iguais } from '../servicos/seguranca.js';
@@ -22,21 +25,22 @@ const ctx = (req) => contextoDoUsuario(req.usuario);
 
 function reservaPublica(r) {
   return {
-    id: r.id, codigo: r.codigo, status: r.status, retirada: r.retirada, devolucao: r.devolucao, grupo: r.grupo,
+    id: r.id, codigo: r.codigo, status: r.status, retirada: r.retirada, devolucao: r.devolucao, grupo: r.grupo, branchId: r.branch_id ?? null, filial: r.filial_nome || null, pagamento: r.pagamento || 'loja',
     valor: r.valor != null ? Number(r.valor) : null, origem: r.origem, criadaEm: r.criada_em,
     contato: r.contato_id ? { id: r.contato_id, nome: r.contato_nome, telefone: r.telefone } : null, conversaId: r.conversa_id,
   };
 }
 
 reservas.get('/reservas', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
-  const q = validar(z.object({ periodo: z.enum(['proximas', 'passadas', 'todas']).default('proximas'), busca: z.string().trim().max(60).optional() }), req.query);
+  const q = validar(z.object({ periodo: z.enum(['proximas', 'passadas', 'todas']).default('proximas'), busca: z.string().trim().max(60).optional(), filial: z.coerce.number().int().positive().optional() }), req.query);
   const params = [req.usuario.loja_id];
   let filtro = '';
+  if (q.filial) { params.push(q.filial); filtro += ` AND r.branch_id = $${params.length}`; }
   if (q.periodo === 'proximas') filtro += ` AND r.devolucao >= now() - interval '1 day'`;
   if (q.periodo === 'passadas') filtro += ` AND r.devolucao < now() - interval '1 day'`;
   if (q.busca) { params.push('%' + q.busca.replace(/[%_\\]/g, '\\$&') + '%'); filtro += ` AND (r.codigo ILIKE $${params.length} OR ct.nome ILIKE $${params.length} OR ct.telefone LIKE $${params.length})`; }
   const rows = await comContexto(ctx(req), async (c) => (await c.query(
-    `SELECT r.*, ct.nome AS contato_nome, ct.telefone FROM reservas r LEFT JOIN contatos ct ON ct.id = r.contato_id
+    `SELECT r.*, ct.nome AS contato_nome, ct.telefone, f.nome AS filial_nome FROM reservas r LEFT JOIN contatos ct ON ct.id = r.contato_id LEFT JOIN filiais f ON f.branch_id = r.branch_id
       WHERE r.loja_id = $1 ${filtro} ORDER BY r.retirada ${q.periodo === 'passadas' ? 'DESC' : 'ASC'} LIMIT 300`, params)).rows);
   res.json(rows.map(reservaPublica));
 }));
@@ -70,8 +74,15 @@ function periodoDaEquipe(d) {
   } catch (e) { throw erro(422, e.message, { dataRetirada: e.message }); }
 }
 
-async function lojaDoUsuario(req) {
-  const loja = await comContexto(ctx(req), async (c) => (await c.query('SELECT id, branch_id FROM lojas WHERE id = $1', [req.usuario.loja_id])).rows[0]);
+// loja do usuário com a filial escolhida (filialId / branchId do pedido; sem pedido → principal). loja.branch_id = filial em uso.
+async function lojaDoUsuario(req, filialPedida = null) {
+  const loja = await comContexto(ctx(req), async (c) => {
+    const l = (await c.query('SELECT id, branch_id, nome FROM lojas WHERE id = $1', [req.usuario.loja_id])).rows[0];
+    if (!l) return null;
+    let filial;
+    try { filial = await resolverFilial(c, l.id, filialPedida); } catch (e) { throw erro(422, 'Confira os campos destacados.', { filialId: e.message }); }
+    return filial ? { ...l, branch_id: filial.branchId, filial } : l;
+  });
   if (!loja?.branch_id) throw erro(409, 'Esta loja ainda não está vinculada a uma filial do portal LocarX. Peça à administração.');
   if (!config.locarx) throw erro(503, 'API LocarX não configurada no servidor.');
   return loja;
@@ -120,9 +131,9 @@ reservas.get('/cotacao/ultima', exigirPerfil('dono', 'atendente'), rota(async (r
 }));
 
 reservas.post('/cotacao', exigirPerfil('dono', 'atendente'), limiteCotacao, rota(async (req, res) => {
-  const d = validar(z.object({ ...zPeriodo, conversaId: zUuid.optional() }), req.body);
+  const d = validar(z.object({ ...zPeriodo, conversaId: zUuid.optional(), filialId: z.string().max(60).optional() }), req.body);
   const periodo = periodoDaEquipe(d);
-  const loja = await lojaDoUsuario(req);
+  const loja = await lojaDoUsuario(req, d.filialId);
   let r;
   try { r = await cotacao.cotarPeriodo({ branchId: loja.branch_id, periodo }); } catch (e) {
     await registrarOcorrencia({ lojaId: loja.id, usuarioId: req.usuario.id, origem: 'equipe', tipo: 'cotacao', nivel: 'erro', mensagem: `Cotação falhou: ${erroLocarx(e).message}`, detalhes: detalhesDoErro(e, { periodo: d }) });
@@ -132,19 +143,20 @@ reservas.post('/cotacao', exigirPerfil('dono', 'atendente'), limiteCotacao, rota
   const texto = r.grupos.length ? cotacao.textoOpcoes(r.grupos.slice(0, 3), { periodo: cotacao.periodoTexto({ data_retirada: d.dataRetirada, hora_retirada: d.horaRetirada, data_devolucao: d.dataDevolucao, hora_devolucao: d.horaDevolucao }), haMais: r.grupos.length > 3 }) : null;
   const resposta = {
     periodo: { retirada: periodo.retirada, devolucao: periodo.devolucao },
+    filial: loja.filial || null,
     grupos: r.grupos.map(grupoPublico),
     adicionais: r.adicionais, km: r.km, politicas: r.politicas,
     textoWhatsapp: texto,
     aviso: !r.grupos.length && menos24h ? 'O portal LocarX não mostra carros para retirada com menos de 24 horas. Para esse prazo, a reserva é feita direto no portal.' : null,
   };
-  if (r.grupos.length) await guardarCotacaoEquipe(req, d.conversaId, () => ({ em: new Date().toISOString(), por: req.usuario.nome, entrada: { dataRetirada: d.dataRetirada, horaRetirada: d.horaRetirada, dataDevolucao: d.dataDevolucao, horaDevolucao: d.horaDevolucao }, resultado: resposta, periodo: resposta.periodo, preco: null }));
+  if (r.grupos.length) await guardarCotacaoEquipe(req, d.conversaId, () => ({ em: new Date().toISOString(), por: req.usuario.nome, filial: loja.filial || null, entrada: { dataRetirada: d.dataRetirada, horaRetirada: d.horaRetirada, dataDevolucao: d.dataDevolucao, horaDevolucao: d.horaDevolucao }, resultado: resposta, periodo: resposta.periodo, preco: null }));
   res.json(resposta);
 }));
 
 reservas.post('/cotacao/preco', exigirPerfil('dono', 'atendente'), limiteCotacao, rota(async (req, res) => {
-  const d = validar(z.object({ ...zPeriodo, fleetId: z.coerce.number().int().positive(), protecoes: z.array(z.string().max(30)).max(5).default([]), conversaId: zUuid.optional() }), req.body);
+  const d = validar(z.object({ ...zPeriodo, fleetId: z.coerce.number().int().positive(), filialId: z.string().max(60).optional(), protecoes: z.array(z.string().max(30)).max(5).default([]), conversaId: zUuid.optional() }), req.body);
   const periodo = periodoDaEquipe(d);
-  const loja = await lojaDoUsuario(req);
+  const loja = await lojaDoUsuario(req, d.filialId);
   const protecoes = cotacao.normalizarProtecoes(d.protecoes);
   let r;
   try { r = await locarx.calcularPreco({ branchId: loja.branch_id, fleetId: d.fleetId, retirada: periodo.retirada, devolucao: periodo.devolucao, protecoes }); } catch (e) { throw erroLocarx(e); }
@@ -165,6 +177,7 @@ reservas.post('/cotacao/preco', exigirPerfil('dono', 'atendente'), limiteCotacao
 const zReservaEquipe = z.object({
   ...zPeriodo,
   fleetId: z.coerce.number().int().positive(),
+  filialId: z.string().max(60).optional(),
   protecoes: z.array(z.string().max(30)).max(5).default([]),
   nome: z.string().trim().min(2, 'Informe o nome completo.').max(120).refine((v) => v.split(/\s+/).length >= 2, 'Informe o nome completo.'),
   cpf: z.string().trim().max(20).refine((v) => cpfValido(v), 'CPF inválido.'),
@@ -182,7 +195,7 @@ reservas.post('/reservas', exigirPerfil('dono', 'atendente'), limiteCotacao, rot
   const periodo = periodoDaEquipe(d);
   // a equipe pode reservar com menos de 24 h? Não pela API: ela não devolve carros nesse prazo.
   if (periodo.ini < new Date(Date.now() + 24 * 3_600_000)) throw erro(422, 'O portal LocarX só aceita reservas pela API com retirada a partir de 24 horas. Para esse prazo, reserve direto no portal.', { dataRetirada: 'Retirada com menos de 24 h.' });
-  const loja = await lojaDoUsuario(req);
+  const loja = await lojaDoUsuario(req, d.filialId);
   const protecoes = cotacao.normalizarProtecoes(d.protecoes);
 
   // contato e conversa precisam ser desta loja (RLS já garante; aqui só para a mensagem de erro ficar clara)
@@ -195,7 +208,7 @@ reservas.post('/reservas', exigirPerfil('dono', 'atendente'), limiteCotacao, rot
   const contatoId = vinculo.contato?.id || vinculo.conversa?.contato_id || null;
   const telefone = String(d.telefone || vinculo.contato?.telefone || '').replace(/\D/g, '');
   if (!telefone) throw erro(422, 'Confira os campos destacados.', { telefone: 'Informe o telefone do cliente.' });
-  const cliente = { nome: d.nome, cpf: d.cpf.replace(/\D/g, ''), cnh: d.cnh.replace(/\D/g, ''), email: d.email, telefone, observacoes: `Reserva feita pela equipe da loja no Conecta LocarX (${req.usuario.nome}).`, referencia: vinculo.conversa ? `CONECTA-${String(vinculo.conversa.id).slice(0, 8)}` : `CONECTA-EQ-${String(req.usuario.id).slice(0, 8)}` };
+  const cliente = { nome: d.nome, cpf: d.cpf.replace(/\D/g, ''), cnh: d.cnh.replace(/\D/g, ''), email: d.email, telefone, observacoes: `Pagamento: na loja, na retirada.\nOrigem: Conecta LocarX - equipe da loja (${req.usuario.nome})`, referencia: vinculo.conversa ? `CONECTA-${String(vinculo.conversa.id).slice(0, 8)}` : `CONECTA-EQ-${String(req.usuario.id).slice(0, 8)}` };
 
   const base = { lojaId: loja.id, usuarioId: req.usuario.id, conversaId: vinculo.conversa?.id || null, origem: 'equipe', tipo: 'reserva' };
   const contexto = { fleetId: d.fleetId, protecoes, periodo: { retirada: periodo.retirada, devolucao: periodo.devolucao }, passo: d.confirmar ? 'confirmar' : 'resumo' };
@@ -207,8 +220,8 @@ reservas.post('/reservas', exigirPerfil('dono', 'atendente'), limiteCotacao, rot
   }
   const rotulo = cotacao.rotuloGrupo({ grupo: preco.grupo }, 1);
   const nomes = preco.protecoes.length ? preco.protecoes.map((x) => x.nome) : protecoes;
-  if (d.pagamento === 'pix' && !cobrancas.pixDisponivel()) throw erro(409, 'Pagamento Pix não está configurado no servidor.');
-  const resumo = `*Resumo da reserva*\n🚗 ${rotulo.letra} – ${rotulo.nome}\n📅 Retirada: ${cotacao.dataBr(periodo.retirada)}\n📅 Devolução: ${cotacao.dataBr(periodo.devolucao)}\n🛡️ Proteção: ${nomes.join(', ')}\n💰 Total: *${cotacao.reais(preco.total)}* (${d.pagamento === 'pix' ? 'pagamento via Pix pelo WhatsApp' : 'pagamento na loja, na retirada'})${preco.caucao != null ? `\n💳 Caução: ${cotacao.reais(preco.caucao)} (pré-autorização no cartão, liberada após a devolução)` : ''}\n👤 ${cliente.nome} · CPF final ${cliente.cpf.slice(-2)} · ${cliente.email}`;
+  if (d.pagamento === 'pix' && !(await cobrancas.contaDaLoja(req.usuario.loja_id)).disponivel) throw erro(409, 'Pagamento Pix não está disponível para esta loja.');
+  const resumo = `*Resumo da reserva*\n🚗 ${rotulo.letra} – ${rotulo.nome}${loja.filial && !loja.filial.principal ? `\n📍 Filial: ${loja.filial.nome}` : ''}\n📅 Retirada: ${cotacao.dataBr(periodo.retirada)}\n📅 Devolução: ${cotacao.dataBr(periodo.devolucao)}\n🛡️ Proteção: ${nomes.join(', ')}\n💰 Total: *${cotacao.reais(preco.total)}* (${d.pagamento === 'pix' ? 'pagamento via Pix pelo WhatsApp' : 'pagamento na loja, na retirada'})${preco.caucao != null ? `\n💳 Caução: ${cotacao.reais(preco.caucao)} (pré-autorização no cartão, liberada após a devolução)` : ''}\n👤 ${cliente.nome} · CPF final ${cliente.cpf.slice(-2)} · ${cliente.email}`;
   if (!d.confirmar) return res.json({ passo: 'resumo', grupo: preco.grupo, letra: rotulo.letra, nome: rotulo.nome, total: preco.total, diarias: preco.diarias, protecoes: nomes, resumo, pagamento: d.pagamento });
 
   // Pix: gera a cobrança; a reserva no portal é criada quando o webhook confirmar o pagamento
@@ -226,7 +239,7 @@ reservas.post('/reservas', exigirPerfil('dono', 'atendente'), limiteCotacao, rot
     // o código Pix não é texto para revisar: vai direto ao cliente, em duas mensagens (explicação + código sozinho, para copiar)
     let enviado = false;
     if (vinculo.conversa) {
-      enviado = await enviarAoCliente(vinculo.conversa.id, explicacao, { autor: 'atendente' }).catch(() => false);
+      enviado = await enviarAoCliente(vinculo.conversa.id, assinar(req.usuario, explicacao), { autor: 'atendente' }).catch(() => false);
       if (enviado) await enviarAoCliente(vinculo.conversa.id, codigo, { autor: 'atendente' }).catch(() => {});
       await comContexto(ctx(req), (c) => c.query(`UPDATE conversas SET estado = 'humano', atendente_id = $2, humano_respondeu_em = now(), atualizada_em = now() WHERE id = $1 AND estado <> 'encerrada'`, [vinculo.conversa.id, req.usuario.id]));
     }
@@ -246,7 +259,7 @@ reservas.post('/reservas', exigirPerfil('dono', 'atendente'), limiteCotacao, rot
   let reservaId = null, avisoGravacao = null;
   try {
     reservaId = await registrarReserva(
-      { lojaId: loja.id, contatoId, conversaId: vinculo.conversa?.id || null, origem: 'equipe' },
+      { lojaId: loja.id, branchId: loja.branch_id, contatoId, conversaId: vinculo.conversa?.id || null, origem: 'equipe' },
       reserva, { ini: periodo.ini, fim: periodo.fim }, cliente, { fleetId: d.fleetId, protecoes, porUsuarioId: req.usuario.id },
     );
     await comContexto(ctx(req), async (c) => {
@@ -303,8 +316,11 @@ mcp.post('/', rota(async (req, res) => {
   if (method === 'initialize') return responder({ protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'locarx-tools', version: '1.0.0' } });
   if (method === 'notifications/initialized') return res.status(202).end();
   const branchId = Number(req.get('x-conecta-filial'));
-  const loja = Number.isInteger(branchId) && branchId > 0 ? await comoSistema(async (c) => (await c.query('SELECT id, branch_id FROM lojas WHERE branch_id = $1 AND ativa', [branchId])).rows[0]) : null;
+  // a filial pode ser a principal (lojas.branch_id) ou qualquer outra da franquia (filiais)
+  const loja = Number.isInteger(branchId) && branchId > 0 ? await comoSistema(async (c) => (await c.query(
+    `SELECT l.id, l.modulos, $1::int AS branch_id FROM lojas l WHERE l.ativa AND (l.branch_id = $1 OR EXISTS (SELECT 1 FROM filiais f WHERE f.loja_id = l.id AND f.branch_id = $1 AND f.ativa)) LIMIT 1`, [branchId])).rows[0]) : null;
   if (!loja) return falhar(-32602, 'Informe X-Conecta-Filial com o branchId de uma loja ativa.');
+  if (!moduloLigado(loja.modulos, 'mcp')) return falhar(-32603, 'A integração MCP não está liberada para esta loja.');
   const ferramentas = ferramentasDaLoja({ lojaId: loja.id, branchId: loja.branch_id, locarxDisponivel: !!config.locarx, simulacao: false }).filter((f) => SO_CONSULTA.includes(f.nome));
   if (method === 'tools/list') return responder({ tools: ferramentas.map((f) => ({ name: f.nome, description: f.descricao, inputSchema: f.parametros })) });
   if (method === 'tools/call') {

@@ -28,8 +28,13 @@ export async function montar(alvo, ctx) {
           <td>${PERFIS[u.perfil]}${u.doisFatores ? '' : html` <span class="selo alerta">sem 2 etapas</span>`}</td>
           <td>${u.status === 'ativo' ? html`<span class="selo ok">Ativo</span>` : u.status === 'convidado' ? html`<span class="selo alerta">Convite enviado</span>` : html`<span class="selo neutro">Desativado</span>`}</td>
           <td class="col-opcional sub">${quando(u.ultimoAcesso)}</td>
-          <td>${u.id !== ctx.usuario.id && u.status !== 'convidado' ? html`<button class="btn btn-texto" data-situacao="${u.id}" data-novo="${u.status === 'ativo' ? 'inativo' : 'ativo'}">${u.status === 'ativo' ? 'Desativar' : 'Reativar'}</button>` : ''}</td>
+          <td><div class="acoes-linha">${u.id !== ctx.usuario.id ? html`<button class="btn btn-texto" data-nivel="${u.id}" data-novo="${u.perfil === 'admin' ? 'matriz' : 'admin'}" title="Mudar o nível de acesso">${u.perfil === 'admin' ? 'Tornar matriz' : 'Tornar administração'}</button>` : ''}${u.id !== ctx.usuario.id && u.status !== 'convidado' ? html`<button class="btn btn-texto" data-situacao="${u.id}" data-novo="${u.status === 'ativo' ? 'inativo' : 'ativo'}">${u.status === 'ativo' ? 'Desativar' : 'Reativar'}</button>` : ''}</div></td>
         </tr>`)}</tbody></table></div>`);
+      $$('[data-nivel]', area).forEach((b) => b.addEventListener('click', async () => {
+        const novo = b.dataset.novo;
+        if (!(await confirmar({ titulo: 'Mudar nível de acesso', texto: novo === 'admin' ? 'Administração vê e altera tudo da rede: lojas, acessos, padrões, monitor e repasses.' : 'Matriz vê a rede (lojas, relatórios, repasses) sem alterar acessos nem padrões. A pessoa é desconectada e entra de novo com o nível novo.', botao: 'Mudar' }))) return;
+        try { await api.nivelUsuarioRede(b.dataset.nivel, novo); carregar(); } catch (err) { avisar(err.message, 'erro'); }
+      }));
       $$('[data-situacao]', area).forEach((b) => b.addEventListener('click', async () => {
         if (b.dataset.novo === 'inativo' && !(await confirmar({ titulo: 'Desativar acesso', texto: 'A pessoa perde o acesso ao Conecta na hora.', botao: 'Desativar', perigo: true }))) return;
         try { await api.situacaoUsuarioRede(b.dataset.situacao, b.dataset.novo); carregar(); } catch (err) { avisar(err.message, 'erro'); }

@@ -47,8 +47,10 @@ export const config = {
   } : null,
   // Pagamento Pix pelo WhatsApp (AbacatePay). Uma chave da REDE: tudo cai na conta do franqueador, que repassa às lojas.
   // Sem ABACATEPAY_API_KEY o pagamento online fica desligado (o assistente nem oferece).
-  abacatepay: process.env.ABACATEPAY_API_KEY ? {
-    chave: process.env.ABACATEPAY_API_KEY.trim(),
+  // Também é possível cada loja ter a própria conta AbacatePay (chave cadastrada no Conecta, cifrada): aí a chave da rede
+  // é opcional, mas o ABACATEPAY_WEBHOOK_SECRET continua obrigatório (o webhook é um só, cadastrado em cada conta).
+  abacatepay: process.env.ABACATEPAY_API_KEY || process.env.ABACATEPAY_WEBHOOK_SECRET ? {
+    chave: process.env.ABACATEPAY_API_KEY?.trim() || null,
     url: (process.env.ABACATEPAY_URL || 'https://api.abacatepay.com/v2').trim().replace(/\/+$/, ''),
     // segredo do webhook: vai na URL cadastrada no painel do AbacatePay (…/api/webhooks/abacatepay/<segredo>?webhookSecret=<segredo>)
     segredoWebhook: (() => {

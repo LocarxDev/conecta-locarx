@@ -25,7 +25,7 @@ async function gerarConvite(c, usuarioId) {
 function podeGerir(eu, alvo) {
   if (!alvo || alvo.id === eu.id) return false;
   if (eu.perfil === 'admin') return !!alvo.loja_id;
-  return eu.perfil === 'dono' && alvo.loja_id === eu.loja_id && alvo.perfil === 'atendente';
+  return eu.perfil === 'dono' && alvo.loja_id === eu.loja_id && ['atendente', 'dono'].includes(alvo.perfil);
 }
 
 async function buscarAlvo(c, id) {
@@ -66,6 +66,7 @@ usuarios.post('/convites', exigirPerfil('admin', 'dono'), rota(async (req, res) 
     const novo = (await c.query(
       `INSERT INTO usuarios (nome, email, perfil, loja_id, status) VALUES ($1, $2, $3, $4, 'convidado') RETURNING *`,
       [d.nome, d.email, d.perfil, lojaId])).rows[0];
+    await c.query('INSERT INTO usuario_lojas (usuario_id, loja_id, perfil) VALUES ($1, $2, $3) ON CONFLICT (usuario_id, loja_id) DO UPDATE SET perfil = EXCLUDED.perfil', [novo.id, lojaId, d.perfil]);
     const link = await gerarConvite(c, novo.id);
     await registrar(c, req, 'convidou', { alvo: novo.id, lojaId, detalhes: { email: d.email, perfil: d.perfil } });
     return { novo, link, loja };
@@ -78,15 +79,24 @@ usuarios.post('/convites', exigirPerfil('admin', 'dono'), rota(async (req, res) 
 // ---------- editar / ativar / desativar ----------
 usuarios.patch('/:id', exigirPerfil('admin', 'dono'), rota(async (req, res) => {
   const id = uuidOu404(req.params.id);
-  const d = validar(z.object({ nome: zNome.optional(), status: z.enum(['ativo', 'inativo']).optional() }), req.body);
+  // perfil: nível de acesso na loja (atendente ou dono). O dono pode promover/rebaixar gente da própria loja; a administração, de qualquer loja.
+  const d = validar(z.object({ nome: zNome.optional(), status: z.enum(['ativo', 'inativo']).optional(), perfil: z.enum(['atendente', 'dono']).optional() }), req.body);
   const atualizado = await comContexto(ctx(req), async (c) => {
     const alvo = await buscarAlvo(c, id);
     if (!podeGerir(req.usuario, alvo)) throw erro(alvo?.id === req.usuario.id ? 400 : 403, alvo?.id === req.usuario.id ? 'Altere seus próprios dados em Meu perfil.' : 'Você não pode alterar este acesso.');
     if (d.status === 'ativo' && alvo.status === 'convidado') throw erro(400, 'Esta pessoa ainda não aceitou o convite. Reenvie o convite.');
+    if (d.perfil && d.perfil !== alvo.perfil && alvo.perfil === 'dono' && Number((await c.query(`SELECT count(*) FROM usuarios WHERE loja_id = $1 AND perfil = 'dono' AND status = 'ativo' AND id <> $2`, [alvo.loja_id, id])).rows[0].count) < 1) {
+      throw erro(400, 'A loja precisa ter pelo menos um dono ativo. Promova outra pessoa antes.');
+    }
     const r = (await c.query(
-      `UPDATE usuarios SET nome = coalesce($2, nome), status = CASE WHEN status = 'convidado' THEN status ELSE coalesce($3, status) END WHERE id = $1 RETURNING *`,
-      [id, d.nome ?? null, d.status ?? null])).rows[0];
+      `UPDATE usuarios SET nome = coalesce($2, nome), status = CASE WHEN status = 'convidado' THEN status ELSE coalesce($3, status) END, perfil = coalesce($4, perfil) WHERE id = $1 RETURNING *`,
+      [id, d.nome ?? null, d.status ?? null, d.perfil ?? null])).rows[0];
     if (d.status === 'inativo') await c.query('DELETE FROM sessoes WHERE usuario_id = $1', [id]);
+    if (d.perfil && d.perfil !== alvo.perfil) {
+      await c.query('INSERT INTO usuario_lojas (usuario_id, loja_id, perfil) VALUES ($1, $2, $3) ON CONFLICT (usuario_id, loja_id) DO UPDATE SET perfil = EXCLUDED.perfil', [id, alvo.loja_id, d.perfil]);
+      await c.query('DELETE FROM sessoes WHERE usuario_id = $1', [id]);   // a pessoa entra de novo já com o nível novo
+      await registrar(c, req, 'alterou_nivel', { alvo: id, lojaId: alvo.loja_id, detalhes: { de: alvo.perfil, para: d.perfil } });
+    }
     await registrar(c, req, d.status ? (d.status === 'inativo' ? 'desativou_usuario' : 'reativou_usuario') : 'editou_usuario', { alvo: id, lojaId: alvo.loja_id });
     return r;
   });

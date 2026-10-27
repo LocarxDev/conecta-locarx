@@ -53,6 +53,12 @@ const real = {
   obterLoja: (id) => chamar('GET', `/admin/lojas/${encodeURIComponent(id)}`),
   salvarLoja: (d) => (d.id ? chamar('PUT', `/admin/lojas/${encodeURIComponent(d.id)}`, d) : chamar('POST', '/admin/lojas', d)),
   alterarSituacaoLoja: (id, ativa) => chamar('PATCH', `/admin/lojas/${encodeURIComponent(id)}`, { ativa }),
+  excluirLoja: (id, confirmacao) => chamar('DELETE', `/admin/lojas/${encodeURIComponent(id)}`, { confirmacao }),
+  modulosCatalogo: () => chamar('GET', '/admin/modulos'),
+  salvarModulosLoja: (id, modulos) => chamar('PATCH', `/admin/lojas/${encodeURIComponent(id)}`, { modulos }),
+  pixProprioLoja: (id, pixProprio) => chamar('PATCH', `/admin/lojas/${encodeURIComponent(id)}`, { pixProprio }),
+  salvarChaveAbacatePay: (chave) => chamar('PUT', '/loja/pagamentos/chave', { chave }),
+  removerChaveAbacatePay: () => chamar('DELETE', '/loja/pagamentos/chave'),
   listarEquipe: (lojaId) => chamar('GET', lojaId ? `/admin/lojas/${encodeURIComponent(lojaId)}/usuarios` : '/loja/usuarios'),
   convidar: (d) => chamar('POST', '/usuarios/convites', d),
   atualizarUsuario: (id, d) => chamar('PATCH', `/usuarios/${encodeURIComponent(id)}`, d),
@@ -97,7 +103,8 @@ const real = {
   importarConhecimento: (d) => chamar('POST', '/conhecimento/importar', d),
   rede: () => chamar('GET', '/admin/rede'),
   salvarRede: (d) => chamar('PUT', '/admin/rede', d),
-  importarPoliticasLocarx: () => chamar('POST', '/admin/rede/importar-politicas', {}),
+  importarPoliticasLocarx: (branchId) => chamar('POST', '/admin/rede/importar-politicas', branchId ? { branchId } : {}),
+  importarPortalLoja: (filialId) => chamar('POST', '/conhecimento/importar-portal', filialId ? { filialId } : {}),
   incluirSinonimo: (termos) => chamar('POST', '/admin/sinonimos', { termos }),
   excluirSinonimo: (id) => chamar('DELETE', `/admin/sinonimos/${encodeURIComponent(id)}`),
 
@@ -105,6 +112,11 @@ const real = {
   reservas: (q) => chamar('GET', '/loja/reservas?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
   atualizarReserva: (id) => chamar('POST', `/loja/reservas/${encodeURIComponent(id)}/atualizar`, {}),
   filiaisLocarx: () => chamar('GET', '/admin/locarx/filiais'),
+  // filiais da franquia (várias filiais do portal num só WhatsApp)
+  filiais: () => chamar('GET', '/loja/filiais'),
+  adicionarFilial: (lojaId, d) => chamar('POST', `/admin/lojas/${encodeURIComponent(lojaId)}/filiais`, d),
+  editarFilial: (lojaId, id, d) => chamar('PATCH', `/admin/lojas/${encodeURIComponent(lojaId)}/filiais/${encodeURIComponent(id)}`, d),
+  removerFilial: (lojaId, id) => chamar('DELETE', `/admin/lojas/${encodeURIComponent(lojaId)}/filiais/${encodeURIComponent(id)}`),
   testarLocarx: (branchId, reserva) => chamar('GET', `/admin/locarx/teste?branchId=${encodeURIComponent(branchId)}${reserva ? '&reserva=1' : ''}`),
   cotar: (d) => chamar('POST', '/loja/cotacao', d),
   ultimaCotacao: (conversaId) => chamar('GET', `/loja/cotacao/ultima?conversa=${encodeURIComponent(conversaId)}`),
@@ -115,8 +127,8 @@ const real = {
   verificarCobranca: (id) => chamar('POST', `/loja/cobrancas/${encodeURIComponent(id)}/verificar`, {}),
   simularCobranca: (id) => chamar('POST', `/loja/cobrancas/${encodeURIComponent(id)}/simular`, {}),
   // Relatório de pagamentos online (repasse franqueador → loja)
-  relatorioPagamentos: (q) => chamar('GET', '/loja/pagamentos/relatorio?' + new URLSearchParams(q || {})),
-  urlRelatorioPagamentosCsv: (q) => '/api/loja/pagamentos/relatorio.csv?' + new URLSearchParams(q || {}),
+  relatorioPagamentos: (q) => chamar('GET', '/loja/pagamentos/relatorio?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
+  urlRelatorioPagamentosCsv: (q) => '/api/loja/pagamentos/relatorio.csv?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v)),
   relatorioPagamentosRede: (q) => chamar('GET', '/admin/pagamentos/relatorio?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
   urlRelatorioPagamentosRedeCsv: (q) => '/api/admin/pagamentos/relatorio.csv?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v)),
   monitorAssistente: (q) => chamar('GET', '/admin/assistente/monitor?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
@@ -146,6 +158,8 @@ const real = {
   // etapa 7 — funis, etiquetas, campos, painel do cliente e roleta
   // escopo: 'loja' (o dono personaliza a loja) ou 'rede' (padrão da rede, administração/matriz)
   funis: () => chamar('GET', '/crm/funis'),
+  regrasFunil: () => chamar('GET', '/crm/funis/regras'),
+  salvarRegrasFunil: (d) => chamar('PUT', '/crm/funis/regras', d),
   criarFunil: (d) => chamar('POST', '/crm/funis', d),
   salvarFunil: (id, d) => chamar('PUT', `/crm/funis/${encodeURIComponent(id)}`, d),
   arquivarFunil: (id) => chamar('DELETE', `/crm/funis/${encodeURIComponent(id)}`),
@@ -166,16 +180,27 @@ const real = {
   disponibilidade: (disponivel) => chamar('PATCH', '/eu/disponibilidade', { disponivel }),
 
   // etapa 6 — relatórios e rede
-  relatorioLoja: (dias) => chamar('GET', `/loja/relatorio?dias=${dias}`),
+  relatorioLoja: (dias, filial) => chamar('GET', `/loja/relatorio?dias=${dias}${filial ? `&filial=${encodeURIComponent(filial)}` : ''}`),
   relatorioRede: (dias) => chamar('GET', `/admin/relatorio?dias=${dias}`),
   usuariosRede: () => chamar('GET', '/admin/usuarios'),
   convidarRede: (d) => chamar('POST', '/admin/usuarios', d),
   situacaoUsuarioRede: (id, status) => chamar('PATCH', `/admin/usuarios/${encodeURIComponent(id)}`, { status }),
+  nivelUsuarioRede: (id, perfil) => chamar('PATCH', `/admin/usuarios/${encodeURIComponent(id)}`, { perfil }),
   criarDemonstracao: () => chamar('POST', '/admin/demonstracao', {}),
   removerDemonstracao: () => chamar('DELETE', '/admin/demonstracao'),
 };
 
 // Na demonstração, telas que ainda não têm dados de exemplo avisam em vez de quebrar.
+const _extra = {
+  minhasLojas: () => chamar('GET', '/eu/lojas'),
+  trocarLoja: (lojaId) => chamar('POST', '/eu/loja', { lojaId }),
+  lojasDestino: () => chamar('GET', '/conversas/lojas-destino'),
+  transferirConversa: (id, d) => chamar('POST', `/conversas/${encodeURIComponent(id)}/transferir-loja`, d),
+  acessosLoja: (id) => chamar('GET', `/admin/lojas/${encodeURIComponent(id)}/acessos`),
+  darAcessoLoja: (id, d) => chamar('POST', `/admin/lojas/${encodeURIComponent(id)}/acessos`, d),
+  tirarAcessoLoja: (id, usuarioId) => chamar('DELETE', `/admin/lojas/${encodeURIComponent(id)}/acessos/${encodeURIComponent(usuarioId)}`),
+};
+
 export const api = USAR_EXEMPLO
   ? new Proxy(exemplo, { get: (alvo, nome) => (nome in alvo ? alvo[nome] : async () => { const e = new Error('Esta tela mostra dados reais quando o Conecta estiver ligado ao servidor.'); e.status = 0; throw e; }) })
-  : real;
+  : { ...real, ..._extra };

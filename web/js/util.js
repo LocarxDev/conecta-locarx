@@ -239,3 +239,19 @@ export function telefoneBr(v) {
   if (d.length === 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
   return String(v || '');
 }
+
+// Paginação no navegador para listas já carregadas: devolve a fatia e os controles (mesmo visual da tela Clientes).
+// `aoMudar(pagina)` é chamado quando a pessoa clica; quem chama redesenha.
+export function paginar(lista, pagina, porPagina, { rotulo = 'itens', extra = '' } = {}) {
+  const paginas = Math.max(1, Math.ceil(lista.length / porPagina));
+  const p = Math.min(Math.max(1, pagina), paginas);
+  const fatia = lista.slice((p - 1) * porPagina, p * porPagina);
+  const controles = lista.length > porPagina || extra ? html`<div class="paginacao">
+    <button class="btn btn-texto" data-pag="-1" ${p <= 1 ? 'disabled' : ''}>${icone('voltar')}Anterior</button>
+    <span class="sub num">Página ${p} de ${paginas} · ${lista.length} ${rotulo}${extra ? html` · ${extra}` : ''}</span>
+    <button class="btn btn-texto" data-pag="1" ${p >= paginas ? 'disabled' : ''}>Próxima ${icone('seta')}</button></div>` : '';
+  return { fatia, controles, pagina: p, paginas };
+}
+export function ligarPaginacao(area, aoMudar) {
+  $$('[data-pag]', area).forEach((b) => b.addEventListener('click', () => aoMudar(Number(b.dataset.pag))));
+}

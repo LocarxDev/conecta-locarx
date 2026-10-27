@@ -7,13 +7,15 @@ export class ErroAbacatePay extends Error {
   constructor(mensagem, status, resposta) { super(mensagem); this.status = status; this.resposta = resposta; }
 }
 
-async function chamar(metodo, caminho, { query, corpo } = {}) {
-  if (!config.abacatepay) throw new ErroAbacatePay('Pagamento Pix não configurado no servidor (ABACATEPAY_API_KEY).', 503);
+// `chave`: a da loja (conta própria) ou, por padrão, a da rede (ABACATEPAY_API_KEY).
+async function chamar(metodo, caminho, { query, corpo, chave } = {}) {
+  const token = chave || config.abacatepay?.chave;
+  if (!config.abacatepay || !token) throw new ErroAbacatePay('Pagamento Pix não configurado (chave do AbacatePay).', 503);
   const url = new URL(config.abacatepay.url + caminho);
   for (const [k, v] of Object.entries(query || {})) if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
   const r = await fetch(url, {
     method: metodo,
-    headers: { Authorization: `Bearer ${config.abacatepay.chave}`, Accept: 'application/json', ...(corpo ? { 'Content-Type': 'application/json' } : {}) },
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', ...(corpo ? { 'Content-Type': 'application/json' } : {}) },
     body: corpo ? JSON.stringify(corpo) : undefined,
     signal: AbortSignal.timeout(20_000),
   });
@@ -36,10 +38,11 @@ export const centavos = (reais) => Math.round(Number(reais) * 100);
 // O AbacatePay recusa travessões e outros caracteres fora do ASCII na descrição (400 "Disallowed character").
 export const textoSeguro = (v) => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[\u2012-\u2015\u2212]/g, '-').replace(/[^\x20-\x7E]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500) || 'Reserva LocarX';
 
-export async function criarPix({ valor, descricao, validadeSegundos, cliente, referencia, metadata }) {
+export async function criarPix({ valor, descricao, validadeSegundos, cliente, referencia, metadata, chave }) {
   const amount = centavos(valor);
   if (!Number.isFinite(amount) || amount < 100) throw new ErroAbacatePay('Valor do Pix precisa ser de pelo menos R$ 1,00.', 422);
   const d = await chamar('POST', '/transparents/create', {
+    chave,
     corpo: {
       method: 'PIX',
       data: {
@@ -54,18 +57,25 @@ export async function criarPix({ valor, descricao, validadeSegundos, cliente, re
 }
 
 // GET /transparents/check?id= → status atual (PENDING | PAID | EXPIRED | CANCELLED | REFUNDED | …)
-export async function consultarPix(externoId) {
-  return normalizar(await chamar('GET', '/transparents/check', { query: { id: externoId } }));
+export async function consultarPix(externoId, { chave } = {}) {
+  return normalizar(await chamar('GET', '/transparents/check', { query: { id: externoId }, chave }));
 }
 
 // POST /transparents/simulate-payment?id= — só com chave de sandbox (devMode)
-export async function simularPagamento(externoId) {
-  return normalizar(await chamar('POST', '/transparents/simulate-payment', { query: { id: externoId } }));
+export async function simularPagamento(externoId, { chave } = {}) {
+  return normalizar(await chamar('POST', '/transparents/simulate-payment', { query: { id: externoId }, chave }));
 }
 
 // POST /transparents/refund { id, reason } — sempre integral
-export async function estornar(externoId, motivo) {
-  return chamar('POST', '/transparents/refund', { corpo: { id: externoId, reason: String(motivo || 'Estorno solicitado pela loja').slice(0, 500) } });
+export async function estornar(externoId, motivo, { chave } = {}) {
+  return chamar('POST', '/transparents/refund', { chave, corpo: { id: externoId, reason: String(motivo || 'Estorno solicitado pela loja').slice(0, 500) } });
+}
+
+// Testa uma chave (da loja): cria nada, só lista — qualquer 2xx vale; 401 = chave inválida. Devolve se é sandbox (devMode).
+export async function testarChave(chave) {
+  const d = await chamar('GET', '/transparents/list', { chave }).catch(async (e) => { if (e.status === 404) return chamar('GET', '/customer/list', { chave }); throw e; });
+  const itens = Array.isArray(d) ? d : Array.isArray(d?.items) ? d.items : [];
+  return { ok: true, devMode: itens.length ? !!itens[0]?.devMode : null };
 }
 
 export function normalizar(d) {

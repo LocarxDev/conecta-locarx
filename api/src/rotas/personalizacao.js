@@ -6,7 +6,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js';
 import { rota, erro, validar, zUuid, exigirPerfil, registrar } from '../http.js';
-import { zFunil, ETAPAS_NOVO_FUNIL, garantirFunil, listarFunis, salvarFunil, arquivarFunil, propagarPadrao, etapaPublica } from '../servicos/crm/funis.js';
+import { zFunil, ETAPAS_NOVO_FUNIL, garantirFunil, listarFunis, salvarFunil, arquivarFunil, propagarPadrao, etapaPublica, zRegrasFunil, regrasDaLoja } from '../servicos/crm/funis.js';
 import {
   zEtiqueta, zCampo, etiquetaPublica, campoPublico, listarEtiquetas, listarCampos, chaveDoNome,
   salvarValores, definirEtiquetas, dadosDoPainel,
@@ -28,6 +28,20 @@ const unico = (msg) => (e) => { if (e.code === '23505') throw erro(422, msg); th
 personalizacaoLoja.get('/funis', daEquipe, rota(async (req, res) => {
   const lista = await comContexto(ctx(req), async (c) => { await garantirFunil(c, req.usuario.loja_id); return listarFunis(c, req.usuario.loja_id); });
   res.json(lista);
+}));
+
+// regras automáticas (perdido / concluído)
+personalizacaoLoja.get('/funis/regras', daEquipe, rota(async (req, res) => {
+  res.json(await comContexto(ctx(req), (c) => regrasDaLoja(c, req.usuario.loja_id)));
+}));
+personalizacaoLoja.put('/funis/regras', dono, rota(async (req, res) => {
+  const d = validar(zRegrasFunil, req.body);
+  const r = await comContexto(ctx(req), async (c) => {
+    await c.query('UPDATE lojas SET regras_funil = $2 WHERE id = $1', [req.usuario.loja_id, d]);
+    await registrar(c, req, 'editou_regras_funil', { detalhes: d });
+    return regrasDaLoja(c, req.usuario.loja_id);
+  });
+  res.json(r);
 }));
 
 personalizacaoLoja.post('/funis', dono, rota(async (req, res) => {

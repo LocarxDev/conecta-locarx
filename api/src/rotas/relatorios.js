@@ -11,10 +11,20 @@ import { rota, erro, validar, zEmail, zNome, zUuid, exigirPerfil, registrar, usu
 export const relatorioLoja = Router(); // /api/loja
 export const relatorioRede = Router(); // /api/admin
 const ctx = (req) => contextoDoUsuario(req.usuario);
-const zDias = z.object({ dias: z.coerce.number().int().refine((d) => [7, 30, 90].includes(d), 'Período inválido.').default(30) });
+const zDias = z.object({ dias: z.coerce.number().int().refine((d) => [7, 15, 30, 90].includes(d), 'Período inválido.').default(30) });
 
 // Indicadores de UMA loja. Só números: nenhum conteúdo de conversa sai daqui.
-async function indicadoresDaLoja(c, lojaId, dias) {
+// grupos mais reservados (reservas não canceladas no período); lojaId null = rede inteira
+async function gruposMaisReservados(c, lojaId, dias, filial = null) {
+  const rows = (await c.query(
+    `SELECT coalesce(nullif(trim(grupo), ''), 'Sem grupo') AS grupo, count(*)::int AS n, coalesce(sum(valor), 0)::numeric AS valor
+       FROM reservas WHERE ($1::uuid IS NULL OR loja_id = $1) AND status <> 'cancelada' AND criada_em >= now() - make_interval(days => $2) AND ($3::int IS NULL OR branch_id = $3)
+      GROUP BY 1 ORDER BY 2 DESC, 3 DESC LIMIT 10`, [lojaId, dias, filial])).rows;
+  const total = rows.reduce((t, r) => t + r.n, 0);
+  return rows.map((r) => ({ grupo: r.grupo, reservas: r.n, valor: Number(r.valor), pct: total ? Math.round((r.n / total) * 100) : 0 }));
+}
+
+async function indicadoresDaLoja(c, lojaId, dias, filial = null) {
   const i = (await c.query(`
     WITH cv AS (SELECT * FROM conversas WHERE loja_id = $1 AND ultima_do_cliente >= now() - make_interval(days => $2)),
          humanos AS (SELECT DISTINCT conversa_id FROM mensagens WHERE loja_id = $1 AND autor = 'atendente' AND direcao = 'saida' AND criada_em >= now() - make_interval(days => $2)),
@@ -25,12 +35,12 @@ async function indicadoresDaLoja(c, lojaId, dias) {
            (SELECT count(*) FROM contatos WHERE loja_id = $1 AND criado_em >= now() - make_interval(days => $2)) AS clientes_novos,
            (SELECT count(*) FROM oportunidades WHERE loja_id = $1 AND criada_em >= now() - make_interval(days => $2)) AS oportunidades,
            (SELECT count(*) FROM oportunidades WHERE loja_id = $1 AND criada_em >= now() - make_interval(days => $2) AND cotou_em IS NOT NULL) AS cotacoes,
-           (SELECT count(*) FROM reservas WHERE loja_id = $1 AND criada_em >= now() - make_interval(days => $2) AND status <> 'cancelada') AS reservas,
-           (SELECT coalesce(sum(valor), 0) FROM reservas WHERE loja_id = $1 AND criada_em >= now() - make_interval(days => $2) AND status <> 'cancelada') AS valor,
-           (SELECT count(*) FROM reservas WHERE loja_id = $1 AND criada_em >= now() - make_interval(days => $2) AND status <> 'cancelada' AND origem = 'assistente') AS reservas_assistente,
-           (SELECT coalesce(sum(valor), 0) FROM reservas WHERE loja_id = $1 AND criada_em >= now() - make_interval(days => $2) AND status <> 'cancelada' AND origem = 'assistente') AS valor_assistente,
+           (SELECT count(*) FROM reservas WHERE loja_id = $1 AND criada_em >= now() - make_interval(days => $2) AND status <> 'cancelada' AND ($3::int IS NULL OR branch_id = $3)) AS reservas,
+           (SELECT coalesce(sum(valor), 0) FROM reservas WHERE loja_id = $1 AND criada_em >= now() - make_interval(days => $2) AND status <> 'cancelada' AND ($3::int IS NULL OR branch_id = $3)) AS valor,
+           (SELECT count(*) FROM reservas WHERE loja_id = $1 AND criada_em >= now() - make_interval(days => $2) AND status <> 'cancelada' AND origem = 'assistente' AND ($3::int IS NULL OR branch_id = $3)) AS reservas_assistente,
+           (SELECT coalesce(sum(valor), 0) FROM reservas WHERE loja_id = $1 AND criada_em >= now() - make_interval(days => $2) AND status <> 'cancelada' AND origem = 'assistente' AND ($3::int IS NULL OR branch_id = $3)) AS valor_assistente,
            (SELECT count(*) FROM uso_ia WHERE loja_id = $1 AND criado_em >= now() - make_interval(days => $2)) AS respostas_ia,
-           (SELECT coalesce(sum(tokens_in + tokens_out), 0) FROM uso_ia WHERE loja_id = $1 AND criado_em >= now() - make_interval(days => $2)) AS tokens_ia`, [lojaId, dias])).rows[0];
+           (SELECT coalesce(sum(tokens_in + tokens_out), 0) FROM uso_ia WHERE loja_id = $1 AND criado_em >= now() - make_interval(days => $2)) AS tokens_ia`, [lojaId, dias, filial])).rows[0];
   // tempo da 1ª resposta da equipe: da mensagem do cliente que ficou esperando até a resposta humana seguinte
   const tempo = (await c.query(`
     SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY espera) AS mediana, avg(espera) AS media FROM (
@@ -49,21 +59,22 @@ async function indicadoresDaLoja(c, lojaId, dias) {
 }
 
 relatorioLoja.get('/relatorio', exigirPerfil('dono'), rota(async (req, res) => {
-  const { dias } = validar(zDias, req.query);
+  const { dias, filial } = validar(zDias.extend({ filial: z.coerce.number().int().positive().optional() }), req.query);
   const lojaId = req.usuario.loja_id;
   const r = await comContexto(ctx(req), async (c) => ({
-    ind: await indicadoresDaLoja(c, lojaId, dias),
+    ind: await indicadoresDaLoja(c, lojaId, dias, filial || null),
     porDia: (await c.query(`SELECT to_char(d, 'YYYY-MM-DD') AS dia,
         (SELECT count(*) FROM conversas WHERE loja_id = $1 AND ultima_do_cliente::date = d::date) AS conversas,
-        (SELECT count(*) FROM reservas WHERE loja_id = $1 AND criada_em::date = d::date AND status <> 'cancelada') AS reservas
-      FROM generate_series((now() AT TIME ZONE 'America/Bahia')::date - ($2 - 1), (now() AT TIME ZONE 'America/Bahia')::date, interval '1 day') d`, [lojaId, dias])).rows,
+        (SELECT count(*) FROM reservas WHERE loja_id = $1 AND criada_em::date = d::date AND status <> 'cancelada' AND ($3::int IS NULL OR branch_id = $3)) AS reservas
+      FROM generate_series((now() AT TIME ZONE 'America/Bahia')::date - ($2 - 1), (now() AT TIME ZONE 'America/Bahia')::date, interval '1 day') d`, [lojaId, dias, filial || null])).rows,
     perdas: (await c.query(`SELECT motivo_perda AS motivo, count(*)::int AS n FROM oportunidades WHERE loja_id = $1 AND resultado = 'perdido' AND fechada_em >= now() - make_interval(days => $2) GROUP BY 1 ORDER BY 2 DESC LIMIT 8`, [lojaId, dias])).rows,
     semResposta: (await c.query(`SELECT pergunta, criada_em FROM perguntas_sem_resposta WHERE loja_id = $1 AND criada_em >= now() - make_interval(days => $2) ORDER BY criada_em DESC LIMIT 10`, [lojaId, dias])).rows,
+    grupos: await gruposMaisReservados(c, lojaId, dias, filial || null),
     equipe: (await c.query(`SELECT u.nome, count(DISTINCT m.conversa_id)::int AS conversas, count(*)::int AS mensagens
         FROM mensagens m JOIN usuarios u ON u.id = m.autor_id WHERE m.loja_id = $1 AND m.autor = 'atendente' AND m.direcao = 'saida' AND m.criada_em >= now() - make_interval(days => $2)
        GROUP BY u.nome ORDER BY 2 DESC LIMIT 20`, [lojaId, dias])).rows,
   }));
-  res.json({ dias, ...r.ind, porDia: r.porDia.map((d) => ({ dia: d.dia, conversas: Number(d.conversas), reservas: Number(d.reservas) })), perdas: r.perdas, semResposta: r.semResposta, equipe: r.equipe });
+  res.json({ dias, filial: filial || null, ...r.ind, porDia: r.porDia.map((d) => ({ dia: d.dia, conversas: Number(d.conversas), reservas: Number(d.reservas) })), perdas: r.perdas, semResposta: r.semResposta, equipe: r.equipe, grupos: r.grupos });
 }));
 
 // ---------- rede ----------
@@ -76,9 +87,10 @@ relatorioRede.get('/relatorio', exigirPerfil('admin', 'matriz'), rota(async (req
     for (const l of ls) saida.push({ ...l, ...(await indicadoresDaLoja(c, l.id, dias)) });
     return saida;
   });
+  const grupos = await comoSistema((c) => gruposMaisReservados(c, null, dias));
   await comContexto(ctx(req), (c) => registrar(c, req, 'viu_relatorio_rede', { detalhes: { dias } }));
   const total = lojas.reduce((t, l) => ({ conversas: t.conversas + l.conversas, reservas: t.reservas + l.reservas, valor: t.valor + l.valor, reservasAssistente: t.reservasAssistente + l.reservasAssistente }), { conversas: 0, reservas: 0, valor: 0, reservasAssistente: 0 });
-  res.json({ dias, total, lojas: lojas.map((l) => ({ id: l.id, nome: l.nome, cidade: l.cidade, uf: l.uf, ativa: l.ativa, whatsapp: l.whatsapp, assistente: l.assistente, conversas: l.conversas, reservas: l.reservas, valor: l.valor, reservasAssistente: l.reservasAssistente, conversao: l.conversas ? Math.round((l.reservas / l.conversas) * 1000) / 10 : 0, respostaMedianaMin: l.respostaMedianaMin })) });
+  res.json({ dias, total, grupos, lojas: lojas.map((l) => ({ id: l.id, nome: l.nome, cidade: l.cidade, uf: l.uf, ativa: l.ativa, whatsapp: l.whatsapp, assistente: l.assistente, conversas: l.conversas, reservas: l.reservas, valor: l.valor, reservasAssistente: l.reservasAssistente, conversao: l.conversas ? Math.round((l.reservas / l.conversas) * 1000) / 10 : 0, respostaMedianaMin: l.respostaMedianaMin })) });
 }));
 
 // ---------- acessos da rede (matriz e administração) ----------
@@ -103,16 +115,19 @@ relatorioRede.post('/usuarios', exigirPerfil('admin'), rota(async (req, res) => 
 
 relatorioRede.patch('/usuarios/:id', exigirPerfil('admin'), rota(async (req, res) => {
   if (!zUuid.safeParse(req.params.id).success) throw erro(404, 'Acesso não encontrado.');
-  const { status } = validar(z.object({ status: z.enum(['ativo', 'inativo']) }), req.body);
-  if (req.params.id === req.usuario.id) throw erro(400, 'Você não pode desativar o seu próprio acesso.');
+  // status (ativar/desativar) e/ou perfil (nível: administração ou matriz)
+  const { status, perfil } = validar(z.object({ status: z.enum(['ativo', 'inativo']).optional(), perfil: z.enum(['admin', 'matriz']).optional() }), req.body);
+  if (req.params.id === req.usuario.id) throw erro(400, 'Você não pode alterar o seu próprio acesso.');
   const u = await comContexto(ctx(req), async (c) => {
     const alvo = (await c.query(`SELECT * FROM usuarios WHERE id = $1 AND perfil IN ('admin', 'matriz')`, [req.params.id])).rows[0];
     if (!alvo) throw erro(404, 'Acesso não encontrado.');
-    if (alvo.status === 'convidado') throw erro(400, 'Esta pessoa ainda não aceitou o convite.');
-    if (status === 'inativo' && alvo.perfil === 'admin' && Number((await c.query(`SELECT count(*) FROM usuarios WHERE perfil = 'admin' AND status = 'ativo'`)).rows[0].count) <= 1) throw erro(400, 'É preciso ter pelo menos um administrador ativo.');
-    const r = (await c.query('UPDATE usuarios SET status = $2 WHERE id = $1 RETURNING *', [alvo.id, status])).rows[0];
-    if (status === 'inativo') await c.query('DELETE FROM sessoes WHERE usuario_id = $1', [alvo.id]);
-    await registrar(c, req, status === 'inativo' ? 'desativou_rede' : 'reativou_rede', { alvo: alvo.id });
+    if (status && alvo.status === 'convidado') throw erro(400, 'Esta pessoa ainda não aceitou o convite.');
+    const ultimoAdmin = async () => alvo.perfil === 'admin' && Number((await c.query(`SELECT count(*) FROM usuarios WHERE perfil = 'admin' AND status = 'ativo'`)).rows[0].count) <= 1;
+    if ((status === 'inativo' || (perfil && perfil !== 'admin')) && alvo.status === 'ativo' && await ultimoAdmin()) throw erro(400, 'É preciso ter pelo menos um administrador ativo.');
+    const r = (await c.query('UPDATE usuarios SET status = coalesce($2, status), perfil = coalesce($3, perfil) WHERE id = $1 RETURNING *', [alvo.id, status ?? null, perfil ?? null])).rows[0];
+    if (status === 'inativo' || (perfil && perfil !== alvo.perfil)) await c.query('DELETE FROM sessoes WHERE usuario_id = $1', [alvo.id]);
+    if (status) await registrar(c, req, status === 'inativo' ? 'desativou_rede' : 'reativou_rede', { alvo: alvo.id });
+    if (perfil && perfil !== alvo.perfil) await registrar(c, req, 'alterou_nivel_rede', { alvo: alvo.id, detalhes: { de: alvo.perfil, para: perfil } });
     return r;
   });
   res.json(usuarioPublico(u));
@@ -166,6 +181,7 @@ relatorioRede.delete('/demonstracao', exigirPerfil('admin'), rota(async (req, re
   await comoSistema(async (c) => {
     const l = (await c.query('SELECT id FROM lojas WHERE branch_id = $1', [DEMO_BRANCH])).rows[0];
     if (!l) return;
+    await c.query('DELETE FROM oportunidades WHERE loja_id = $1', [l.id]);
     await c.query('DELETE FROM usuarios WHERE loja_id = $1', [l.id]);
     await c.query('DELETE FROM lojas WHERE id = $1', [l.id]);
     await c.query(`INSERT INTO auditoria (usuario_id, acao, alvo) VALUES ($1, 'removeu_demonstracao', $2)`, [req.usuario.id, l.id]);

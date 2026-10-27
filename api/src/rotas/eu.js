@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js';
 import { distribuirPendentes } from '../servicos/crm/roleta.js';
 import { conferirSenha, hashSenha, problemasSenha, cifrar, decifrar, novoSegredo2fa, codigo2faValido, qrDo2fa, formatarChave } from '../servicos/seguranca.js';
-import { rota, erro, validar, zEmail, zNome, usuarioPublico, registrar } from '../http.js';
+import { rota, erro, validar, zEmail, zNome, zUuid, usuarioPublico, registrar } from '../http.js';
 
 export const eu = Router();
 const ctx = (req) => contextoDoUsuario(req.usuario);
@@ -82,4 +82,23 @@ eu.post('/2fa/desativar', rota(async (req, res) => {
     return euComLoja(c, req.usuario.id);
   });
   res.json(usuarioPublico(u));
+}));
+
+// ---------- várias lojas: listar e trocar a loja em uso na sessão ----------
+eu.get('/lojas', rota(async (req, res) => {
+  const rows = await comoSistema(async (c) => (await c.query(
+    `SELECT l.id, l.nome, l.cidade, l.uf, ul.perfil FROM usuario_lojas ul JOIN lojas l ON l.id = ul.loja_id WHERE ul.usuario_id = $1 AND l.ativa ORDER BY l.nome`, [req.usuario.id])).rows);
+  res.json({ atual: req.usuario.loja_id, lojas: rows });
+}));
+eu.post('/loja', rota(async (req, res) => {
+  const { lojaId } = validar(z.object({ lojaId: zUuid }), req.body);
+  const ok = await comoSistema(async (c) => {
+    const v = (await c.query('SELECT ul.perfil FROM usuario_lojas ul JOIN lojas l ON l.id = ul.loja_id WHERE ul.usuario_id = $1 AND ul.loja_id = $2 AND l.ativa', [req.usuario.id, lojaId])).rows[0];
+    if (!v) return false;
+    await c.query('UPDATE sessoes SET loja_id = $2 WHERE id = $1', [req.sessao.id, lojaId]);
+    return true;
+  });
+  if (!ok) throw erro(403, 'Você não tem acesso a essa loja.');
+  await comContexto(ctx(req), (c) => registrar(c, req, 'trocou_loja', { lojaId }));
+  res.json({ ok: true });
 }));

@@ -23,6 +23,9 @@ const mascaraCpf = (v) => v.replace(/\D/g, '').slice(0, 11).replace(/(\d{3})(\d)
 let configPagamento = null;   // { pix: boolean, validadeMinutos } — carregada uma vez por sessão
 async function pagamentoConfig() { if (!configPagamento) { try { configPagamento = await api.pagamentos(); } catch { configPagamento = { pix: false }; } } return configPagamento; }
 
+let cacheFiliais = null;
+const filiaisDaLoja = () => (cacheFiliais ||= api.filiais().catch(() => []));
+
 export function montarCotacao(alvo, { ctx, conversa = null, compacto = false, aoUsarTexto = null, aoReservar = null, inicial = null }) {
   let periodo = null, resultado = null, precoSalvo = null, feitaEm = null;
   pagamentoConfig();
@@ -47,8 +50,18 @@ export function montarCotacao(alvo, { ctx, conversa = null, compacto = false, ao
   render(alvo, html`${compacto ? formulario : html`<section class="painel">${formulario}</section>`}<div id="resultado-cotacao" hidden></div>`);
 
   const form = $('#form-cotacao', alvo), area = $('#resultado-cotacao', alvo);
+  // franquia com mais de uma filial: escolher onde o cliente retira (a cotação, o preço e a reserva seguem a escolha)
+  filiaisDaLoja().then((lista) => {
+    if (lista.length < 2 || !form.isConnected) return;
+    const escolhida = inicial?.filial?.id || lista.find((f) => f.principal)?.id || lista[0].id;
+    const campo = document.createElement('div'); campo.className = 'campo campo-filial';
+    render(campo, html`<label for="filialId">Filial</label><select id="filialId" name="filialId">${lista.map((f) => html`<option value="${f.id}" ${f.id === escolhida ? 'selected' : ''}>${f.nome}</option>`)}</select>`);
+    $('.periodo-cotacao', form).prepend(campo);
+    $('.acoes-form .sub', form).textContent = 'Retirada e devolução na filial escolhida. Os totais incluem a Proteção X e as taxas.';
+    if (periodo && !periodo.filialId) periodo.filialId = escolhida;
+  });
   if (inicial?.resultado?.grupos?.length) {
-    resultado = inicial.resultado; periodo = { ...inicial.entrada }; precoSalvo = inicial.preco || null; feitaEm = inicial.em;
+    resultado = inicial.resultado; periodo = { ...inicial.entrada, filialId: inicial.filial?.id || undefined }; precoSalvo = inicial.preco || null; feitaEm = inicial.em;
     desenhar();
   }
 

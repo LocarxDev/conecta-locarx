@@ -4,7 +4,7 @@ import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
 import { config } from './config.js';
-import { cors, verificarOrigem, carregarSessao, exigirLogin, exigirCsrf, tratarErros, erro } from './http.js';
+import { cors, verificarOrigem, carregarSessao, exigirLogin, exigirCsrf, exigirModulo, tratarErros, erro } from './http.js';
 import { auth } from './rotas/auth.js';
 import { admin, loja } from './rotas/lojas.js';
 import { usuarios, equipeAdmin, equipeLoja } from './rotas/usuarios.js';
@@ -56,6 +56,14 @@ export function criarApp() {
 
   // daqui para baixo: precisa estar logado e mandar o token CSRF nas ações que alteram dados
   app.use('/api', exigirLogin, exigirCsrf);
+  // módulos liberados por loja (plano): a administração liga/desliga em Lojas; o front esconde o menu e aqui a API barra
+  app.use(['/api/loja/cotacao', '/api/loja/reservas'], (req, res, next) => (req.method === 'GET' && req.path === '/' ? next() : exigirModulo('cotacao')(req, res, next)));
+  app.use(['/api/loja/pagamentos', '/api/loja/cobrancas'], exigirModulo('pix'));
+  app.use(['/api/crm/funil', '/api/crm/oportunidades', '/api/crm/tarefas', '/api/crm/funis'], exigirModulo('funil'));
+  app.use('/api/crm/contatos.csv', exigirModulo('clientes'));
+  app.use('/api/loja/relatorio', exigirModulo('relatorios'));
+  app.use(['/api/loja/respostas', '/api/crm/modelos'], exigirModulo('automacoes'));
+  app.use(['/api/loja/assistente', '/api/loja/perguntas'], exigirModulo('assistente'));
   app.use('/api/admin', admin, equipeAdmin, rede, locarxAdmin, relatorioRede, personalizacaoRede, canalAdmin, pagamentosAdmin);
   app.use('/api/loja', loja, equipeLoja, canal, respostas, assistente, reservas, relatorioLoja, pagamentosLoja);
   app.use('/api/crm', crm, personalizacaoLoja);

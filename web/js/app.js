@@ -31,6 +31,10 @@ import * as pagamentosTela from './telas/pagamentos.js';
 const app = document.getElementById('app');
 const estado = { usuario: null, destino: null };
 
+// módulo do plano que cada tela/menu exige (lojas sem o módulo não veem o item; a API também barra)
+const MODULO_DA_ROTA = { cotacao: 'cotacao', funil: 'funil', tarefas: 'funil', clientes: 'clientes', relatorios: 'relatorios', pagamentos: 'pix', respostas: 'automacoes', modelos: 'automacoes', assistente: 'assistente', base: 'base' };
+const moduloLiberado = (chave) => !chave || !estado.usuario?.loja || estado.usuario.loja.modulos?.[chave] !== false;
+
 const MODULOS_LOJA = [
   { rota: 'clientes', rotulo: 'Clientes', icone: 'clientes' },
   { rota: 'funil', rotulo: 'Funil de vendas', icone: 'funil' },
@@ -75,7 +79,9 @@ function menuDoPerfil(perfilUsuario) {
     );
   }
   if (perfilUsuario === 'atendente') itens.push({ grupo: 'Apoio' }, { rota: 'base', rotulo: 'Base de conhecimento', icone: 'info' });
-  return itens;
+  // tira o que o plano da loja não inclui (e grupos que ficaram vazios)
+  const filtrados = itens.filter((i) => !i.rota || moduloLiberado(MODULO_DA_ROTA[i.rota]));
+  return filtrados.filter((i, k) => !i.grupo || (filtrados[k + 1] && !filtrados[k + 1].grupo));
 }
 
 // rota → tela, quem pode ver
@@ -139,6 +145,10 @@ async function despachar() {
   if (achada.publica && estado.usuario && ['login', 'verificacao'].includes(caminho)) return navegar('inicio');
   if (achada.perfis && !achada.perfis.includes(estado.usuario.perfil)) {
     avisar('Você não tem acesso a essa tela.', 'erro');
+    return navegar('inicio');
+  }
+  if (!moduloLiberado(MODULO_DA_ROTA[caminho])) {
+    avisar('Este recurso não está incluído no plano da sua loja. Fale com a administração da rede.', 'erro');
     return navegar('inicio');
   }
 
@@ -205,7 +215,7 @@ function desenharEstrutura(caminhoAtual) {
         <header class="topo">
           <button class="btn btn-texto btn-icone abrir-menu" id="abrir-menu" aria-label="Abrir menu" aria-controls="menu" aria-expanded="false">${icone('menu')}</button>
           <div class="contexto">
-            <strong>${ehRede ? 'Rede LocarX' : (u.loja?.nome || 'Minha loja')}</strong>
+            ${u.variasLojas ? html`<select id="trocar-loja" class="select-loja" aria-label="Loja em uso" title="Você tem acesso a mais de uma loja: escolha qual está vendo"><option>${u.loja?.nome || 'Minha loja'}</option></select>` : html`<strong>${ehRede ? 'Rede LocarX' : (u.loja?.nome || 'Minha loja')}</strong>`}
             <span>${PERFIS[u.perfil]}</span>
           </div>
           <div class="acoes">
@@ -273,6 +283,16 @@ function desenharEstrutura(caminhoAtual) {
     btn.setAttribute('aria-expanded', String(!pop.hidden));
     if (!pop.hidden) document.addEventListener('click', fecharPop);
   });
+  // dono com várias lojas: troca a loja em uso (a sessão passa a enxergar só a loja escolhida)
+  const selLoja = $('#trocar-loja');
+  if (selLoja) {
+    api.minhasLojas().then((r) => {
+      render(selLoja, html`${r.lojas.map((l) => html`<option value="${l.id}" ${l.id === r.atual ? 'selected' : ''}>${l.nome}</option>`)}`);
+    }).catch(() => {});
+    selLoja.addEventListener('change', async () => {
+      try { await api.trocarLoja(selLoja.value); conversas.pararVigia(); location.hash = '#/inicio'; location.reload(); } catch (err) { avisar(err.message, 'erro'); }
+    });
+  }
   $('#sair').addEventListener('click', async () => {
     await api.sair().catch(() => {});
     conversas.pararVigia();

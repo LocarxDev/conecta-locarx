@@ -1,7 +1,7 @@
 // Etapa 2: caixa de conversas da loja — listar, ler, responder, notas, assumir/devolver/encerrar, mídia e respostas rápidas.
 import { Router } from 'express';
 import { z } from 'zod';
-import { comContexto, contextoDoUsuario } from '../banco/conexao.js';
+import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js';
 import { evolution } from '../servicos/canais/evolution.js';
 import { rota, erro, validar, zUuid, exigirPerfil, registrar } from '../http.js';
 import { previaDe } from './whatsapp.js';
@@ -23,6 +23,8 @@ function conversaPublica(r) {
     contato: { id: r.contato_id, nome: r.contato_nome, telefone: r.telefone },
     etiquetas: r.etiquetas || [],
     cursor: r.cursor,
+    // transferência entre lojas: de onde veio e quem atende (só aparece quando há transferência)
+    ...(r.loja_atendimento_id ? { transferida: { origem: { id: r.loja_id, nome: r.loja_origem_nome }, atendimento: { id: r.loja_atendimento_id, nome: r.loja_atendimento_nome }, em: r.transferida_em } } : {}),
   };
 }
 function mensagemPublica(m) {
@@ -36,9 +38,11 @@ function mensagemPublica(m) {
 
 const SQL_CONVERSA = `
   SELECT cv.*, ct.nome AS contato_nome, ct.telefone, u.nome AS atendente_nome, ${cursor('cv.atualizada_em')} AS cursor,
+         lo.nome AS loja_origem_nome, la.nome AS loja_atendimento_nome,
          (SELECT coalesce(json_agg(json_build_object('id', e.id, 'nome', e.nome, 'cor', e.cor) ORDER BY lower(e.nome)), '[]')
             FROM contato_etiquetas ce JOIN etiquetas e ON e.id = ce.etiqueta_id WHERE ce.contato_id = cv.contato_id) AS etiquetas
-    FROM conversas cv JOIN contatos ct ON ct.id = cv.contato_id LEFT JOIN usuarios u ON u.id = cv.atendente_id`;
+    FROM conversas cv JOIN contatos ct ON ct.id = cv.contato_id LEFT JOIN usuarios u ON u.id = cv.atendente_id
+    LEFT JOIN lojas lo ON lo.id = cv.loja_id LEFT JOIN lojas la ON la.id = cv.loja_atendimento_id`;
 
 // ---------- lista (com "desde" para atualizar a cada poucos segundos) ----------
 conversas.get('/', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
@@ -54,17 +58,27 @@ conversas.get('/', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
     params.push(q.busca.replace(/\D/g, '') ? '%' + q.busca.replace(/\D/g, '') + '%' : '__nenhum__');
     filtro += ` AND (ct.nome ILIKE $${params.length - 1} OR ct.telefone LIKE $${params.length})`;
   }
+  filtro += filtroVisibilidade(req, params);
   const r = await comContexto(ctx(req), async (c) => {
-    const rows = (await c.query(`${SQL_CONVERSA} WHERE cv.loja_id = $1 ${filtro} ORDER BY cv.ultima_mensagem_em DESC LIMIT 200`, params)).rows;
+    const rows = (await c.query(`${SQL_CONVERSA} WHERE ${DA_LOJA} ${filtro} ORDER BY cv.ultima_mensagem_em DESC LIMIT 200`, params)).rows;
     const agora = (await c.query(`SELECT ${cursor('now()')} AS agora`)).rows[0].agora;
     return { rows, agora };
   });
   res.json({ conversas: r.rows.map(conversaPublica), cursor: r.agora });
 }));
 
+// "da loja": conversa do WhatsApp desta loja que não foi transferida, ou transferida para cá ($1 = loja do usuário)
+const DA_LOJA = `((cv.loja_id = $1 AND cv.loja_atendimento_id IS NULL) OR cv.loja_atendimento_id = $1)`;
+// atendente vê só o que está com ele e o que ainda não tem dono (fila / assistente); o dono vê tudo
+function filtroVisibilidade(req, params) {
+  if (req.usuario.perfil !== 'atendente') return '';
+  params.push(req.usuario.id);
+  return ` AND (cv.atendente_id = $${params.length} OR cv.atendente_id IS NULL)`;
+}
 async function obterConversa(c, req, id) {
-  const cv = (await c.query(`${SQL_CONVERSA} WHERE cv.id = $1 AND cv.loja_id = $2`, [id, req.usuario.loja_id])).rows[0];
+  const cv = (await c.query(`${SQL_CONVERSA} WHERE cv.id = $2 AND ${DA_LOJA}`, [req.usuario.loja_id, id])).rows[0];
   if (!cv) throw erro(404, 'Conversa não encontrada.');
+  if (req.usuario.perfil === 'atendente' && cv.atendente_id && cv.atendente_id !== req.usuario.id) throw erro(403, `Esta conversa está com ${cv.atendente_nome}.`);
   return cv;
 }
 
@@ -85,7 +99,7 @@ conversas.get('/:id/mensagens', exigirPerfil('dono', 'atendente'), rota(async (r
 
 conversas.post('/:id/lida', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
   const id = uuid(req.params.id);
-  await comContexto(ctx(req), (c) => c.query(`UPDATE conversas SET nao_lidas = 0, atualizada_em = now() WHERE id = $1 AND loja_id = $2 AND nao_lidas > 0`, [id, req.usuario.loja_id]));
+  await comContexto(ctx(req), (c) => c.query(`UPDATE conversas cv SET nao_lidas = 0, atualizada_em = now() WHERE cv.id = $2 AND ${DA_LOJA} AND nao_lidas > 0`, [req.usuario.loja_id, id]));
   res.status(204).end();
 }));
 
@@ -95,11 +109,16 @@ async function evento(c, cv, req, texto) {
     [cv.id, cv.loja_id, req.usuario.id, texto]);
 }
 
+// o canal (WhatsApp) é sempre o da loja de origem da conversa, mesmo quando outra loja atende
+async function canalDaConversa(c, cv) {
+  if (!cv.loja_atendimento_id) return (await c.query('SELECT * FROM canais WHERE loja_id = $1', [cv.loja_id])).rows[0];
+  return comoSistema(async (cs) => (await cs.query('SELECT * FROM canais WHERE loja_id = $1', [cv.loja_id])).rows[0]);   // loja de origem: fora do RLS desta loja
+}
 async function prepararEnvio(req, id) {
   return comContexto(ctx(req), async (c) => {
     const cv = await obterConversa(c, req, id);
-    const canal = (await c.query('SELECT * FROM canais WHERE loja_id = $1', [req.usuario.loja_id])).rows[0];
-    if (!canal || canal.status !== 'conectado') throw erro(409, 'O WhatsApp da loja está desconectado. Conecte em "WhatsApp" antes de responder.');
+    const canal = await canalDaConversa(c, cv);
+    if (!canal || canal.status !== 'conectado') throw erro(409, `O WhatsApp da loja${cv.loja_atendimento_id ? ' de origem (' + cv.loja_origem_nome + ')' : ''} está desconectado. Conecte em "WhatsApp" antes de responder.`);
     // quem responde assume a conversa
     if (cv.estado !== 'humano' || cv.atendente_id !== req.usuario.id) {
       if (cv.estado === 'humano' && cv.atendente_id && cv.atendente_id !== req.usuario.id && req.usuario.perfil !== 'dono') {
@@ -128,11 +147,15 @@ async function finalizarEnvio(req, cv, { tipo, texto, midia, enviar }) {
   return mensagemPublica(final);
 }
 
+// O cliente vê quem está falando: a mensagem no WhatsApp sai como "*Carla:* texto" (no CRM o texto fica como foi escrito;
+// o nome já aparece pela autoria). Só o primeiro nome, como no WhatsApp Business.
+export const assinar = (usuario, texto) => { const nome = String(usuario?.nome || '').trim().split(/\s+/)[0]; return nome ? `*${nome}:* ${texto}` : texto; };
+
 conversas.post('/:id/mensagens', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
   const id = uuid(req.params.id);
   const { texto } = validar(z.object({ texto: z.string().trim().min(1, 'Escreva a mensagem.').max(4000, 'Mensagem muito longa (máx. 4.000 caracteres).') }), req.body);
   const { cv, canal } = await prepararEnvio(req, id);
-  res.status(201).json(await finalizarEnvio(req, cv, { tipo: 'texto', texto, midia: null, enviar: () => provedores[canal.provedor].enviarTexto(canal.instancia, cv.telefone, texto) }));
+  res.status(201).json(await finalizarEnvio(req, cv, { tipo: 'texto', texto, midia: null, enviar: () => provedores[canal.provedor].enviarTexto(canal.instancia, cv.telefone, assinar(req.usuario, texto)) }));
 }));
 
 // mídia: só tipos seguros, conferindo o conteúdo real do arquivo (não só a extensão)
@@ -163,7 +186,7 @@ conversas.post('/:id/midia', exigirPerfil('dono', 'atendente'), rota(async (req,
   const midia = { mimetype: d.mimetype, nome: d.nomeArquivo || null };
   res.status(201).json(await finalizarEnvio(req, cv, {
     tipo: regra.tipo, texto: d.legenda || null, midia,
-    enviar: () => provedores[canal.provedor].enviarMidia(canal.instancia, cv.telefone, { tipo: regra.tipo, mimetype: d.mimetype, base64: d.base64, nomeArquivo: d.nomeArquivo, legenda: d.legenda }),
+    enviar: () => provedores[canal.provedor].enviarMidia(canal.instancia, cv.telefone, { tipo: regra.tipo, mimetype: d.mimetype, base64: d.base64, nomeArquivo: d.nomeArquivo, legenda: d.legenda ? assinar(req.usuario, d.legenda) : '' }),
   }));
 }));
 
@@ -171,8 +194,9 @@ conversas.post('/:id/midia', exigirPerfil('dono', 'atendente'), rota(async (req,
 conversas.get('/:id/mensagens/:mid/arquivo', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
   const id = uuid(req.params.id); const mid = uuid(req.params.mid);
   const r = await comContexto(ctx(req), async (c) => {
-    const m = (await c.query('SELECT * FROM mensagens WHERE id = $1 AND conversa_id = $2 AND loja_id = $3', [mid, id, req.usuario.loja_id])).rows[0];
-    const canal = (await c.query('SELECT * FROM canais WHERE loja_id = $1', [req.usuario.loja_id])).rows[0];
+    const cv = await obterConversa(c, req, id);
+    const m = (await c.query('SELECT * FROM mensagens WHERE id = $1 AND conversa_id = $2', [mid, id])).rows[0];
+    const canal = await canalDaConversa(c, cv);
     return { m, canal };
   });
   if (!r.m?.externo_id || !r.canal) throw erro(404, 'Arquivo não encontrado.');
@@ -224,13 +248,40 @@ conversas.post('/:id/assumir', exigirPerfil('dono', 'atendente'), rota(async (re
 
 conversas.post('/:id/devolver', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
   const r = await mudarEstado(req, uuid(req.params.id), async (c, cv) => {
-    const a = (await c.query('SELECT ativo FROM assistentes WHERE loja_id = $1', [cv.loja_id])).rows[0];
+    const a = await comoSistema(async (cs) => (await cs.query('SELECT ativo FROM assistentes WHERE loja_id = $1', [cv.loja_id])).rows[0]);
     if (!a?.ativo) throw erro(409, 'O assistente virtual desta loja está desligado. Ligue em "Assistente virtual".');
     // marca como já respondido até agora: o assistente só fala quando o cliente escrever de novo
     await c.query(`UPDATE conversas SET estado = 'assistente', atendente_id = NULL, bot_respondeu_em = now() WHERE id = $1`, [cv.id]);
     await evento(c, cv, req, `${req.usuario.nome} devolveu a conversa ao assistente`);
   });
   res.json(r);
+}));
+
+// ---------- transferir para outra loja (números de WhatsApp diferentes) ----------
+// A conversa continua no WhatsApp da loja de origem; a loja de destino passa a ver e responder por ele.
+// Vai para a fila do destino (sem atendente, estado "aguardando"); a roleta de lá distribui.
+conversas.get('/lojas-destino', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
+  const rows = await comoSistema(async (c) => (await c.query('SELECT id, nome, cidade, uf FROM lojas WHERE ativa AND id <> $1 ORDER BY nome', [req.usuario.loja_id])).rows);
+  res.json(rows);
+}));
+conversas.post('/:id/transferir-loja', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
+  const id = uuid(req.params.id);
+  const d = validar(z.object({ lojaId: zUuid, nota: z.string().trim().max(300).optional() }), req.body);
+  const r = await comContexto(ctx(req), async (c) => {
+    const cv = await obterConversa(c, req, id);
+    const destino = await comoSistema(async (cs) => (await cs.query('SELECT id, nome FROM lojas WHERE id = $1 AND ativa', [d.lojaId])).rows[0]);
+    if (!destino) throw erro(404, 'Loja de destino não encontrada.');
+    if (destino.id === cv.loja_id && !cv.loja_atendimento_id) throw erro(400, 'A conversa já é desta loja.');
+    const voltando = destino.id === cv.loja_id;   // devolver para a loja de origem
+    await c.query(`UPDATE conversas SET loja_atendimento_id = $2, transferida_em = CASE WHEN $2::uuid IS NULL THEN NULL ELSE now() END, transferida_por = $3,
+                     estado = 'aguardando', atendente_id = NULL, atualizada_em = now() WHERE id = $1`, [cv.id, voltando ? null : destino.id, req.usuario.id]);
+    await evento(c, cv, req, `${req.usuario.nome} transferiu a conversa para ${destino.nome}${d.nota ? ` — ${d.nota}` : ''}`);
+    await registrar(c, req, 'transferiu_conversa', { alvo: cv.id, lojaId: req.usuario.loja_id, detalhes: { para: destino.id, nota: d.nota || null } });
+    return destino;
+  });
+  // avisa a loja de destino pela roleta dela (distribui para quem estiver disponível)
+  try { const { distribuirPendentes } = await import('../servicos/crm/roleta.js'); await comoSistema((c) => distribuirPendentes(c, r.id)); } catch { /* sem roleta: fica na fila */ }
+  res.json({ ok: true, para: r });
 }));
 
 conversas.post('/:id/encerrar', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {

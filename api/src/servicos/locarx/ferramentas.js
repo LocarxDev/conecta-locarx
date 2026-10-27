@@ -4,7 +4,7 @@ import { comoSistema } from '../../banco/conexao.js';
 import { buscarConhecimento } from '../ia/conhecimento.js';
 import * as locarx from './api-locarx.js';
 import { cifrar, decifrar } from '../seguranca.js';
-import { registrarEvento } from '../crm/funis.js';
+import { registrarEvento, regrasDaLoja, fecharOportunidade } from '../crm/funis.js';
 import { normalizarValor } from '../crm/personalizacao.js';
 import { registrarOcorrencia } from '../ocorrencias.js';
 import * as cobrancas from '../pagamentos/cobrancas.js';
@@ -34,6 +34,25 @@ const PERIODO = {
  * @param {object} ctx { lojaId, branchId, conversaId, contatoId, simulacao, aoChamarAtendente(motivo) }
  */
 export function ferramentasDaLoja(ctx) {
+  // Várias filiais (ctx.filiais = [{ id, branchId, nome, principal }]): a IA escolhe pelo nome; a escolha fica na conversa
+  // (conversas.opcoes.branchId) e vale para cotação, preço e reserva. Com uma filial só, nada muda.
+  const variasFiliais = Array.isArray(ctx.filiais) && ctx.filiais.length > 1;
+  const PARAM_FILIAL = variasFiliais ? { filial: { type: 'string', description: `qual filial: ${ctx.filiais.map((f) => f.nome).join(' | ')}` } } : {};
+  async function usarFilial(pedido) {
+    if (!variasFiliais) return ctx.branchId;
+    if (pedido == null || pedido === '') {
+      if (ctx.branchEscolhido) return ctx.branchId;
+      throw Object.assign(new Error(`Pergunte ao cliente em qual filial ele quer retirar: ${ctx.filiais.map((f) => f.nome).join(' ou ')}. Depois chame de novo informando filial.`), { paraIa: true });
+    }
+    const p = String(pedido).trim().toLowerCase();
+    const f = ctx.filiais.find((x) => String(x.branchId) === p || x.id === p) || ctx.filiais.find((x) => x.nome.toLowerCase() === p) || ctx.filiais.find((x) => x.nome.toLowerCase().includes(p) || p.includes(x.nome.toLowerCase()));
+    if (!f) throw Object.assign(new Error(`Filial "${pedido}" não existe. As filiais desta loja são: ${ctx.filiais.map((x) => x.nome).join(', ')}. Confirme com o cliente.`), { paraIa: true });
+    if (f.branchId !== ctx.branchId || !ctx.branchEscolhido) {
+      ctx.branchId = f.branchId; ctx.branchEscolhido = true; ctx.filialNome = f.nome;
+      if (!ctx.simulacao && ctx.conversaId) await comoSistema((c) => c.query(`UPDATE conversas SET opcoes = coalesce(opcoes, '{}'::jsonb) || $2::jsonb WHERE id = $1`, [ctx.conversaId, { branchId: f.branchId, filialNome: f.nome }]));
+    }
+    return ctx.branchId;
+  }
   const lista = [
     {
       nome: 'buscar_informacoes',
@@ -48,13 +67,21 @@ export function ferramentasDaLoja(ctx) {
     {
       nome: 'dados_da_loja',
       descricao: 'Nome, endereço, horário de atendimento (por dia da semana) e janelas de atendimento especial (fora do horário, com taxa) desta loja LocarX, direto do portal. Use para responder horário/endereço e quando a consulta recusar um horário (OUTSIDE_BUSINESS_HOURS).',
-      parametros: { type: 'object', properties: {} },
-      executar: async () => {
+      parametros: { type: 'object', properties: { ...PARAM_FILIAL } },
+      executar: async (a = {}) => {
         const loja = await comoSistema(async (c) => (await c.query('SELECT nome, cidade, uf FROM lojas WHERE id = $1', [ctx.lojaId])).rows[0]);
+        let branch = ctx.branchId;
+        if (variasFiliais) { try { branch = await usarFilial(a.filial); } catch (e) { if (e.paraIa) branch = null; else throw e; } }
+        if (variasFiliais && !branch) {
+          // sem filial escolhida: devolve o resumo de todas (endereço e horário), para a IA perguntar qual
+          const todas = [];
+          for (const f of ctx.filiais) { let d = null; try { d = await locarx.dadosDaFilial(f.branchId); } catch { /* segue */ } todas.push({ filial: f.nome, endereco: d?.endereco || null, horario_de_atendimento: d?.horariosTexto || null }); }
+          return { loja: loja?.nome, cidade: `${loja?.cidade}/${loja?.uf}`, filiais: todas, instrucao: 'Esta loja tem mais de uma filial. Pergunte em qual o cliente quer retirar antes de consultar.' };
+        }
         let filial = null;
-        try { filial = await locarx.dadosDaFilial(ctx.branchId); } catch { /* sem API: segue com o cadastro */ }
+        try { filial = await locarx.dadosDaFilial(branch); } catch { /* sem API: segue com o cadastro */ }
         return {
-          loja: loja?.nome, cidade: `${loja?.cidade}/${loja?.uf}`, tipo: filial?.tipo || null,
+          loja: loja?.nome, cidade: `${loja?.cidade}/${loja?.uf}`, tipo: filial?.tipo || null, filial: variasFiliais ? ctx.filialNome : undefined,
           endereco: filial?.endereco || 'consultar buscar_informacoes',
           horario_de_atendimento: filial?.horariosTexto || 'consultar buscar_informacoes',
           atendimento_especial: filial?.especiaisTexto || 'nenhum (fora do horário a loja não atende)',
@@ -90,13 +117,15 @@ export function ferramentasDaLoja(ctx) {
           ...PERIODO,
           cambio: { type: 'string', enum: ['qualquer', 'manual', 'automatico'], description: 'Só se o cliente pedir um tipo de câmbio' },
           mais_opcoes: { type: 'boolean', description: 'true quando o cliente pedir para ver outras opções além das já mostradas' },
+          ...PARAM_FILIAL,
         },
-        required: Object.keys(PERIODO),
+        required: [...Object.keys(PERIODO), ...(variasFiliais ? ['filial'] : [])],
       },
       executar: async (a) => {
         // trava: no máximo 3 consultas por resposta (evita a IA "varrer" datas sozinha)
         ctx.consultas = (ctx.consultas || 0) + 1;
         if (ctx.consultas > 3) return 'Limite de consultas atingido. Não consulte mais: avise o cliente e use chamar_atendente com o motivo "sem disponibilidade".';
+        try { await usarFilial(a.filial); } catch (e) { if (e.paraIa) return e.message; throw e; }
         const p = validarPeriodo(a);
         const periodo = periodoTexto(a);
         let grupos;
@@ -132,14 +161,15 @@ export function ferramentasDaLoja(ctx) {
     {
       nome: 'calcular_preco',
       descricao: 'Calcula o valor total da locação do grupo escolhido com as proteções. Use o fleet_id da opção que o cliente escolheu. Proteções: PROTECAO_X ou PROTECAO_SUPER_X (uma das duas é obrigatória), TERCEIROS, VIDROS ou VIDROS_E_PNEUS (opcionais; VIDROS e VIDROS_E_PNEUS não podem ir juntas). Esta cotação fica guardada e é a que será reservada.',
-      parametros: { type: 'object', properties: { fleet_id: { type: ['integer', 'string'], description: 'fleet_id numérico da opção escolhida (a letra da opção, ex.: "B", também é aceita)' }, ...PERIODO, protecoes: { type: 'array', items: { type: 'string' } } }, required: ['fleet_id', ...Object.keys(PERIODO)] },
+      parametros: { type: 'object', properties: { fleet_id: { type: ['integer', 'string'], description: 'fleet_id numérico da opção escolhida (a letra da opção, ex.: "B", também é aceita)' }, ...PERIODO, protecoes: { type: 'array', items: { type: 'string' } }, ...PARAM_FILIAL }, required: ['fleet_id', ...Object.keys(PERIODO)] },
       executar: async (a) => {
+        try { await usarFilial(a.filial); } catch (e) { if (e.paraIa) return e.message; throw e; }
         const p = validarPeriodo(a);
         const protecoes = normalizarProtecoes(a.protecoes);
         let r;
         try { r = await locarx.calcularPreco({ branchId: ctx.branchId, fleetId: a.fleet_id, ...p, protecoes }); }
         catch (e) { if (e.dicaAssistente) return `Cálculo recusado pelo portal (${e.codigo}): ${e.dicaAssistente}`; throw e; }
-        const cotacao = { fleetId: r.fleetId ?? a.fleet_id, grupo: r.grupo, caucao: r.caucao ?? null, retirada: p.retirada, devolucao: p.devolucao, protecoes, nomesProtecoes: r.protecoes.map((x) => x.nome), total: r.total, diaria: r.diaria, diarias: r.diarias, em: new Date().toISOString() };
+        const cotacao = { fleetId: r.fleetId ?? a.fleet_id, grupo: r.grupo, caucao: r.caucao ?? null, branchId: ctx.branchId, filialNome: variasFiliais ? ctx.filialNome : null, retirada: p.retirada, devolucao: p.devolucao, protecoes, nomesProtecoes: r.protecoes.map((x) => x.nome), total: r.total, diaria: r.diaria, diarias: r.diarias, em: new Date().toISOString() };
         ctx.cotacao = cotacao;
         if (!ctx.simulacao && ctx.conversaId) {
           await comoSistema((c) => c.query('UPDATE conversas SET cotacao = $2, resumo_enviado_em = NULL WHERE id = $1', [ctx.conversaId, cotacao]));
@@ -179,7 +209,7 @@ export function ferramentasDaLoja(ctx) {
         if (!ctx.simulacao && ctx.conversaId) {
           await comoSistema((c) => c.query('UPDATE conversas SET condutor = $2 WHERE id = $1', [ctx.conversaId, { nome: String(a.nome).trim().slice(0, 100), email: String(a.email).trim().toLowerCase(), cpf_cifrado: cifrar(String(a.cpf).replace(/\D/g, '')), cpf_final: String(a.cpf).replace(/\D/g, '').slice(-2), cnh: cnh || null, em: new Date().toISOString() }]));
         }
-        const cliente = { nome: String(a.nome).trim().slice(0, 100), cpf: String(a.cpf).replace(/\D/g, ''), cnh, email: String(a.email).trim().toLowerCase(), telefone, observacoes: 'Reserva feita pelo assistente virtual do WhatsApp (Conecta LocarX).', referencia: ctx.conversaId ? `CONECTA-${String(ctx.conversaId).slice(0, 8)}` : null };
+        const cliente = { nome: String(a.nome).trim().slice(0, 100), cpf: String(a.cpf).replace(/\D/g, ''), cnh, email: String(a.email).trim().toLowerCase(), telefone, observacoes: 'Pagamento: na loja, na retirada.\nOrigem: Conecta LocarX - WhatsApp (assistente virtual)', referencia: ctx.conversaId ? `CONECTA-${String(ctx.conversaId).slice(0, 8)}` : null };
 
         // cotação guardada (o que o cliente viu) e controle do resumo
         let cv = null;
@@ -196,11 +226,12 @@ export function ferramentasDaLoja(ctx) {
           cv = cv && { ...cv, cotacao, resumo_enviado_em: null };
         }
         if (!cotacao) return 'Ainda não há cotação. Chame calcular_preco com o fleet_id (ou a letra) do grupo escolhido, o período e as proteções — ou chame criar_reserva de novo informando fleet_id, datas, horas e proteções junto com os dados do cliente.';
+        if (cotacao.branchId) { ctx.branchId = cotacao.branchId; ctx.branchEscolhido = true; ctx.filialNome = cotacao.filialNome || ctx.filialNome; }   // a reserva vai para a filial da cotação
         const rg = rotuloGrupo({ grupo: cotacao.grupo }, 1);
         const pixOk = ctx.pixDisponivel && !ctx.simulacao;
         const forma = pixOk && a.forma_pagamento === 'pix' ? 'pix' : 'loja';
         if (a.forma_pagamento === 'pix' && !pixOk) return 'Pagamento via Pix não está disponível nesta loja. Siga com pagamento na loja, na retirada (forma_pagamento = "loja").';
-        const resumo = `*Resumo da reserva*\n🚗 ${cotacao.grupo ? `${rg.letra} – ${rg.nome}` : 'Grupo escolhido'}\n📅 Retirada: ${dataBr(cotacao.retirada)}\n📅 Devolução: ${dataBr(cotacao.devolucao)}\n🛡️ Proteção: ${(cotacao.nomesProtecoes?.length ? cotacao.nomesProtecoes : cotacao.protecoes).join(', ')}\n💰 Total: *${reais(cotacao.total)}* (${forma === 'pix' ? 'pagamento via Pix por aqui' : 'pagamento na loja, na retirada'})${cotacao.caucao != null ? `\n💳 Caução: ${reais(cotacao.caucao)} (pré-autorização no cartão, liberada após a devolução)` : ''}\n👤 ${cliente.nome} · CPF final ${cliente.cpf.slice(-2)} · ${cliente.email}`;
+        const resumo = `*Resumo da reserva*\n🚗 ${cotacao.grupo ? `${rg.letra} – ${rg.nome}` : 'Grupo escolhido'}${variasFiliais && cotacao.filialNome ? `\n📍 Filial: ${cotacao.filialNome}` : ''}\n📅 Retirada: ${dataBr(cotacao.retirada)}\n📅 Devolução: ${dataBr(cotacao.devolucao)}\n🛡️ Proteção: ${(cotacao.nomesProtecoes?.length ? cotacao.nomesProtecoes : cotacao.protecoes).join(', ')}\n💰 Total: *${reais(cotacao.total)}* (${forma === 'pix' ? 'pagamento via Pix por aqui' : 'pagamento na loja, na retirada'})${cotacao.caucao != null ? `\n💳 Caução: ${reais(cotacao.caucao)} (pré-autorização no cartão, liberada após a devolução)` : ''}\n👤 ${cliente.nome} · CPF final ${cliente.cpf.slice(-2)} · ${cliente.email}`;
         const assinatura = `${cliente.cpf}|${cliente.email}|${cotacao.em}|${forma}`;
 
         // passo 1: o resumo precisa ter sido enviado e o cliente precisa ter respondido depois dele
@@ -281,7 +312,8 @@ export function ferramentasDaLoja(ctx) {
         if (!pendente) return 'Não há Pix pendente nesta conversa. Se o cliente pagou, a reserva já foi criada e o código enviado; confira com consultar_reserva se precisar.';
         let r;
         try { r = await cobrancas.verificarCobranca(pendente.id); } catch (e) { return `Não consegui consultar o pagamento agora (${String(e.message).slice(0, 100)}). Peça ao cliente para aguardar um instante; a confirmação chega sozinha.`; }
-        if (r.status === 'paga') return { pago: true, reserva: r.reserva?.codigo || null, instrucao: r.reserva ? 'Pagamento confirmado e reserva criada; o sistema já enviou o código ao cliente. Apenas confirme em uma frase.' : 'Pagamento confirmado, mas a reserva ficou para a equipe concluir (o sistema já avisou o cliente).' };
+        if (r.status === 'paga' && r.reserva) ctx.suprimirResposta = true;   // o sistema já mandou a confirmação completa com o código: a IA não repete
+        if (r.status === 'paga') return { pago: true, reserva: r.reserva?.codigo || null, instrucao: r.reserva ? 'Pagamento confirmado e reserva criada; o sistema JÁ enviou ao cliente a confirmação completa com o código. Não escreva nada: sua resposta não será enviada.' : 'Pagamento confirmado, mas a reserva ficou para a equipe concluir (o sistema já avisou o cliente).' };
         if (r.status === 'expirada') return { pago: false, expirado: true, instrucao: 'O Pix venceu sem pagamento. Pergunte se o cliente quer um novo código (chame criar_reserva de novo com forma_pagamento = "pix" e cliente_confirmou = true) ou pagar na loja.' };
         return { pago: false, vence_em: r.expira_em, instrucao: 'Ainda não consta pagamento. Diga ao cliente que, assim que o banco confirmar (normalmente em segundos), o código da reserva chega por aqui.' };
       },
@@ -359,6 +391,18 @@ export function ferramentasDaLoja(ctx) {
       },
     },
     {
+      nome: 'cliente_desistiu',
+      descricao: 'Use SOMENTE quando o cliente disser claramente que não vai alugar (desistiu, fechou com outra locadora, achou caro, mudou de planos). Marca a oportunidade como perdida no funil, com o motivo. Não use por silêncio nem por dúvida. Não comente com o cliente.',
+      parametros: { type: 'object', properties: { motivo: { type: 'string', enum: ['preco', 'outra_locadora', 'mudou_de_planos', 'sem_carro_disponivel', 'outro'] }, detalhe: { type: 'string', description: 'uma frase curta com o que o cliente disse' } }, required: ['motivo'] },
+      executar: async ({ motivo, detalhe }) => {
+        if (ctx.simulacao || !ctx.contatoId) return { ok: true, simulado: true };
+        const ROTULO = { preco: 'Preço', outra_locadora: 'Fechou com outra locadora', mudou_de_planos: 'Mudou de planos', sem_carro_disponivel: 'Sem carro disponível', outro: 'Outro' };
+        const texto = `${ROTULO[motivo] || 'Outro'}${detalhe ? ` — ${String(detalhe).slice(0, 120)}` : ''}`;
+        const fechou = await comoSistema((c) => fecharOportunidade(c, { lojaId: ctx.lojaId, contatoId: ctx.contatoId, resultado: 'perdido', motivo: texto, por: 'assistente' }));
+        return { ok: true, marcado: fechou, instrucao: 'Responda com cordialidade, agradeça e deixe a porta aberta para uma próxima vez. Não insista.' };
+      },
+    },
+    {
       nome: 'aplicar_etiqueta',
       descricao: 'Marca o cliente com etiquetas da loja (veja a lista ETIQUETAS). Use quando a situação da etiqueta acontecer. Não comente com o cliente.',
       parametros: { type: 'object', properties: { etiquetas: { type: 'array', items: { type: 'string' }, description: 'nomes exatos das etiquetas da lista' } }, required: ['etiquetas'] },
@@ -392,6 +436,7 @@ export function ferramentasDaLoja(ctx) {
   if (!(ctx.campos || []).some((x) => x.instrucao_bot)) semCrm.add('salvar_informacoes');
   if (!(ctx.etiquetas || []).some((e) => e.descricao_bot)) semCrm.add('aplicar_etiqueta');
   if (!ASSISTENTE_CANCELA) semCrm.add('cancelar_reserva');
+  if (ctx.regrasFunil && ctx.regrasFunil.perdidoPeloAssistente === false) semCrm.add('cliente_desistiu');
   if (!ctx.pixDisponivel || ctx.simulacao) semCrm.add('verificar_pagamento');
   const disponiveis = lista.filter((f) => !semCrm.has(f.nome));
   // sem API LocarX configurada, as ferramentas de reserva não são oferecidas ao assistente
@@ -416,15 +461,16 @@ async function marcarEtapa(ctx, evento, valor) {
 export async function registrarReserva(ctx, reserva, p, cliente, extra) {
   return comoSistema(async (c) => {
     const r = (await c.query(
-      `INSERT INTO reservas (loja_id, contato_id, conversa_id, codigo, status, retirada, devolucao, grupo, valor, origem, detalhes, pagamento, cobranca_id)
-       VALUES ($1, $2, $3, $4, 'confirmada', $5, $6, $7, $8, $10, $9, $11, $12)
+      `INSERT INTO reservas (loja_id, contato_id, conversa_id, codigo, status, retirada, devolucao, grupo, valor, origem, detalhes, pagamento, cobranca_id, branch_id)
+       VALUES ($1, $2, $3, $4, 'confirmada', $5, $6, $7, $8, $10, $9, $11, $12, $13)
        ON CONFLICT (loja_id, codigo) WHERE codigo IS NOT NULL DO UPDATE SET atualizada_em = now() RETURNING id`,
-      [ctx.lojaId, ctx.contatoId, ctx.conversaId, reserva.codigo, p.ini, p.fim, reserva.grupo, reserva.valor, { ...extra, cliente: { nome: cliente.nome, email: cliente.email } }, ctx.origem || 'assistente', ctx.pagamento || 'loja', ctx.cobrancaId || null])).rows[0];
+      [ctx.lojaId, ctx.contatoId, ctx.conversaId, reserva.codigo, p.ini, p.fim, reserva.grupo, reserva.valor, { ...extra, cliente: { nome: cliente.nome, email: cliente.email } }, ctx.origem || 'assistente', ctx.pagamento || 'loja', ctx.cobrancaId || null, ctx.branchId || null])).rows[0];
     if (ctx.contatoId) {
       await c.query(
         `UPDATE contatos SET nome = coalesce(nome, $2), email = coalesce(email, $3), cpf_cifrado = coalesce(cpf_cifrado, $4), cpf_final = coalesce(cpf_final, $5), atualizado_em = now() WHERE id = $1`,
         [ctx.contatoId, cliente.nome, cliente.email, cifrar(cliente.cpf), cliente.cpf.slice(-2)]);
       await registrarEvento(c, { lojaId: ctx.lojaId, contatoId: ctx.contatoId, conversaId: ctx.conversaId, evento: 'reserva', valor: reserva.valor, reservaId: r.id });
+      if (ctx.pagamento === 'pix' && (await regrasDaLoja(c, ctx.lojaId)).concluidoAoPagar) await fecharOportunidade(c, { lojaId: ctx.lojaId, contatoId: ctx.contatoId, resultado: 'ganho', por: 'automatico' });
     }
     return r.id;
   });
