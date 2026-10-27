@@ -73,3 +73,9 @@ test('assistente com Pix: passo de forma de pagamento no roteiro, ferramenta ver
   const estado = textoReservaEmAndamento({ pixPendente: { valor: 858, expira_em: '2026-10-27T00:30:00Z', dev_mode: true } });
   assert.match(estado, /Pix PENDENTE de R\$ 858,00/); assert.match(estado, /verificar_pagamento/);
 });
+
+test('descrição do Pix sem travessão nem acento (AbacatePay recusa U+2014)', async () => {
+  const { textoSeguro } = await import('../src/servicos/pagamentos/abacatepay.js');
+  assert.equal(textoSeguro('Reserva LocarX Loja — grupo C1 Econômico, 01/11 às 10:00'), 'Reserva LocarX Loja - grupo C1 Economico, 01/11 as 10:00');
+  assert.equal(textoSeguro(''), 'Reserva LocarX');
+});

@@ -280,8 +280,9 @@ async function processarAgora(conversaId) {
     const tipo = e.tipo === 'ferramenta' && /reserva/.test(e.nome) ? 'reserva' : e.tipo === 'ferramenta' && /disponibilidade|preco/.test(e.nome) ? 'cotacao' : 'ia';
     await registrarOcorrencia({ lojaId: loja.id, conversaId: conversa.id, origem: 'assistente', tipo, nivel: 'erro', mensagem: e.tipo === 'ferramenta' ? `${e.nome} falhou: ${e.erro}` : e.erro, detalhes: e });
   }
-  for (const e of eventos.filter((x) => x.tipo === 'ferramenta' && x.ok && x.nome === 'criar_reserva' && !x.aviso)) {
-    await registrarOcorrencia({ lojaId: loja.id, conversaId: conversa.id, origem: 'assistente', tipo: 'reserva', nivel: 'info', mensagem: 'Reserva criada pelo assistente', detalhes: e });
+  for (const e of eventos.filter((x) => x.tipo === 'ferramenta' && x.ok && x.nome === 'criar_reserva' && x.resultado)) {
+    const mensagem = { reserva_criada: 'Reserva criada pelo assistente', pix_gerado: 'Pix gerado pelo assistente (aguardando pagamento)', pix_ja_gerado: 'Cliente lembrado do Pix pendente' }[e.resultado];
+    await registrarOcorrencia({ lojaId: loja.id, conversaId: conversa.id, origem: 'assistente', tipo: 'reserva', nivel: 'info', mensagem, detalhes: e });
   }
   await comoSistema(async (c) => {
     await c.query(

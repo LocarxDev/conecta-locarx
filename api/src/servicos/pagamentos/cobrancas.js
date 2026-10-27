@@ -40,7 +40,7 @@ export async function gerarCobranca(o) {
   try {
     pix = await abacate.criarPix({
       valor: o.cotacao.total,
-      descricao: `Reserva LocarX ${o.lojaNome} — ${rg.letra} ${rg.nome}, ${dataBr(o.cotacao.retirada)} a ${dataBr(o.cotacao.devolucao)}`,
+      descricao: `Reserva LocarX ${o.lojaNome} - grupo ${rg.letra} ${rg.nome}, ${dataBr(o.cotacao.retirada)} a ${dataBr(o.cotacao.devolucao)}`,
       validadeSegundos: validade * 60,
       cliente: { nome: o.cliente.nome, cpf: o.cliente.cpf, email: o.cliente.email, telefone: locarx.telefoneBr(o.cliente.telefone) },
       referencia: cobranca.id,

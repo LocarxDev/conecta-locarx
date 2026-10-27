@@ -42,7 +42,9 @@ async function executar(ferramentas, nome, args, usadas, eventos) {
     const texto = paraTexto(r);
     ev.ok = true; ev.ms = Date.now() - inicio;
     // respostas de "não feito" das ferramentas (ex.: reserva ainda não criada) viram aviso, não erro
-    if (typeof r === 'string' && /^(RESERVA AINDA NÃO CRIADA|Nenhum carro disponível|Limite de consultas|Ainda não há cotação|Nada encontrado)/.test(r)) ev.aviso = r.split('\n')[0].slice(0, 160);
+    if (typeof r === 'string' && (nome === 'criar_reserva' || /^(RESERVA AINDA NÃO CRIADA|Nenhum carro disponível|Limite de consultas|Ainda não há cotação|Nada encontrado)/.test(r))) ev.aviso = r.split('\n')[0].slice(0, 160);
+    // o que a ferramenta de reserva de fato fez (o monitor só registra "reserva criada" quando foi criada mesmo)
+    if (r && typeof r === 'object') ev.resultado = r.reserva_criada ? 'reserva_criada' : r.pix_gerado ? 'pix_gerado' : r.pix_ja_gerado ? 'pix_ja_gerado' : undefined;
     eventos.push(ev);
     return texto;
   } catch (e) {

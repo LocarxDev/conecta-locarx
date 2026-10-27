@@ -33,6 +33,9 @@ export const centavos = (reais) => Math.round(Number(reais) * 100);
  * POST /transparents/create (method PIX). Valor em reais; `referencia` é o nosso id (externalId, idempotência).
  * `cliente` é opcional; se enviado, o AbacatePay exige name, taxId, email e cellphone.
  */
+// O AbacatePay recusa travessões e outros caracteres fora do ASCII na descrição (400 "Disallowed character").
+export const textoSeguro = (v) => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[\u2012-\u2015\u2212]/g, '-').replace(/[^\x20-\x7E]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500) || 'Reserva LocarX';
+
 export async function criarPix({ valor, descricao, validadeSegundos, cliente, referencia, metadata }) {
   const amount = centavos(valor);
   if (!Number.isFinite(amount) || amount < 100) throw new ErroAbacatePay('Valor do Pix precisa ser de pelo menos R$ 1,00.', 422);
@@ -40,7 +43,7 @@ export async function criarPix({ valor, descricao, validadeSegundos, cliente, re
     corpo: {
       method: 'PIX',
       data: {
-        amount, description: String(descricao || '').slice(0, 500), expiresIn: validadeSegundos,
+        amount, description: textoSeguro(descricao), expiresIn: validadeSegundos,
         ...(cliente?.nome && cliente?.cpf && cliente?.email && cliente?.telefone ? { customer: { name: cliente.nome, taxId: cliente.cpf, email: cliente.email, cellphone: cliente.telefone } } : {}),
         ...(referencia ? { externalId: String(referencia) } : {}),
         ...(metadata ? { metadata } : {}),
