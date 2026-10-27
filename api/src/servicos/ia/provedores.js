@@ -25,6 +25,9 @@ const argsSeguros = (args) => Object.fromEntries(Object.entries(args || {}).filt
 const PROMESSA = /\b(um momento|um instante|s[oó] um (momento|minuto|instante)|aguarde|vou (criar|fazer|consultar|verificar|calcular|buscar|checar|confirmar|registrar|gerar)|estou (criando|consultando|verificando|calculando|buscando))\b/i;
 const NUDGE = '(mensagem automática do sistema, não do cliente) Você disse que ia fazer algo, mas não usou nenhuma ferramenta. Faça agora usando a ferramenta certa e só então responda ao cliente com o resultado. Se não for possível, explique ao cliente e use chamar_atendente.';
 const MAX_NUDGES = 1;
+// resumo de reserva escrito pela IA sem passar pela ferramenta (o único resumo válido é o que criar_reserva devolve)
+const RESUMO_INVENTADO = /posso confirmar a reserva|resumo da (sua )?reserva/i;
+const NUDGE_RESUMO = '(mensagem automática do sistema, não do cliente) Você escreveu um resumo de reserva sem chamar criar_reserva. Resumos escritos por você não valem: chame criar_reserva agora com os dados do condutor (e forma_pagamento, se já perguntou) e envie ao cliente exatamente o resumo que a ferramenta devolver, terminando com "Posso confirmar a reserva?".';
 
 // Cada chamada de ferramenta vira um evento no monitor da administração: nome, argumentos sem dados pessoais,
 // se deu certo, a mensagem de erro e o tempo gasto. O conteúdo das respostas não é guardado.
@@ -54,7 +57,9 @@ async function executar(ferramentas, nome, args, usadas, eventos) {
 
 // a IA respondeu só texto: decide se é uma "promessa sem ação" que merece uma volta a mais
 function promessaSemAcao(texto, ferramentas, nudges, eventosDaVolta) {
-  return ferramentas.length > 0 && nudges < MAX_NUDGES && eventosDaVolta === 0 && PROMESSA.test(texto || '');
+  if (!ferramentas.length || nudges >= MAX_NUDGES || eventosDaVolta !== 0) return null;
+  if (ferramentas.some((f) => f.nome === 'criar_reserva') && RESUMO_INVENTADO.test(texto || '')) return NUDGE_RESUMO;
+  return PROMESSA.test(texto || '') ? NUDGE : null;
 }
 
 async function anthropic({ chave, modelo, sistema, historico, ferramentas, maxTokens }) {
@@ -76,11 +81,12 @@ async function anthropic({ chave, modelo, sistema, historico, ferramentas, maxTo
     const pedidos = (r.content || []).filter((b) => b.type === 'tool_use');
     const texto = (r.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
     if (r.stop_reason !== 'tool_use' || !pedidos.length) {
-      if (promessaSemAcao(texto, ferramentas, nudges, eventos.length)) {
+      const nudge = promessaSemAcao(texto, ferramentas, nudges, eventos.length);
+      if (nudge) {
         nudges++;
-        eventos.push({ tipo: 'nudge', em: new Date().toISOString(), texto: texto.slice(0, 160) });
+        eventos.push({ tipo: 'nudge', em: new Date().toISOString(), texto: texto.slice(0, 160), motivo: nudge === NUDGE_RESUMO ? 'resumo sem ferramenta' : 'promessa sem ação' });
         msgs.push({ role: 'assistant', content: r.content?.length ? r.content : texto || '…' });
-        msgs.push({ role: 'user', content: NUDGE });
+        msgs.push({ role: 'user', content: nudge });
         continue;
       }
       return { texto, uso, usadas, eventos, voltas, parada: r.stop_reason };
@@ -108,11 +114,12 @@ async function openai({ chave, modelo, sistema, historico, ferramentas, maxToken
     const parada = r.choices?.[0]?.finish_reason || null;
     if (!m.tool_calls?.length) {
       const texto = (m.content || '').trim();
-      if (promessaSemAcao(texto, ferramentas, nudges, eventos.length)) {
+      const nudge = promessaSemAcao(texto, ferramentas, nudges, eventos.length);
+      if (nudge) {
         nudges++;
-        eventos.push({ tipo: 'nudge', em: new Date().toISOString(), texto: texto.slice(0, 160) });
+        eventos.push({ tipo: 'nudge', em: new Date().toISOString(), texto: texto.slice(0, 160), motivo: nudge === NUDGE_RESUMO ? 'resumo sem ferramenta' : 'promessa sem ação' });
         msgs.push({ role: 'assistant', content: texto || '…' });
-        msgs.push({ role: 'user', content: NUDGE });
+        msgs.push({ role: 'user', content: nudge });
         continue;
       }
       if (parada === 'length') eventos.push({ tipo: 'limite', em: new Date().toISOString(), erro: 'A resposta foi cortada pelo limite de tokens (max_completion_tokens).' });

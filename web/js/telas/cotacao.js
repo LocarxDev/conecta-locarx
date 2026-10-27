@@ -3,7 +3,7 @@
 // para o atendente revisar e, se quiser, reserva pela API com o mesmo resumo e confirmação do assistente.
 // A mesma peça aparece na tela Cotação (#/cotacao) e numa janela dentro da conversa (botão "Cotação").
 import { api } from '../api.js';
-import { html, render, $, $$, icone, avisar, abrirModal, comBotao, marcarErros, dadosDoForm } from '../util.js';
+import { html, render, $, $$, icone, avisar, abrirModal, comBotao, marcarErros, dadosDoForm, telefoneBr } from '../util.js';
 
 const reais = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }));
 const cambio = (c) => (c ? String(c).toLowerCase().replace('automatic', 'automático') : '—');
@@ -168,7 +168,7 @@ export function montarCotacao(alvo, { ctx, conversa = null, compacto = false, ao
         </div>
         <div class="form-linha">
           <div class="campo"><label for="r-email">E-mail</label><input id="r-email" name="email" type="email" value="${ct.email || ''}" required></div>
-          <div class="campo"><label for="r-tel">Telefone</label><input id="r-tel" name="telefone" inputmode="tel" value="${ct.telefone || ''}" required><p class="ajuda">Vem do WhatsApp do cliente.</p></div>
+          <div class="campo"><label for="r-tel">Telefone</label><input id="r-tel" name="telefone" inputmode="tel" value="${telefoneBr(ct.telefone)}" required><p class="ajuda">Vem do WhatsApp do cliente.</p></div>
         </div>
         ${configPagamento?.pix ? html`<div class="campo"><label>Forma de pagamento</label><div class="lista-opcoes">
           <label class="opcao-modo"><input type="radio" name="pagamento" value="loja" checked><div><strong>Na loja, na retirada</strong><div class="sub">A reserva é criada agora no portal.</div></div></label>

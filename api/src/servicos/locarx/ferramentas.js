@@ -113,7 +113,7 @@ export function ferramentasDaLoja(ctx) {
         const mostrar = a.mais_opcoes ? grupos.slice(3, 8) : grupos.slice(0, 3);
         if (!mostrar.length) return 'Não há mais opções além das já mostradas. Pergunte qual das opções o cliente prefere ou chame um atendente.';
         await marcarEtapa(ctx, 'cotacao');
-        const texto = textoOpcoes(mostrar, { periodo, inicio: a.mais_opcoes ? 4 : 1, haMais: grupos.length > 3 && !a.mais_opcoes });
+        const texto = textoOpcoes(mostrar, { periodo, inicio: a.mais_opcoes ? 4 : 1, haMais: grupos.length > 3 && !a.mais_opcoes, pix: !!(ctx.pixDisponivel && !ctx.simulacao) });
         // guarda as opções na conversa: na próxima mensagem a IA recebe letra → fleet_id no prompt (ela não vê o resultado da ferramenta depois)
         if (!ctx.simulacao && ctx.conversaId) {
           const opcoes = { periodo: { data_retirada: a.data_retirada, hora_retirada: a.hora_retirada, data_devolucao: a.data_devolucao, hora_devolucao: a.hora_devolucao }, em: new Date().toISOString(),
@@ -145,7 +145,7 @@ export function ferramentasDaLoja(ctx) {
           await comoSistema((c) => c.query('UPDATE conversas SET cotacao = $2, resumo_enviado_em = NULL WHERE id = $1', [ctx.conversaId, cotacao]));
         }
         await marcarEtapa(ctx, 'cotacao', r.total);
-        return { grupo: r.grupo, fleet_id: r.fleetId, total: reais(r.total), diaria: reais(r.diaria), diarias: r.diarias, protecoes: r.protecoes.length ? r.protecoes.map((x) => x.nome) : protecoes, caucao: r.caucao != null ? `${reais(r.caucao)} (pré-autorização no cartão, liberada após a devolução; não entra no total)` : null, pagamento: 'na loja, na retirada', proximo_passo: 'Informe o total ao cliente. Para fechar, peça nome completo, CPF e e-mail (se ainda não tiver) e chame criar_reserva.' };
+        return { grupo: r.grupo, fleet_id: r.fleetId, total: reais(r.total), diaria: reais(r.diaria), diarias: r.diarias, protecoes: r.protecoes.length ? r.protecoes.map((x) => x.nome) : protecoes, caucao: r.caucao != null ? `${reais(r.caucao)} (pré-autorização no cartão, liberada após a devolução; não entra no total)` : null, pagamento: ctx.pixDisponivel && !ctx.simulacao ? 'na loja, na retirada, ou agora via Pix pelo WhatsApp — pergunte qual o cliente prefere (Passo 4b)' : 'na loja, na retirada', proximo_passo: ctx.pixDisponivel && !ctx.simulacao ? 'Informe o total ao cliente e pergunte a forma de pagamento (loja ou Pix). Depois peça nome completo, CPF e e-mail (se ainda não tiver) e chame criar_reserva com forma_pagamento.' : 'Informe o total ao cliente. Para fechar, peça nome completo, CPF e e-mail (se ainda não tiver) e chame criar_reserva.' };
       },
     },
     {
@@ -268,7 +268,7 @@ export function ferramentasDaLoja(ctx) {
         }
         return { reserva_criada: true, codigo: reserva.codigo, total: reais(reserva.valor ?? cotacao.total), ...(reserva.avisoGravacao ? { atencao: reserva.avisoGravacao } : {}),
           ...(cotacao.caucao != null ? { caucao: reais(cotacao.caucao) } : {}),
-          ...(orientacoes ? { orientacoes_oficiais: orientacoes, como_usar: 'Depois do código, resuma em até 4 linhas curtas o que o cliente precisa saber (validade da reserva, pagamento na loja, documentos/cartão, cancelamento). Não copie os textos inteiros.' } : {}), ...(divergente ? { atencao: `O portal fechou a reserva em ${reais(reserva.valor)} (a cotação mostrava ${reais(cotacao.total)}). Informe o valor do portal ao cliente e avise a equipe.` } : {}), pagamento: 'na loja, na retirada', proximo_passo: 'Informe o código ao cliente e avise que um atendente da loja vai dar sequência.' };
+          ...(orientacoes ? { orientacoes_oficiais: orientacoes, como_usar: 'Depois do código, passe ao cliente até 4 regras curtas (uma linha cada). Use as frases do portal como estão, só encurtando — NÃO reescreva prazos, horários ou condições com outras palavras ("1 hora depois" não pode virar "1 hora antes"). Se uma regra não estiver clara para você, deixe-a de fora em vez de interpretar.' } : {}), ...(divergente ? { atencao: `O portal fechou a reserva em ${reais(reserva.valor)} (a cotação mostrava ${reais(cotacao.total)}). Informe o valor do portal ao cliente e avise a equipe.` } : {}), pagamento: forma === 'pix' ? 'via Pix (já pago)' : 'na loja, na retirada', proximo_passo: 'Informe o código ao cliente e avise que um atendente da loja vai dar sequência.' };
       },
     },
     {

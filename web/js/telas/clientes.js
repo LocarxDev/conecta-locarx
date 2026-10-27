@@ -1,10 +1,10 @@
 // Clientes da loja: lista, ficha, etiquetas, mensagem ativa e exportação.
 import { api } from '../api.js';
-import { html, render, $, $$, icone, iniciais, avisar, abrirModal, comBotao, marcarErros, dadosDoForm, quando, data, chipEtiqueta } from '../util.js';
+import { html, render, $, $$, icone, iniciais, avisar, abrirModal, comBotao, marcarErros, dadosDoForm, quando, data, chipEtiqueta, telefoneBr } from '../util.js';
 import { montarPainelCliente } from './painel-cliente.js';
 
 const reais = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }));
-const telefone = (t) => { const m = String(t || '').match(/^55(\d{2})(\d{4,5})(\d{4})$/); return m ? `(${m[1]}) ${m[2]}-${m[3]}` : '+' + t; };
+const telefone = (t) => telefoneBr(t) || '+' + t;
 const seloEtapa = (e) => html`<span class="etapa-chip" data-cor="${e.cor}" title="${e.funil}"><span class="ponto-cor"></span>${e.nome}</span>`;
 
 export async function montar(alvo, ctx) {

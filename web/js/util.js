@@ -229,3 +229,13 @@ export function ligarMostrarSenha(raiz) {
     b.setAttribute('aria-pressed', String(mostrar));
   }));
 }
+
+// Telefone brasileiro para exibição: tira o 55 do WhatsApp, repõe o 9 do celular quando faltar, formata (71) 99999-0000
+export function telefoneBr(v) {
+  let d = String(v || '').replace(/\D/g, '');
+  if ((d.length === 12 || d.length === 13) && d.startsWith('55')) d = d.slice(2);
+  if (d.length === 10 && /[6-9]/.test(d[2])) d = d.slice(0, 2) + '9' + d.slice(2);
+  if (d.length === 11) return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+  if (d.length === 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+  return String(v || '');
+}

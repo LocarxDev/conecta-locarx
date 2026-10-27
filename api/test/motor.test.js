@@ -70,3 +70,17 @@ test('paraWhatsApp: Markdown vira formatação do WhatsApp', () => {
   assert.equal(paraWhatsApp('### Resumo\n- item um\n- item dois\n\n\n\nfim'), '*Resumo*\n• item um\n• item dois\n\nfim');
   assert.equal(paraWhatsApp('já em *negrito* fica igual'), 'já em *negrito* fica igual');
 });
+
+test('resumo inventado: a IA escreve "Posso confirmar a reserva?" sem criar_reserva → o sistema cobra a ferramenta', async (t) => {
+  const f = openaiFalsa([
+    { message: { role: 'assistant', content: 'Aqui está o resumo da sua reserva:\n🚗 C1\n💰 Total R$ 1.452,00\n\nPosso confirmar a reserva?' } },
+    { message: { role: 'assistant', content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'criar_reserva', arguments: '{}' } }] } },
+    { message: { role: 'assistant', content: '*Resumo da reserva* (da ferramenta)\nPosso confirmar a reserva?' } },
+  ]);
+  t.after(f.restaurar);
+  const r = await conversarComIa({ provedor: 'openai', chave: 'k', modelo: 'm', sistema: 's', historico: [{ papel: 'cliente', texto: 'meus dados: …' }], ferramentas: [ferramenta('criar_reserva', async () => 'RESERVA AINDA NÃO CRIADA. Envie este resumo…')] });
+  assert.deepEqual(r.eventos.map((e) => e.tipo), ['nudge', 'ferramenta']);
+  assert.equal(r.eventos[0].motivo, 'resumo sem ferramenta');
+  assert.match(f.chamadas[1].messages.at(-1).content, /sem chamar criar_reserva/);
+  assert.match(r.texto, /da ferramenta/);
+});

@@ -67,3 +67,11 @@ test('cancelamento é sempre com atendente: a ferramenta não é oferecida e o p
   assert.ok(nomes.includes('consultar_reserva') && nomes.includes('criar_reserva'));
   assert.match(montarSistema(base), /CANCELAMENTO ou alteração de reserva já criada: você não cancela/);
 });
+
+test('prompt: com Pix, nenhuma regra fixa diz que o pagamento é só na loja', () => {
+  const sem = montarSistema(base);
+  const com = montarSistema({ ...base, pix: true });
+  assert.ok(sem.includes('O pagamento é feito na loja, na retirada.') && !sem.includes('Passo 4b'));
+  assert.ok(!com.includes('O pagamento é feito na loja, na retirada.'));
+  assert.ok(com.includes('Passo 4b') && com.includes('Passo 7b') && com.includes('via Pile'.replace('Pile', 'Pix')));
+});

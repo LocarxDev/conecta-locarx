@@ -200,3 +200,10 @@ test('acharGrupo: aceita fleetId numérico, letra ou nome (a IA costuma mandar a
   assert.equal(acharGrupo(grupos, 'argo').fleetId, 3);
   assert.equal(acharGrupo(grupos, 'Z'), null);
 });
+
+test('textoOpcoes: com Pix ligado, oferece pagar pelo WhatsApp', () => {
+  const sem = textoOpcoes(grupos.slice(0, 1), { periodo: 'x' });
+  const com = textoOpcoes(grupos.slice(0, 1), { periodo: 'x', pix: true });
+  assert.ok(sem.includes('Pagamento na loja, na retirada.'));
+  assert.ok(com.includes('via Pix') && !com.includes('Pagamento na loja, na retirada.'));
+});

@@ -59,14 +59,14 @@ export const ordenarPorPreco = (grupos) => [...grupos].sort((x, y) => (x.total ?
  * @param {Array} mostrar grupos já ordenados e recortados
  * @param {object} opcoes { periodo: texto, inicio: número da primeira opção (para letras sem grupo), haMais: boolean }
  */
-export function textoOpcoes(mostrar, { periodo, inicio = 1, haMais = false } = {}) {
+export function textoOpcoes(mostrar, { periodo, inicio = 1, haMais = false, pix = false } = {}) {
   const linhas = mostrar.map((g, i) => {
     const rotulo = rotuloGrupo(g, i + inicio);
     return `*${rotulo.letra} – ${rotulo.nome}*\n${[g.exemplos, cambioTexto(g.cambio)].filter(Boolean).join(' · ')}\n${reais(g.diaria)} por diária · *Total ${reais(g.total)}*`;
   });
   const letras = mostrar.map((g, i) => rotuloGrupo(g, i + inicio).letra);
   const pedir = letras.length > 1 ? 'a letra (' + letras.slice(0, -1).join(', ') + ' ou ' + letras.at(-1) + ')' : 'a letra ' + letras[0];
-  return `🚗 *Opções para ${periodo}:*\n\n${linhas.join('\n\n')}\n\nO total já inclui a Proteção X e as taxas. Pagamento na loja, na retirada.\nQual você prefere? É só responder com ${pedir}.${haMais ? '\nSe quiser, mostro outras opções.' : ''}`;
+  return `🚗 *Opções para ${periodo}:*\n\n${linhas.join('\n\n')}\n\nO total já inclui a Proteção X e as taxas.${pix ? ' Você pode pagar na loja, na retirada, ou por aqui mesmo via Pix.' : ' Pagamento na loja, na retirada.'}\nQual você prefere? É só responder com ${pedir}.${haMais ? '\nSe quiser, mostro outras opções.' : ''}`;
 }
 
 // ---------- consulta ----------

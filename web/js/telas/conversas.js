@@ -1,7 +1,7 @@
 // Caixa de conversas do WhatsApp da loja.
 // A lista se atualiza sozinha a cada poucos segundos (o "vigia" roda enquanto alguém da loja está logado).
 import { api } from '../api.js';
-import { html, render, $, $$, icone, iniciais, avisar, abrirModal, comBotao, chipEtiqueta, preferencia } from '../util.js';
+import { html, render, $, $$, icone, iniciais, avisar, abrirModal, comBotao, chipEtiqueta, preferencia, telefoneBr } from '../util.js';
 import { abrirCotacao } from './cotacao.js';
 import { montarPainelCliente } from './painel-cliente.js';
 
@@ -72,10 +72,7 @@ function notificar(c) {
 // ---------------------------------------------------------------------
 // formatos
 // ---------------------------------------------------------------------
-const telefoneBonito = (t) => {
-  const m = String(t || '').match(/^55(\d{2})(\d{4,5})(\d{4})$/);
-  return m ? `(${m[1]}) ${m[2]}-${m[3]}` : '+' + t;
-};
+const telefoneBonito = (t) => telefoneBr(t) || '+' + t;
 const nomeDe = (c) => c.contato.nome || telefoneBonito(c.contato.telefone);
 const hora = (iso) => new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 function quandoCurto(iso) {
