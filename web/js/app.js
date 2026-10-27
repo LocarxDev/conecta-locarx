@@ -26,6 +26,7 @@ import * as personalizarTela from './telas/personalizar.js';
 import * as cotacaoTela from './telas/cotacao.js';
 import * as whatsappRedeTela from './telas/whatsapp-rede.js';
 import * as monitorTela from './telas/monitor.js';
+import * as pagamentosTela from './telas/pagamentos.js';
 
 const app = document.getElementById('app');
 const estado = { usuario: null, destino: null };
@@ -49,6 +50,7 @@ function menuDoPerfil(perfilUsuario) {
       { rota: 'rede', rotulo: 'Base da rede', icone: 'assistente' },
       { rota: 'padroes', rotulo: 'Padrões do CRM', icone: 'ajustes' },
       { rota: 'relatorios-rede', rotulo: 'Relatórios', icone: 'relatorios' },
+      { rota: 'pagamentos-rede', rotulo: 'Repasses Pix', icone: 'reservas' },
       ...(perfilUsuario === 'admin' ? [{ rota: 'acessos', rotulo: 'Acessos da rede', icone: 'escudo' }] : []),
     ];
   }
@@ -68,6 +70,7 @@ function menuDoPerfil(perfilUsuario) {
       { rota: 'assistente', rotulo: 'Assistente virtual', icone: 'assistente' },
       { rota: 'base', rotulo: 'Base de conhecimento', icone: 'info' },
       { rota: 'relatorios', rotulo: 'Relatórios', icone: 'relatorios' },
+      { rota: 'pagamentos', rotulo: 'Pagamentos online', icone: 'reservas' },
       { rota: 'atendentes', rotulo: 'Atendentes', icone: 'atendentes' },
     );
   }
@@ -102,6 +105,8 @@ const ROTAS = [
   { padrao: /^modelos$/, tela: modelosTela.montar, perfis: ['dono'] },
   { padrao: /^relatorios$/, tela: relatoriosTela.loja, perfis: ['dono'] },
   { padrao: /^relatorios-rede$/, tela: relatoriosTela.rede, perfis: ['admin', 'matriz'] },
+  { padrao: /^pagamentos$/, tela: pagamentosTela.loja, perfis: ['dono'] },
+  { padrao: /^pagamentos-rede$/, tela: pagamentosTela.rede, perfis: ['admin', 'matriz'] },
   { padrao: /^acessos$/, tela: acessosTela.montar, perfis: ['admin'] },
   { padrao: /^personalizar$/, tela: personalizarTela.montar, perfis: ['dono'] },
   { padrao: /^padroes$/, tela: personalizarTela.montar, perfis: ['admin', 'matriz'] },

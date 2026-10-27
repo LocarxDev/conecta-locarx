@@ -7,6 +7,9 @@ import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js
 import * as locarx from '../servicos/locarx/api-locarx.js';
 import * as cotacao from '../servicos/locarx/cotacao.js';
 import { registrarOcorrencia, detalhesDoErro } from '../servicos/ocorrencias.js';
+import * as cobrancas from '../servicos/pagamentos/cobrancas.js';
+import { cobrancaPublica } from './pagamentos.js';
+import { enviarAoCliente } from '../servicos/canais/envio.js';
 import { ferramentasDaLoja, cpfValido, registrarReserva } from '../servicos/locarx/ferramentas.js';
 import { iguais } from '../servicos/seguranca.js';
 import { rota, erro, ErroApp, validar, zUuid, exigirPerfil, registrar } from '../http.js';
@@ -89,11 +92,35 @@ function erroLocarx(e) {
 const grupoPublico = (g) => ({
   fleetId: g.fleetId, letra: g.rotulo.letra, nome: g.rotulo.nome, grupo: g.grupo, exemplos: g.exemplos, cambio: g.cambio,
   passageiros: g.passageiros, portas: g.portas, malas: g.malas, itens: g.itens, diaria: g.diaria, diarias: g.diarias, total: g.total,
-  protecoes: g.protecoes.map((p) => ({ codigo: p.codigo, nome: p.nome, descricao: p.descricao, diaria: p.diaria, total: p.total, basica: p.base, padrao: p.padrao })),
+  protecoes: g.protecoes.map((p) => ({ codigo: p.codigo, nome: p.nome, descricao: p.descricao, diaria: p.diaria, total: p.total, basica: p.base, padrao: p.padrao, caucao: p.caucao })),
 });
 
+// a cotação da equipe fica guardada na conversa (24 h, retirada no futuro) para reabrir sem consultar de novo
+const VALIDADE_COTACAO_MS = 24 * 3_600_000;
+function cotacaoValida(ce) {
+  if (!ce?.em || !ce?.periodo?.retirada) return false;
+  if (Date.now() - new Date(ce.em) > VALIDADE_COTACAO_MS) return false;
+  return cotacao.instante(ce.periodo.retirada) > new Date();
+}
+async function guardarCotacaoEquipe(req, conversaId, mudar) {
+  if (!conversaId) return;
+  await comContexto(ctx(req), async (c) => {
+    const cv = (await c.query('SELECT id, cotacao_equipe FROM conversas WHERE id = $1 AND loja_id = $2', [conversaId, req.usuario.loja_id])).rows[0];
+    if (!cv) return;
+    const nova = mudar(cotacaoValida(cv.cotacao_equipe) ? cv.cotacao_equipe : null);
+    await c.query('UPDATE conversas SET cotacao_equipe = $2 WHERE id = $1', [cv.id, nova]);
+  });
+}
+
+reservas.get('/cotacao/ultima', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
+  const { conversa } = validar(z.object({ conversa: zUuid }), req.query);
+  const cv = await comContexto(ctx(req), async (c) => (await c.query('SELECT cotacao_equipe FROM conversas WHERE id = $1 AND loja_id = $2', [conversa, req.usuario.loja_id])).rows[0]);
+  if (!cv) throw erro(404, 'Conversa não encontrada.');
+  res.json(cotacaoValida(cv.cotacao_equipe) ? cv.cotacao_equipe : null);
+}));
+
 reservas.post('/cotacao', exigirPerfil('dono', 'atendente'), limiteCotacao, rota(async (req, res) => {
-  const d = validar(z.object(zPeriodo), req.body);
+  const d = validar(z.object({ ...zPeriodo, conversaId: zUuid.optional() }), req.body);
   const periodo = periodoDaEquipe(d);
   const loja = await lojaDoUsuario(req);
   let r;
@@ -103,17 +130,19 @@ reservas.post('/cotacao', exigirPerfil('dono', 'atendente'), limiteCotacao, rota
   }
   const menos24h = periodo.ini < new Date(Date.now() + 24 * 3_600_000);
   const texto = r.grupos.length ? cotacao.textoOpcoes(r.grupos.slice(0, 3), { periodo: cotacao.periodoTexto({ data_retirada: d.dataRetirada, hora_retirada: d.horaRetirada, data_devolucao: d.dataDevolucao, hora_devolucao: d.horaDevolucao }), haMais: r.grupos.length > 3 }) : null;
-  res.json({
+  const resposta = {
     periodo: { retirada: periodo.retirada, devolucao: periodo.devolucao },
     grupos: r.grupos.map(grupoPublico),
     adicionais: r.adicionais, km: r.km, politicas: r.politicas,
     textoWhatsapp: texto,
     aviso: !r.grupos.length && menos24h ? 'O portal LocarX não mostra carros para retirada com menos de 24 horas. Para esse prazo, a reserva é feita direto no portal.' : null,
-  });
+  };
+  if (r.grupos.length) await guardarCotacaoEquipe(req, d.conversaId, () => ({ em: new Date().toISOString(), por: req.usuario.nome, entrada: { dataRetirada: d.dataRetirada, horaRetirada: d.horaRetirada, dataDevolucao: d.dataDevolucao, horaDevolucao: d.horaDevolucao }, resultado: resposta, periodo: resposta.periodo, preco: null }));
+  res.json(resposta);
 }));
 
 reservas.post('/cotacao/preco', exigirPerfil('dono', 'atendente'), limiteCotacao, rota(async (req, res) => {
-  const d = validar(z.object({ ...zPeriodo, fleetId: z.coerce.number().int().positive(), protecoes: z.array(z.string().max(30)).max(5).default([]) }), req.body);
+  const d = validar(z.object({ ...zPeriodo, fleetId: z.coerce.number().int().positive(), protecoes: z.array(z.string().max(30)).max(5).default([]), conversaId: zUuid.optional() }), req.body);
   const periodo = periodoDaEquipe(d);
   const loja = await lojaDoUsuario(req);
   const protecoes = cotacao.normalizarProtecoes(d.protecoes);
@@ -121,10 +150,13 @@ reservas.post('/cotacao/preco', exigirPerfil('dono', 'atendente'), limiteCotacao
   try { r = await locarx.calcularPreco({ branchId: loja.branch_id, fleetId: d.fleetId, retirada: periodo.retirada, devolucao: periodo.devolucao, protecoes }); } catch (e) { throw erroLocarx(e); }
   const rotulo = cotacao.rotuloGrupo({ grupo: r.grupo }, 1);
   const nomes = r.protecoes.length ? r.protecoes.map((x) => x.nome) : protecoes;
-  res.json({
-    fleetId: d.fleetId, grupo: r.grupo, letra: rotulo.letra, nome: rotulo.nome, total: r.total, diaria: r.diaria, diarias: r.diarias, taxas: r.taxas, protecoes: nomes,
-    textoWhatsapp: `*${rotulo.letra} – ${rotulo.nome}*\n📅 Retirada: ${cotacao.dataBr(periodo.retirada)}\n📅 Devolução: ${cotacao.dataBr(periodo.devolucao)}\n🛡️ Proteção: ${nomes.join(', ')}\n💰 Total: *${cotacao.reais(r.total)}* (pagamento na loja, na retirada)`,
-  });
+  const resposta = {
+    fleetId: d.fleetId, grupo: r.grupo, letra: rotulo.letra, nome: rotulo.nome, total: r.total, diaria: r.diaria, diarias: r.diarias, taxas: r.taxas, protecoes: nomes, codigos: protecoes, caucao: r.caucao,
+    textoWhatsapp: `*${rotulo.letra} – ${rotulo.nome}*\n📅 Retirada: ${cotacao.dataBr(periodo.retirada)}\n📅 Devolução: ${cotacao.dataBr(periodo.devolucao)}\n🛡️ Proteção: ${nomes.join(', ')}\n💰 Total: *${cotacao.reais(r.total)}* (pagamento na loja, na retirada)${r.caucao != null ? `\n💳 Caução: ${cotacao.reais(r.caucao)} (pré-autorização no cartão, liberada após a devolução)` : ''}`,
+  };
+  // guarda o cálculo junto da cotação da conversa (se for do mesmo período)
+  await guardarCotacaoEquipe(req, d.conversaId, (atual) => (atual && atual.entrada?.dataRetirada === d.dataRetirada && atual.entrada?.horaRetirada === d.horaRetirada && atual.entrada?.dataDevolucao === d.dataDevolucao && atual.entrada?.horaDevolucao === d.horaDevolucao ? { ...atual, preco: { ...resposta, em: new Date().toISOString() } } : atual));
+  res.json(resposta);
 }));
 
 // ---------- reserva pela equipe (botão "Reservar" da cotação) ----------
@@ -142,6 +174,7 @@ const zReservaEquipe = z.object({
   contatoId: zUuid.optional(),
   conversaId: zUuid.optional(),
   confirmar: z.boolean().default(false),
+  pagamento: z.enum(['loja', 'pix']).default('loja'),
 });
 
 reservas.post('/reservas', exigirPerfil('dono', 'atendente'), limiteCotacao, rota(async (req, res) => {
@@ -174,8 +207,31 @@ reservas.post('/reservas', exigirPerfil('dono', 'atendente'), limiteCotacao, rot
   }
   const rotulo = cotacao.rotuloGrupo({ grupo: preco.grupo }, 1);
   const nomes = preco.protecoes.length ? preco.protecoes.map((x) => x.nome) : protecoes;
-  const resumo = `*Resumo da reserva*\n🚗 ${rotulo.letra} – ${rotulo.nome}\n📅 Retirada: ${cotacao.dataBr(periodo.retirada)}\n📅 Devolução: ${cotacao.dataBr(periodo.devolucao)}\n🛡️ Proteção: ${nomes.join(', ')}\n💰 Total: *${cotacao.reais(preco.total)}* (pagamento na loja, na retirada)\n👤 ${cliente.nome} · CPF final ${cliente.cpf.slice(-2)} · ${cliente.email}`;
-  if (!d.confirmar) return res.json({ passo: 'resumo', grupo: preco.grupo, letra: rotulo.letra, nome: rotulo.nome, total: preco.total, diarias: preco.diarias, protecoes: nomes, resumo });
+  if (d.pagamento === 'pix' && !cobrancas.pixDisponivel()) throw erro(409, 'Pagamento Pix não está configurado no servidor.');
+  const resumo = `*Resumo da reserva*\n🚗 ${rotulo.letra} – ${rotulo.nome}\n📅 Retirada: ${cotacao.dataBr(periodo.retirada)}\n📅 Devolução: ${cotacao.dataBr(periodo.devolucao)}\n🛡️ Proteção: ${nomes.join(', ')}\n💰 Total: *${cotacao.reais(preco.total)}* (${d.pagamento === 'pix' ? 'pagamento via Pix pelo WhatsApp' : 'pagamento na loja, na retirada'})${preco.caucao != null ? `\n💳 Caução: ${cotacao.reais(preco.caucao)} (pré-autorização no cartão, liberada após a devolução)` : ''}\n👤 ${cliente.nome} · CPF final ${cliente.cpf.slice(-2)} · ${cliente.email}`;
+  if (!d.confirmar) return res.json({ passo: 'resumo', grupo: preco.grupo, letra: rotulo.letra, nome: rotulo.nome, total: preco.total, diarias: preco.diarias, protecoes: nomes, resumo, pagamento: d.pagamento });
+
+  // Pix: gera a cobrança; a reserva no portal é criada quando o webhook confirmar o pagamento
+  if (d.pagamento === 'pix') {
+    const lojaNome = (await comContexto(ctx(req), async (c) => (await c.query('SELECT nome FROM lojas WHERE id = $1', [loja.id])).rows[0]))?.nome;
+    let cob;
+    try {
+      cob = await cobrancas.gerarCobranca({
+        lojaId: loja.id, branchId: loja.branch_id, lojaNome, conversaId: vinculo.conversa?.id || null, contatoId, usuarioId: req.usuario.id, origem: 'equipe',
+        cotacao: { fleetId: d.fleetId, grupo: preco.grupo, retirada: periodo.retirada, devolucao: periodo.devolucao, protecoes, nomesProtecoes: nomes, total: preco.total, caucao: preco.caucao ?? null },
+        cliente,
+      });
+    } catch (e) { throw erro(e.status === 503 ? 503 : 502, `Não foi possível gerar o Pix: ${String(e.message).slice(0, 160)}`); }
+    const [explicacao, codigo] = cobrancas.mensagensPix(cob);
+    // o código Pix não é texto para revisar: vai direto ao cliente, em duas mensagens (explicação + código sozinho, para copiar)
+    let enviado = false;
+    if (vinculo.conversa) {
+      enviado = await enviarAoCliente(vinculo.conversa.id, explicacao, { autor: 'atendente' }).catch(() => false);
+      if (enviado) await enviarAoCliente(vinculo.conversa.id, codigo, { autor: 'atendente' }).catch(() => {});
+      await comContexto(ctx(req), (c) => c.query(`UPDATE conversas SET estado = 'humano', atendente_id = $2, humano_respondeu_em = now(), atualizada_em = now() WHERE id = $1 AND estado <> 'encerrada'`, [vinculo.conversa.id, req.usuario.id]));
+    }
+    return res.status(201).json({ passo: 'pix', enviado, cobranca: cobrancaPublica(cob), textoWhatsapp: `${explicacao}\n\n${codigo}`, mensagens: [explicacao, codigo] });
+  }
 
   let reserva;
   try { reserva = await locarx.criarReserva({ branchId: loja.branch_id, fleetId: d.fleetId, retirada: periodo.retirada, devolucao: periodo.devolucao, protecoes, cliente }); } catch (e) {
@@ -206,11 +262,14 @@ reservas.post('/reservas', exigirPerfil('dono', 'atendente'), limiteCotacao, rot
     avisoGravacao = `A reserva ${reserva.codigo || ''} foi criada no portal, mas não ficou registrada no Conecta (${String(e.message || e).slice(0, 120)}). Anote o código e avise a administração.`;
     await registrarOcorrencia({ ...base, nivel: 'aviso', mensagem: `Reserva ${reserva.codigo || ''} criada no portal, mas não gravada no Conecta: ${String(e.message || e).slice(0, 200)}`, detalhes: { ...contexto, codigo: reserva.codigo, erro: String(e.stack || e).slice(0, 600) } });
   }
-  if (!avisoGravacao) await registrarOcorrencia({ ...base, nivel: 'info', mensagem: `Reserva ${reserva.codigo || ''} criada por ${req.usuario.nome} (${cotacao.reais(reserva.valor)})`, detalhes: { ...contexto, codigo: reserva.codigo, total: reserva.valor } });
+  if (!avisoGravacao) await registrarOcorrencia({ ...base, nivel: 'info', mensagem: `Reserva ${reserva.codigo || ''} criada por ${req.usuario.nome} (${cotacao.reais(reserva.valor)})`, detalhes: { ...contexto, codigo: reserva.codigo, total: reserva.valor, faturamento: reserva.faturamento } });
+  // enviamos LOCAL_PAYMENT; se o portal gravou outro faturamento, é o contrato do integrador sobrescrevendo (configuração na LocarX)
+  const faturamentoErrado = reserva.faturamento && reserva.faturamento !== 'LOCAL_PAYMENT';
+  if (faturamentoErrado) await registrarOcorrencia({ ...base, nivel: 'aviso', mensagem: `Reserva ${reserva.codigo || ''} gravada no portal como ${reserva.faturamento} apesar de enviarmos LOCAL_PAYMENT: o contrato do integrador na LocarX está como faturamento parcial/total. Pedir ajuste do cadastro da empresa do token.`, detalhes: { codigo: reserva.codigo, faturamento: reserva.faturamento } });
   const divergente = reserva.valor != null && preco.total != null && Math.abs(reserva.valor - preco.total) > 1;
   res.status(201).json({
     passo: 'criada', id: reservaId, codigo: reserva.codigo, total: reserva.valor, status: reserva.status,
-    atencao: avisoGravacao || (divergente ? `O portal fechou a reserva em ${cotacao.reais(reserva.valor)} (a cotação mostrava ${cotacao.reais(preco.total)}).` : null),
+    atencao: avisoGravacao || (faturamentoErrado ? `Atenção: o portal gravou esta reserva como ${reserva.faturamento === 'PARTIAL_BILLING' ? 'faturamento parcial' : reserva.faturamento}, não como pagamento na loja. É o contrato do integrador na LocarX — avise a administração.` : null) || (divergente ? `O portal fechou a reserva em ${cotacao.reais(reserva.valor)} (a cotação mostrava ${cotacao.reais(preco.total)}).` : null),
     textoWhatsapp: `✅ *Reserva confirmada!*\nCódigo: *${reserva.codigo || '—'}*\n🚗 ${rotulo.letra} – ${rotulo.nome}\n📅 Retirada: ${cotacao.dataBr(periodo.retirada)}\n📅 Devolução: ${cotacao.dataBr(periodo.devolucao)}\n🛡️ ${nomes.join(', ')}\n💰 Total: *${cotacao.reais(reserva.valor)}*, pagamento na loja, na retirada.\nQualquer dúvida é só chamar por aqui!`,
   });
 }));

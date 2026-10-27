@@ -6,6 +6,8 @@ import * as locarx from './api-locarx.js';
 import { cifrar, decifrar } from '../seguranca.js';
 import { registrarEvento } from '../crm/funis.js';
 import { normalizarValor } from '../crm/personalizacao.js';
+import { registrarOcorrencia } from '../ocorrencias.js';
+import * as cobrancas from '../pagamentos/cobrancas.js';
 import { reais, validarPeriodo, normalizarProtecoes, periodoTexto, dataBr, rotuloGrupo, ordenarPorPreco, textoOpcoes } from './cotacao.js';
 
 export function cpfValido(cpf) {
@@ -14,6 +16,10 @@ export function cpfValido(cpf) {
   const dv = (n) => { let s = 0; for (let i = 0; i < n; i++) s += Number(d[i]) * (n + 1 - i); const r = (s * 10) % 11; return r === 10 ? 0 : r; };
   return dv(9) === Number(d[9]) && dv(10) === Number(d[10]);
 }
+
+// Por decisão da rede (26/10/2026), cancelamento de reserva é sempre com atendente: o assistente não cancela.
+// A ferramenta cancelar_reserva continua implementada; para religar, basta mudar para true.
+export const ASSISTENTE_CANCELA = false;
 
 const SITUACAO = { CONFIRMED: 'confirmada', PENDING: 'pendente', INPROGRESS: 'em andamento (carro retirado)', COMPLETED: 'concluída (carro devolvido)', CANCELED: 'cancelada' };
 
@@ -117,7 +123,8 @@ export function ferramentasDaLoja(ctx) {
         return {
           texto_para_cliente: texto,
           grupos: mostrar.map((g, i) => ({ letra: rotuloGrupo(g, i + (a.mais_opcoes ? 4 : 1)).letra, fleet_id: g.fleetId, grupo: g.grupo, cambio: g.cambio, total: reais(g.total) })),
-          protecoes_disponiveis: (mostrar[0].protecoes || []).map((x) => ({ codigo: x.codigo, nome: x.nome, diaria: reais(x.diaria), basica: x.base })),
+          protecoes_disponiveis: (mostrar[0].protecoes || []).map((x) => ({ codigo: x.codigo, nome: x.nome, diaria: reais(x.diaria), basica: x.base, caucao: x.caucao != null ? reais(x.caucao) : null })),
+          caucao: mostrar[0].protecoes?.find((x) => x.base && x.padrao)?.caucao != null ? `Caução (pré-autorização no cartão de crédito, liberada após a devolução): ${reais(mostrar[0].protecoes.find((x) => x.base && x.padrao).caucao)} com a Proteção X. Informe se o cliente perguntar.` : null,
           ha_mais_opcoes: !a.mais_opcoes && grupos.length > 3,
         };
       },
@@ -132,24 +139,25 @@ export function ferramentasDaLoja(ctx) {
         let r;
         try { r = await locarx.calcularPreco({ branchId: ctx.branchId, fleetId: a.fleet_id, ...p, protecoes }); }
         catch (e) { if (e.dicaAssistente) return `Cálculo recusado pelo portal (${e.codigo}): ${e.dicaAssistente}`; throw e; }
-        const cotacao = { fleetId: r.fleetId ?? a.fleet_id, grupo: r.grupo, retirada: p.retirada, devolucao: p.devolucao, protecoes, nomesProtecoes: r.protecoes.map((x) => x.nome), total: r.total, diaria: r.diaria, diarias: r.diarias, em: new Date().toISOString() };
+        const cotacao = { fleetId: r.fleetId ?? a.fleet_id, grupo: r.grupo, caucao: r.caucao ?? null, retirada: p.retirada, devolucao: p.devolucao, protecoes, nomesProtecoes: r.protecoes.map((x) => x.nome), total: r.total, diaria: r.diaria, diarias: r.diarias, em: new Date().toISOString() };
         ctx.cotacao = cotacao;
         if (!ctx.simulacao && ctx.conversaId) {
           await comoSistema((c) => c.query('UPDATE conversas SET cotacao = $2, resumo_enviado_em = NULL WHERE id = $1', [ctx.conversaId, cotacao]));
         }
         await marcarEtapa(ctx, 'cotacao', r.total);
-        return { grupo: r.grupo, fleet_id: r.fleetId, total: reais(r.total), diaria: reais(r.diaria), diarias: r.diarias, protecoes: r.protecoes.length ? r.protecoes.map((x) => x.nome) : protecoes, pagamento: 'na loja, na retirada', proximo_passo: 'Informe o total ao cliente. Para fechar, peça nome completo, CPF e e-mail (se ainda não tiver) e chame criar_reserva.' };
+        return { grupo: r.grupo, fleet_id: r.fleetId, total: reais(r.total), diaria: reais(r.diaria), diarias: r.diarias, protecoes: r.protecoes.length ? r.protecoes.map((x) => x.nome) : protecoes, caucao: r.caucao != null ? `${reais(r.caucao)} (pré-autorização no cartão, liberada após a devolução; não entra no total)` : null, pagamento: 'na loja, na retirada', proximo_passo: 'Informe o total ao cliente. Para fechar, peça nome completo, CPF e e-mail (se ainda não tiver) e chame criar_reserva.' };
       },
     },
     {
       nome: 'criar_reserva',
-      descricao: 'Reserva no portal LocarX a ÚLTIMA cotação calculada (calcular_preco), com pagamento na loja. Precisa de nome completo, CPF e e-mail; a CNH é opcional e o telefone é o do WhatsApp. Na primeira chamada devolve o RESUMO para você enviar ao cliente; só chame de novo depois que o cliente responder confirmando.',
+      descricao: 'Reserva no portal LocarX a ÚLTIMA cotação calculada (calcular_preco). Precisa de nome completo, CPF e e-mail; a CNH é opcional e o telefone é o do WhatsApp. Na primeira chamada devolve o RESUMO para você enviar ao cliente; só chame de novo depois que o cliente responder confirmando. forma_pagamento: "loja" (paga na retirada) ou "pix" (gera o Pix pelo WhatsApp; a reserva é criada automaticamente quando o pagamento cair).',
       parametros: {
         type: 'object',
         properties: {
           nome: { type: 'string' }, cpf: { type: 'string' }, email: { type: 'string' },
           cnh: { type: 'string', description: 'opcional' }, telefone: { type: 'string', description: 'opcional; só se o cliente pedir outro número' },
           cliente_confirmou: { type: 'boolean', description: 'true somente se o cliente respondeu ao RESUMO confirmando' },
+          forma_pagamento: { type: 'string', enum: ['loja', 'pix'], description: 'como o cliente escolheu pagar (pergunte antes dos dados do condutor quando o Pix estiver disponível)' },
           fleet_id: { type: ['integer', 'string'], description: 'só se ainda não calculou o preço: grupo escolhido (número ou letra)' },
           ...PERIODO, protecoes: { type: 'array', items: { type: 'string' }, description: 'só se ainda não calculou o preço' },
         },
@@ -189,8 +197,11 @@ export function ferramentasDaLoja(ctx) {
         }
         if (!cotacao) return 'Ainda não há cotação. Chame calcular_preco com o fleet_id (ou a letra) do grupo escolhido, o período e as proteções — ou chame criar_reserva de novo informando fleet_id, datas, horas e proteções junto com os dados do cliente.';
         const rg = rotuloGrupo({ grupo: cotacao.grupo }, 1);
-        const resumo = `*Resumo da reserva*\n🚗 ${cotacao.grupo ? `${rg.letra} – ${rg.nome}` : 'Grupo escolhido'}\n📅 Retirada: ${dataBr(cotacao.retirada)}\n📅 Devolução: ${dataBr(cotacao.devolucao)}\n🛡️ Proteção: ${(cotacao.nomesProtecoes?.length ? cotacao.nomesProtecoes : cotacao.protecoes).join(', ')}\n💰 Total: *${reais(cotacao.total)}* (pagamento na loja, na retirada)\n👤 ${cliente.nome} · CPF final ${cliente.cpf.slice(-2)} · ${cliente.email}`;
-        const assinatura = `${cliente.cpf}|${cliente.email}|${cotacao.em}`;
+        const pixOk = ctx.pixDisponivel && !ctx.simulacao;
+        const forma = pixOk && a.forma_pagamento === 'pix' ? 'pix' : 'loja';
+        if (a.forma_pagamento === 'pix' && !pixOk) return 'Pagamento via Pix não está disponível nesta loja. Siga com pagamento na loja, na retirada (forma_pagamento = "loja").';
+        const resumo = `*Resumo da reserva*\n🚗 ${cotacao.grupo ? `${rg.letra} – ${rg.nome}` : 'Grupo escolhido'}\n📅 Retirada: ${dataBr(cotacao.retirada)}\n📅 Devolução: ${dataBr(cotacao.devolucao)}\n🛡️ Proteção: ${(cotacao.nomesProtecoes?.length ? cotacao.nomesProtecoes : cotacao.protecoes).join(', ')}\n💰 Total: *${reais(cotacao.total)}* (${forma === 'pix' ? 'pagamento via Pix por aqui' : 'pagamento na loja, na retirada'})${cotacao.caucao != null ? `\n💳 Caução: ${reais(cotacao.caucao)} (pré-autorização no cartão, liberada após a devolução)` : ''}\n👤 ${cliente.nome} · CPF final ${cliente.cpf.slice(-2)} · ${cliente.email}`;
+        const assinatura = `${cliente.cpf}|${cliente.email}|${cotacao.em}|${forma}`;
 
         // passo 1: o resumo precisa ter sido enviado e o cliente precisa ter respondido depois dele
         const respondeuDepois = cv?.resumo_enviado_em && cv?.ultima_do_cliente && new Date(cv.ultima_do_cliente) > new Date(cv.resumo_enviado_em);
@@ -203,6 +214,21 @@ export function ferramentasDaLoja(ctx) {
           return `RESERVA AINDA NÃO CRIADA. Envie ao cliente exatamente este resumo e pergunte: "Posso confirmar a reserva?". Só chame criar_reserva de novo depois que o cliente responder que sim.\n\n${resumo}`;
         }
         if (a.cliente_confirmou !== true) return 'O cliente ainda não confirmou o resumo. Pergunte se pode confirmar a reserva.';
+
+        // passo 2 (Pix): gera a cobrança; a reserva no portal é criada quando o pagamento for confirmado (webhook)
+        if (forma === 'pix') {
+          const pendente = ctx.conversaId ? await cobrancas.cobrancaPendenteDaConversa(ctx.conversaId) : null;
+          if (pendente) return { pix_ja_gerado: true, valor: reais(pendente.valor), vence_em: pendente.expira_em, instrucao: 'Já existe um Pix pendente para esta reserva. Diga ao cliente para usar o código já enviado (ou use verificar_pagamento se ele disser que pagou).' };
+          const loja = await comoSistema(async (c) => (await c.query('SELECT nome FROM lojas WHERE id = $1', [ctx.lojaId])).rows[0]);
+          let cob;
+          try {
+            cob = await cobrancas.gerarCobranca({ lojaId: ctx.lojaId, branchId: ctx.branchId, lojaNome: loja?.nome || 'LocarX', conversaId: ctx.conversaId, contatoId: ctx.contatoId, origem: 'assistente', cotacao, cliente });
+          } catch (e) { return `Não foi possível gerar o Pix agora (${String(e.message).slice(0, 120)}). Ofereça ao cliente pagar na loja (chame criar_reserva de novo com forma_pagamento = "loja") ou use chamar_atendente.`; }
+          const [explicacao, codigo] = cobrancas.mensagensPix(cob);
+          // o código vai em mensagem separada, enviada pelo sistema logo depois da sua resposta (para o cliente copiar fácil)
+          ctx.enviarDepois = [...(ctx.enviarDepois || []), explicacao, codigo];
+          return { pix_gerado: true, valor: reais(cob.valor), vence_em: cob.expira_em, instrucao: 'O sistema vai enviar ao cliente a explicação e o código Pix em mensagens separadas logo após a sua. Responda só uma frase curta (ex.: "Perfeito! Vou te mandar o Pix agora."). NÃO escreva o código nem o valor você mesmo. A reserva será criada automaticamente quando o pagamento for confirmado, e o cliente receberá o código da reserva por aqui.' };
+        }
 
         // passo 2: reserva
         const p = { retirada: cotacao.retirada, devolucao: cotacao.devolucao, ini: new Date(`${cotacao.retirada.date}T${cotacao.retirada.time}:00-03:00`), fim: new Date(`${cotacao.devolucao.date}T${cotacao.devolucao.time}:00-03:00`) };
@@ -226,7 +252,38 @@ export function ferramentasDaLoja(ctx) {
           }
         }
         const divergente = reserva.valor != null && cotacao.total != null && Math.abs(reserva.valor - cotacao.total) > 1;
-        return { reserva_criada: true, codigo: reserva.codigo, total: reais(reserva.valor ?? cotacao.total), ...(reserva.avisoGravacao ? { atencao: reserva.avisoGravacao } : {}), ...(divergente ? { atencao: `O portal fechou a reserva em ${reais(reserva.valor)} (a cotação mostrava ${reais(cotacao.total)}). Informe o valor do portal ao cliente e avise a equipe.` } : {}), pagamento: 'na loja, na retirada', proximo_passo: 'Informe o código ao cliente e avise que um atendente da loja vai dar sequência.' };
+        if (!ctx.simulacao && reserva.faturamento && reserva.faturamento !== 'LOCAL_PAYMENT') {
+          await registrarOcorrencia({ lojaId: ctx.lojaId, conversaId: ctx.conversaId, origem: 'assistente', tipo: 'reserva', nivel: 'aviso', mensagem: `Reserva ${reserva.codigo || ''} gravada no portal como ${reserva.faturamento} apesar de enviarmos LOCAL_PAYMENT: contrato do integrador na LocarX. Pedir ajuste do cadastro da empresa do token.`, detalhes: { codigo: reserva.codigo, faturamento: reserva.faturamento } });
+        }
+        // orientações oficiais do portal para passar ao cliente junto com o código (sem inventar)
+        let orientacoes = null;
+        if (!ctx.simulacao) {
+          try {
+            const pol = await locarx.politicasDaFilial(ctx.branchId);
+            const quer = /validade|pagamento|cadastr|cancelamento/i;
+            const itens = pol.politicas.filter((x) => quer.test(x.categoria || '')).map((x) => `${x.categoria}: ${String(x.texto).slice(0, 400)}`);
+            if (pol.km) itens.push(`Quilometragem: ${pol.km}`);
+            if (itens.length) orientacoes = itens;
+          } catch { /* sem políticas: segue só com o código */ }
+        }
+        return { reserva_criada: true, codigo: reserva.codigo, total: reais(reserva.valor ?? cotacao.total), ...(reserva.avisoGravacao ? { atencao: reserva.avisoGravacao } : {}),
+          ...(cotacao.caucao != null ? { caucao: reais(cotacao.caucao) } : {}),
+          ...(orientacoes ? { orientacoes_oficiais: orientacoes, como_usar: 'Depois do código, resuma em até 4 linhas curtas o que o cliente precisa saber (validade da reserva, pagamento na loja, documentos/cartão, cancelamento). Não copie os textos inteiros.' } : {}), ...(divergente ? { atencao: `O portal fechou a reserva em ${reais(reserva.valor)} (a cotação mostrava ${reais(cotacao.total)}). Informe o valor do portal ao cliente e avise a equipe.` } : {}), pagamento: 'na loja, na retirada', proximo_passo: 'Informe o código ao cliente e avise que um atendente da loja vai dar sequência.' };
+      },
+    },
+    {
+      nome: 'verificar_pagamento',
+      descricao: 'Confere no provedor se o Pix pendente desta conversa já foi pago (use quando o cliente disser "paguei", "já fiz o Pix"). Se estiver pago, a reserva é criada na hora e o cliente recebe o código automaticamente.',
+      parametros: { type: 'object', properties: {} },
+      executar: async () => {
+        if (!ctx.conversaId || ctx.simulacao) return 'Sem cobrança pendente nesta conversa.';
+        const pendente = await cobrancas.cobrancaPendenteDaConversa(ctx.conversaId);
+        if (!pendente) return 'Não há Pix pendente nesta conversa. Se o cliente pagou, a reserva já foi criada e o código enviado; confira com consultar_reserva se precisar.';
+        let r;
+        try { r = await cobrancas.verificarCobranca(pendente.id); } catch (e) { return `Não consegui consultar o pagamento agora (${String(e.message).slice(0, 100)}). Peça ao cliente para aguardar um instante; a confirmação chega sozinha.`; }
+        if (r.status === 'paga') return { pago: true, reserva: r.reserva?.codigo || null, instrucao: r.reserva ? 'Pagamento confirmado e reserva criada; o sistema já enviou o código ao cliente. Apenas confirme em uma frase.' : 'Pagamento confirmado, mas a reserva ficou para a equipe concluir (o sistema já avisou o cliente).' };
+        if (r.status === 'expirada') return { pago: false, expirado: true, instrucao: 'O Pix venceu sem pagamento. Pergunte se o cliente quer um novo código (chame criar_reserva de novo com forma_pagamento = "pix" e cliente_confirmou = true) ou pagar na loja.' };
+        return { pago: false, vence_em: r.expira_em, instrucao: 'Ainda não consta pagamento. Diga ao cliente que, assim que o banco confirmar (normalmente em segundos), o código da reserva chega por aqui.' };
       },
     },
     {
@@ -334,6 +391,8 @@ export function ferramentasDaLoja(ctx) {
   const semCrm = new Set();
   if (!(ctx.campos || []).some((x) => x.instrucao_bot)) semCrm.add('salvar_informacoes');
   if (!(ctx.etiquetas || []).some((e) => e.descricao_bot)) semCrm.add('aplicar_etiqueta');
+  if (!ASSISTENTE_CANCELA) semCrm.add('cancelar_reserva');
+  if (!ctx.pixDisponivel || ctx.simulacao) semCrm.add('verificar_pagamento');
   const disponiveis = lista.filter((f) => !semCrm.has(f.nome));
   // sem API LocarX configurada, as ferramentas de reserva não são oferecidas ao assistente
   if (!ctx.locarxDisponivel) return disponiveis.filter((f) => ['buscar_informacoes', 'dados_da_loja', 'salvar_informacoes', 'aplicar_etiqueta', 'chamar_atendente'].includes(f.nome));
@@ -357,10 +416,10 @@ async function marcarEtapa(ctx, evento, valor) {
 export async function registrarReserva(ctx, reserva, p, cliente, extra) {
   return comoSistema(async (c) => {
     const r = (await c.query(
-      `INSERT INTO reservas (loja_id, contato_id, conversa_id, codigo, status, retirada, devolucao, grupo, valor, origem, detalhes)
-       VALUES ($1, $2, $3, $4, 'confirmada', $5, $6, $7, $8, $10, $9)
+      `INSERT INTO reservas (loja_id, contato_id, conversa_id, codigo, status, retirada, devolucao, grupo, valor, origem, detalhes, pagamento, cobranca_id)
+       VALUES ($1, $2, $3, $4, 'confirmada', $5, $6, $7, $8, $10, $9, $11, $12)
        ON CONFLICT (loja_id, codigo) WHERE codigo IS NOT NULL DO UPDATE SET atualizada_em = now() RETURNING id`,
-      [ctx.lojaId, ctx.contatoId, ctx.conversaId, reserva.codigo, p.ini, p.fim, reserva.grupo, reserva.valor, { ...extra, cliente: { nome: cliente.nome, email: cliente.email } }, ctx.origem || 'assistente'])).rows[0];
+      [ctx.lojaId, ctx.contatoId, ctx.conversaId, reserva.codigo, p.ini, p.fim, reserva.grupo, reserva.valor, { ...extra, cliente: { nome: cliente.nome, email: cliente.email } }, ctx.origem || 'assistente', ctx.pagamento || 'loja', ctx.cobrancaId || null])).rows[0];
     if (ctx.contatoId) {
       await c.query(
         `UPDATE contatos SET nome = coalesce(nome, $2), email = coalesce(email, $3), cpf_cifrado = coalesce(cpf_cifrado, $4), cpf_final = coalesce(cpf_final, $5), atualizado_em = now() WHERE id = $1`,

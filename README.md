@@ -21,6 +21,7 @@ Plataforma de atendimento e CRM da rede LocarX: assistente virtual com IA no Wha
 ### Cotação e reserva pela equipe
 - **Tela Cotação** (menu, dono e atendente): só data e hora; a filial é a da própria loja. Consulta a tabela vigente (`POST /api/loja/cotacao`), lista os grupos do mais barato ao mais caro e calcula Super X e opcionais (`POST /api/loja/cotacao/preco`).
 - **Na conversa**, o botão **Cotação** (ao lado de "Dados do cliente") abre a mesma cotação numa janela. **Enviar ao cliente** coloca o texto já formatado no campo de mensagem, como o assistente faz, para o atendente revisar e mandar. **Reservar** cria a reserva pela API com os dados do cliente, com o mesmo resumo e confirmação do assistente (`POST /api/loja/reservas`, dois passos); fica no histórico da loja (origem "equipe"), na ficha do cliente, no funil e como evento na conversa.
+- A **última cotação da conversa** fica guardada (`conversas.cotacao_equipe`): ao reabrir Cotação na mesma conversa, período, valores e o cálculo com proteção voltam prontos. Vale por **24 h** e só enquanto a retirada não passou; depois disso pede nova consulta. `GET /api/loja/cotacao/ultima?conversa=`.
 - A regra de negócio fica em `api/src/servicos/locarx/cotacao.js`, compartilhada com as LocarX Tools do assistente.
 
 ### Status do WhatsApp (administração e matriz)
@@ -39,6 +40,17 @@ Proteções do motor (`servicos/ia/provedores.js` e `assistente.js`):
 
 ### Políticas do portal na Base da rede
 Em **Base da rede → Importar do portal LocarX**, as políticas oficiais que a API devolve na disponibilidade (clientes brasileiros/estrangeiros, cancelamento, validade da reserva, pagamento, taxa de entrega…), a franquia de km, as proteções com valor por diária e os serviços adicionais entram como itens **pendentes** da rede, sem duplicar títulos. A administração revisa, edita e aprova; só o aprovado chega ao assistente. `POST /api/admin/rede/importar-politicas`.
+
+### Pagamento Pix pelo WhatsApp (AbacatePay)
+Uma chave da **rede** (conta do franqueador, que repassa às lojas). Desligado sem `ABACATEPAY_API_KEY`. Só Pix.
+- **Variáveis:** `ABACATEPAY_API_KEY` (chave de Dev mode = transações simuladas; de produção = reais — o ambiente vem da chave), `ABACATEPAY_WEBHOOK_SECRET` (32+), `ABACATEPAY_PUBLIC_KEY` (opcional, da documentação de webhooks, para conferir a assinatura HMAC), `PIX_VALIDADE_MINUTOS` (30).
+- **Webhook:** cadastrar no painel do AbacatePay a URL pública da API: `https://<api>/api/webhooks/abacatepay/<SEGREDO>?webhookSecret=<SEGREDO>`. Conferências: segredo no caminho e na query, assinatura `X-Webhook-Signature` (HMAC-SHA256 base64 do corpo bruto, se a chave pública estiver configurada), idempotência por `id` do evento (`webhook_eventos`). Responde 200 só depois de processar.
+- **Fluxo:** o assistente pergunta a forma de pagamento (loja ou Pix) antes dos dados do condutor; o resumo mostra a forma; na confirmação com Pix, `criar_reserva` gera a cobrança e o sistema envia a explicação e o código copia-e-cola em mensagens próprias. O **webhook `transparent.completed`** confirma → o Conecta **cria a reserva no portal** com o pagamento nas `observations` ("PAGO VIA PIX … — comprovante …"), grava em Reservas (`pagamento = pix`), ficha e funil, e manda o código ao cliente. Se o portal recusar depois do pagamento, o cliente é avisado, a conversa vai para a equipe e fica uma ocorrência de erro (criar manualmente ou estornar).
+- **Equipe:** no Reservar da cotação há "Forma de pagamento"; com Pix, as duas mensagens vão direto ao cliente. Em **Reservas** aparece o painel "Pagamentos via Pix" (Verificar; **Simular pagamento** só em sandbox).
+- **Repasse (relatório de pagamentos online):** como todo Pix cai na conta da rede, cada loja precisa saber quanto tem a receber. Dono: menu **Pagamentos online** (`#/pagamentos`) — período (padrão: mês corrente), totais (recebidos, bruto, taxas do AbacatePay, líquido a receber, estornos), lista com código da reserva/cliente/valor/taxa/líquido/comprovante e **Exportar CSV** (`GET /api/loja/pagamentos/relatorio[.csv]?de&ate`). Administração/matriz: **Repasses Pix** (`#/pagamentos-rede`) — totais por loja (quanto repassar a cada uma) + todos os pagamentos + CSV (`GET /api/admin/pagamentos/relatorio[.csv]?de&ate&loja=`). A taxa vem do `platformFee` do AbacatePay (`cobrancas.taxa`). Só pagas e estornadas contam; sem CPF no relatório. Cartão entra aqui quando for ligado.
+- **Expiração:** varredura a cada minuto; Pix vencido avisa o cliente e oferece novo código ou pagamento na loja. `verificar_pagamento` cobre o "já paguei" antes de o webhook chegar.
+- **Estorno/cancelamento:** sempre com atendente (API `POST /transparents/refund`, integral); o webhook `transparent.refunded` registra a ocorrência.
+- Sem CPF/telefone/e-mail nos logs; CPF do condutor fica cifrado na cobrança até a reserva ser criada.
 
 ### Testes
 ```bash

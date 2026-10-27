@@ -10,6 +10,7 @@ export async function montar(alvo, ctx) {
   let periodo = 'proximas', busca = '', lista = [], espera = null;
   render(alvo, html`
     <div class="cabecalho-pagina"><div class="titulos"><h1>Reservas</h1><p>Reservas feitas pelo WhatsApp da loja e enviadas ao portal LocarX.</p></div></div>
+    <div id="cobrancas-pix" hidden></div>
     <section class="painel">
       <div class="painel-cab">
         <label class="busca"><span class="sr-only">Buscar</span>${icone('busca')}<input id="busca-res" type="search" placeholder="Código, nome ou telefone"></label>
@@ -45,5 +46,40 @@ export async function montar(alvo, ctx) {
   $$('[data-p]', alvo).forEach((b) => b.addEventListener('click', () => { periodo = b.dataset.p; $$('[data-p]', alvo).forEach((x) => x.classList.toggle('ativa', x === b)); carregar(); }));
   $('#busca-res', alvo).addEventListener('input', (e) => { busca = e.target.value.trim(); clearTimeout(espera); espera = setTimeout(carregar, 350); });
   carregar();
-  return () => clearTimeout(espera);
+
+  // ---------- cobranças Pix (pagamento pelo WhatsApp) ----------
+  const areaPix = $('#cobrancas-pix', alvo);
+  const SELO_PIX = { pendente: 'alerta', paga: 'ok', expirada: 'neutro', cancelada: 'neutro', estornada: 'erro', falhou: 'erro' };
+  let timerPix = null;
+  async function carregarPix() {
+    let lista;
+    try { lista = await api.cobrancas({}); } catch (err) { if (err.status === 404) return; areaPix.hidden = true; return; }
+    if (!lista.length) { areaPix.hidden = true; return; }
+    areaPix.hidden = false;
+    render(areaPix, html`<section class="painel">
+      <div class="painel-cab"><h2>Pagamentos via Pix</h2><span class="sub">${lista.filter((c) => c.status === 'pendente').length} pendente(s) · atualiza sozinho</span></div>
+      <div class="tabela-caixa"><table class="tabela">
+        <thead><tr><th>Quando</th><th>Cliente</th><th class="col-opcional">Reserva</th><th>Valor</th><th>Situação</th><th><span class="sr-only">Ações</span></th></tr></thead>
+        <tbody>${lista.slice(0, 30).map((c) => html`<tr>
+          <td class="num nowrap">${dataHora(c.criadaEm)}<div class="sub">${c.origem === 'equipe' ? 'pela equipe' : 'pelo assistente'}${c.devMode ? ' · teste' : ''}</div></td>
+          <td>${c.cliente?.nome || '—'}${c.conversaId ? html`<div class="sub"><a href="#/conversas/${c.conversaId}">abrir conversa</a></div>` : ''}</td>
+          <td class="col-opcional"><div class="sub">${c.grupo || ''}${c.periodo ? html`<br>${c.periodo.retirada.date.split('-').reverse().slice(0, 2).join('/')} ${c.periodo.retirada.time} → ${c.periodo.devolucao.date.split('-').reverse().slice(0, 2).join('/')} ${c.periodo.devolucao.time}` : ''}</div></td>
+          <td class="num"><strong>${reais(c.valor)}</strong></td>
+          <td><span class="selo ${SELO_PIX[c.status] || 'neutro'}">${c.status}</span><div class="sub">${c.status === 'pendente' ? 'vence ' + dataHora(c.expiraEm) : c.status === 'paga' ? 'pago ' + dataHora(c.pagaEm) : ''}${c.erro ? html`<div class="erro-texto">${c.erro}</div>` : ''}</div></td>
+          <td><div class="acoes-linha">
+            ${c.status === 'pendente' ? html`<button class="btn btn-texto" data-verificar="${c.id}" title="Consulta o AbacatePay agora">Verificar</button>` : ''}
+            ${c.status === 'pendente' && c.devMode ? html`<button class="btn btn-texto" data-simular="${c.id}" title="Só em ambiente de teste: marca como pago no AbacatePay">Simular pagamento</button>` : ''}
+            ${c.comprovanteUrl ? html`<a class="btn btn-texto" href="${c.comprovanteUrl}" target="_blank" rel="noopener">Comprovante</a>` : ''}
+          </div></td>
+        </tr>`)}</tbody></table></div></section>`);
+    $$('[data-verificar]', areaPix).forEach((b) => b.addEventListener('click', () => comBotao(b, async () => {
+      try { const r = await api.verificarCobranca(b.dataset.verificar); avisar(r.status === 'paga' ? 'Pagamento confirmado! Reserva criada.' : `Situação: ${r.status}.`); carregarPix(); carregar(); } catch (err) { avisar(err.message, 'erro'); }
+    })));
+    $$('[data-simular]', areaPix).forEach((b) => b.addEventListener('click', () => comBotao(b, async () => {
+      try { const r = await api.simularCobranca(b.dataset.simular); avisar(r.status === 'paga' ? 'Pagamento simulado e reserva criada.' : 'Simulação enviada; aguardando confirmação.'); setTimeout(() => { carregarPix(); carregar(); }, 1500); } catch (err) { avisar(err.message, 'erro'); }
+    })));
+  }
+  carregarPix();
+  timerPix = setInterval(() => { if (!document.hidden) carregarPix(); }, 15_000);
+  return () => { clearTimeout(espera); clearInterval(timerPix); };
 }

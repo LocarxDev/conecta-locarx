@@ -16,6 +16,7 @@ import { reservas, locarxAdmin, mcp } from './rotas/reservas.js';
 import { crm } from './rotas/crm.js';
 import { personalizacaoLoja, personalizacaoRede } from './rotas/personalizacao.js';
 import { relatorioLoja, relatorioRede } from './rotas/relatorios.js';
+import { webhookAbacatePay, pagamentosLoja, pagamentosAdmin } from './rotas/pagamentos.js';
 
 export function criarApp() {
   const app = express();
@@ -35,6 +36,9 @@ export function criarApp() {
   // webhook da Evolution: chega servidor-a-servidor (sem navegador, sem login), protegido por segredo na URL
   app.use('/api/webhooks', express.json({ limit: '2mb' }), webhooks);
 
+  // webhook do AbacatePay: corpo BRUTO (a assinatura HMAC é calculada sobre os bytes originais)
+  app.use('/api/webhooks/abacatepay', express.raw({ type: () => true, limit: '200kb' }), webhookAbacatePay);
+
   // MCP (LocarX Tools): servidor-a-servidor, protegido por token próprio
   app.use('/api/mcp', express.json({ limit: '100kb' }), mcp);
 
@@ -52,8 +56,8 @@ export function criarApp() {
 
   // daqui para baixo: precisa estar logado e mandar o token CSRF nas ações que alteram dados
   app.use('/api', exigirLogin, exigirCsrf);
-  app.use('/api/admin', admin, equipeAdmin, rede, locarxAdmin, relatorioRede, personalizacaoRede, canalAdmin);
-  app.use('/api/loja', loja, equipeLoja, canal, respostas, assistente, reservas, relatorioLoja);
+  app.use('/api/admin', admin, equipeAdmin, rede, locarxAdmin, relatorioRede, personalizacaoRede, canalAdmin, pagamentosAdmin);
+  app.use('/api/loja', loja, equipeLoja, canal, respostas, assistente, reservas, relatorioLoja, pagamentosLoja);
   app.use('/api/crm', crm, personalizacaoLoja);
   app.use('/api/conhecimento', conhecimento);
   app.use('/api/conversas', conversas);

@@ -45,6 +45,22 @@ export const config = {
     url: (process.env.LOCARX_API_URL || 'https://api.locarx.com.br/api').trim().replace(/\/+$/, ''),
     token: process.env.LOCARX_API_TOKEN.trim(),
   } : null,
+  // Pagamento Pix pelo WhatsApp (AbacatePay). Uma chave da REDE: tudo cai na conta do franqueador, que repassa às lojas.
+  // Sem ABACATEPAY_API_KEY o pagamento online fica desligado (o assistente nem oferece).
+  abacatepay: process.env.ABACATEPAY_API_KEY ? {
+    chave: process.env.ABACATEPAY_API_KEY.trim(),
+    url: (process.env.ABACATEPAY_URL || 'https://api.abacatepay.com/v2').trim().replace(/\/+$/, ''),
+    // segredo do webhook: vai na URL cadastrada no painel do AbacatePay (…/api/webhooks/abacatepay/<segredo>?webhookSecret=<segredo>)
+    segredoWebhook: (() => {
+      const s = obrigatoria('ABACATEPAY_WEBHOOK_SECRET');
+      if (s.length < 32 || !/^[A-Za-z0-9_-]+$/.test(s)) throw new Error('ABACATEPAY_WEBHOOK_SECRET precisa ter 32+ caracteres (letras, números, - ou _). Gere com: openssl rand -hex 32');
+      return s;
+    })(),
+    // chave pública da AbacatePay para conferir o header X-Webhook-Signature (HMAC-SHA256 base64) — copiada da documentação de webhooks.
+    // Opcional: sem ela só o segredo da URL é conferido (e o log avisa).
+    chavePublica: process.env.ABACATEPAY_PUBLIC_KEY?.trim() || null,
+    validadeMinutos: Number(process.env.PIX_VALIDADE_MINUTOS) || 30,
+  } : null,
   // Servidor MCP (LocarX Tools para outros sistemas, ex.: Lívia I.A. e chat do site). Desligado sem MCP_TOKEN.
   mcpToken: process.env.MCP_TOKEN && process.env.MCP_TOKEN.length >= 32 ? process.env.MCP_TOKEN : null,
   // Só para testes no computador: IA simulada, sem chamar Anthropic/OpenAI

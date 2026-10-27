@@ -736,3 +736,63 @@ CREATE POLICY ocorrencias_rede ON ocorrencias FOR SELECT USING (ctx_perfil() = '
 -- últimas opções mostradas (letra → fleetId) e dados do condutor já informados (CPF cifrado)
 ALTER TABLE conversas ADD COLUMN IF NOT EXISTS opcoes jsonb;
 ALTER TABLE conversas ADD COLUMN IF NOT EXISTS condutor jsonb;
+
+-- última cotação feita pela equipe na conversa (período, valores e cálculo com proteção), para reabrir sem consultar de novo.
+-- Vale por 24 h e só enquanto a retirada não passou.
+ALTER TABLE conversas ADD COLUMN IF NOT EXISTS cotacao_equipe jsonb;
+
+-- ===================== pagamento Pix pelo WhatsApp (AbacatePay) =====================
+-- Uma cobrança por tentativa de pagamento. A reserva no portal só é criada depois do webhook confirmar (status paga).
+CREATE TABLE IF NOT EXISTS cobrancas (
+  id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  loja_id        uuid NOT NULL REFERENCES lojas(id) ON DELETE CASCADE,
+  conversa_id    uuid REFERENCES conversas(id) ON DELETE SET NULL,
+  contato_id     uuid REFERENCES contatos(id) ON DELETE SET NULL,
+  reserva_id     uuid REFERENCES reservas(id) ON DELETE SET NULL,
+  usuario_id     uuid REFERENCES usuarios(id) ON DELETE SET NULL,    -- quem gerou, quando foi a equipe
+  origem         text NOT NULL CHECK (origem IN ('assistente', 'equipe')),
+  provedor       text NOT NULL DEFAULT 'abacatepay',
+  externo_id     text,                                               -- id da cobrança no provedor (pix_char_…)
+  valor          numeric(12, 2) NOT NULL,
+  status         text NOT NULL DEFAULT 'pendente' CHECK (status IN ('pendente', 'paga', 'expirada', 'cancelada', 'estornada', 'falhou')),
+  br_code        text,                                               -- Pix copia e cola
+  qr_base64      text,
+  expira_em      timestamptz,
+  paga_em        timestamptz,
+  comprovante_url text,
+  dev_mode       boolean NOT NULL DEFAULT false,
+  detalhes       jsonb,                                              -- cotação, condutor (CPF cifrado), para criar a reserva depois do pagamento
+  erro           text,
+  criada_em      timestamptz NOT NULL DEFAULT now(),
+  atualizada_em  timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS cobrancas_externo ON cobrancas (provedor, externo_id) WHERE externo_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS cobrancas_loja ON cobrancas (loja_id, criada_em DESC);
+CREATE INDEX IF NOT EXISTS cobrancas_pendentes ON cobrancas (status, expira_em) WHERE status = 'pendente';
+GRANT SELECT, INSERT, UPDATE ON cobrancas TO conecta_app;
+ALTER TABLE cobrancas ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS cobrancas_loja ON cobrancas;
+CREATE POLICY cobrancas_loja ON cobrancas FOR ALL USING (ctx_perfil() = 'sistema' OR loja_id = ctx_loja()) WITH CHECK (ctx_perfil() = 'sistema' OR loja_id = ctx_loja());
+DROP POLICY IF EXISTS cobrancas_rede ON cobrancas;
+CREATE POLICY cobrancas_rede ON cobrancas FOR SELECT USING (ctx_perfil() IN ('admin', 'matriz'));
+
+-- eventos de webhook já processados (o AbacatePay reenvia o mesmo id até 7 vezes): idempotência
+CREATE TABLE IF NOT EXISTS webhook_eventos (
+  provedor     text NOT NULL,
+  evento_id    text NOT NULL,
+  evento       text,
+  cobranca_id  uuid,
+  recebido_em  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (provedor, evento_id)
+);
+GRANT SELECT, INSERT ON webhook_eventos TO conecta_app;
+ALTER TABLE webhook_eventos ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS webhook_eventos_sistema ON webhook_eventos;
+CREATE POLICY webhook_eventos_sistema ON webhook_eventos FOR ALL USING (ctx_perfil() = 'sistema') WITH CHECK (ctx_perfil() = 'sistema');
+
+-- reserva: como foi paga (loja × pix) e referência da cobrança
+ALTER TABLE reservas ADD COLUMN IF NOT EXISTS pagamento text NOT NULL DEFAULT 'loja' CHECK (pagamento IN ('loja', 'pix'));
+ALTER TABLE reservas ADD COLUMN IF NOT EXISTS cobranca_id uuid;
+
+-- taxa cobrada pelo provedor (platformFee) para a conciliação do repasse loja × franqueador
+ALTER TABLE cobrancas ADD COLUMN IF NOT EXISTS taxa numeric(12, 2);

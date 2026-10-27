@@ -6,6 +6,7 @@ import { emailConvite } from './servicos/email.js';
 import { criarApp } from './app.js';
 import { iniciarVarreduras } from './servicos/ia/assistente.js';
 import { iniciarAutomacoes } from './servicos/crm/modelos.js';
+import { iniciarVarreduraPix } from './servicos/pagamentos/cobrancas.js';
 
 async function criarAdminInicial() {
   if (!config.adminInicial) return;
@@ -29,6 +30,7 @@ async function iniciar() {
   await criarAdminInicial();
   iniciarVarreduras();
   iniciarAutomacoes();
+  iniciarVarreduraPix();
   const servidor = criarApp().listen(config.porta, () => console.log(`[inicio] Conecta LocarX API na porta ${config.porta}`));
   const encerrar = () => { servidor.close(() => pool.end().then(() => process.exit(0))); setTimeout(() => process.exit(1), 10_000).unref(); };
   process.on('SIGTERM', encerrar);

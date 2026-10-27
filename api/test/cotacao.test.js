@@ -66,7 +66,7 @@ test('cotarPeriodo: lê o formato real da API LocarX e ordena por preço', async
   const respostaApi = [
     { branch: { fleets: [
       { fleetId: 7, name: 'C - SUV', transmissionType: 'AUTOMATIC', vehicleModels: [{ brand: 'Jeep', model: 'Renegade' }], price: { priceFleetId: 70, period: { baseDailyRate: 250, baseDays: 3 }, summary: { totalWithTax: 780 } }, availableProtections: [{ id: 1, code: 'PROTECAO_X', name: 'Proteção X', baseProtection: true }] },
-      { fleetId: 5, name: 'A - ECONÔMICO', transmissionType: 'MANUAL', vehicleModels: [{ brand: 'Fiat', model: 'Mobi' }], price: { priceFleetId: 50, period: { baseDailyRate: 100, baseDays: 3 }, summary: { totalWithTax: 330 } }, availableProtections: [{ id: 1, code: 'PROTECAO_X', name: 'Proteção X', baseProtection: true }, { id: 2, code: 'PROTECAO_SUPER_X', name: 'Super X', price: 30 }] },
+      { fleetId: 5, name: 'A - ECONÔMICO', transmissionType: 'MANUAL', vehicleModels: [{ brand: 'Fiat', model: 'Mobi' }], price: { priceFleetId: 50, period: { baseDailyRate: 100, baseDays: 3 }, summary: { totalWithTax: 330 } }, availableProtections: [{ id: 1, code: 'PROTECAO_X', name: 'Proteção X', baseProtection: true, guaranteeValue: 800 }, { id: 2, code: 'PROTECAO_SUPER_X', name: 'Super X', price: 30, guaranteeValue: 800 }] },
       { fleetId: 9, name: 'SEM PREÇO', price: {} },
     ] } },
     { additionalServices: [{ additionalServiceId: 3, name: 'Cadeirinha', price: 15, maxQuantity: 2 }], policies: [{ category: 'Combustível', policy: 'Devolver cheio' }], mileageInfo: 'Km livre' },
@@ -83,6 +83,7 @@ test('cotarPeriodo: lê o formato real da API LocarX e ordena por preço', async
   assert.equal(r.grupos[0].total, 330);
   assert.equal(r.grupos[0].exemplos, 'Fiat Mobi');
   assert.equal(r.grupos[0].protecoes[1].codigo, 'PROTECAO_SUPER_X');
+  assert.equal(r.grupos[0].protecoes[0].caucao, 800);   // caução por proteção (guaranteeValue)
   assert.equal(r.adicionais[0].nome, 'Cadeirinha');
   assert.equal(r.km, 'Km livre');
 });

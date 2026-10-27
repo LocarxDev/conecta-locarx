@@ -58,3 +58,12 @@ test('prompt: estado da reserva em andamento entra em toda rodada (opções com 
   const p = montarSistema({ ...base, conversa: cv });
   assert.match(p, /RESERVA EM ANDAMENTO/);
 });
+
+test('cancelamento é sempre com atendente: a ferramenta não é oferecida e o prompt manda chamar', async () => {
+  const { ferramentasDaLoja, ASSISTENTE_CANCELA } = await import('../src/servicos/locarx/ferramentas.js');
+  assert.equal(ASSISTENTE_CANCELA, false);
+  const nomes = ferramentasDaLoja({ lojaId: 'l', branchId: 1, locarxDisponivel: true, simulacao: true }).map((f) => f.nome);
+  assert.ok(!nomes.includes('cancelar_reserva'));
+  assert.ok(nomes.includes('consultar_reserva') && nomes.includes('criar_reserva'));
+  assert.match(montarSistema(base), /CANCELAMENTO ou alteração de reserva já criada: você não cancela/);
+});

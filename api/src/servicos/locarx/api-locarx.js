@@ -178,13 +178,26 @@ export async function politicasDoPortal(branchId) {
   if (d.km) itens.push({ titulo: 'Quilometragem (franquia de km)', conteudo: String(d.km) });
   const prot = d.grupos[0]?.protecoes || [];
   if (prot.length) {
-    itens.push({ titulo: 'Proteções disponíveis e caução', conteudo: prot.map((x) => `${x.nome}${x.base ? ' (básica)' : ' (opcional)'}${x.diaria != null ? ` — ${reais(x.diaria)} por diária` : ''}${x.descricao ? `. ${x.descricao}` : ''}`).join('\n\n')
+    itens.push({ titulo: 'Proteções disponíveis e caução', conteudo: prot.map((x) => `${x.nome}${x.base ? ' (básica)' : ' (opcional)'}${x.diaria != null ? ` — ${reais(x.diaria)} por diária` : ''}${x.caucao != null ? ` — caução (pré-autorização no cartão): ${reais(x.caucao)}` : ''}${x.descricao ? `. ${x.descricao}` : ''}`).join('\n\n')
       + '\n\nToda reserva tem a Proteção X ou a Proteção Super X (nunca as duas). Os valores por diária podem variar por filial e tabela; o total exato vem na cotação.' });
   }
   if (d.adicionais.length) {
     itens.push({ titulo: 'Serviços adicionais (cadeirinha, condutor adicional…)', conteudo: d.adicionais.map((a) => `${a.nome}${a.diaria != null ? ` — ${reais(a.diaria)} por diária` : ''}${a.maximo ? ` (até ${a.maximo} por reserva)` : ''}`).join('\n') + '\n\nOs serviços adicionais são contratados na loja, na retirada.' });
   }
   return itens;
+}
+
+// ---------- políticas por filial (cache 1 h) ----------
+// Orientações oficiais do portal para enviar ao cliente depois da reserva (validade, pagamento, o que levar, cancelamento).
+const cachePoliticas = new Map();
+export async function politicasDaFilial(branchId) {
+  const c = cachePoliticas.get(String(branchId));
+  if (c && Date.now() - c.em < 3_600_000) return c.dados;
+  const ini = new Date(Date.now() + 3 * 86_400_000), fim = new Date(Date.now() + 5 * 86_400_000);
+  const d = await disponibilidadeCompleta({ branchId, retirada: { date: dataHora(ini).date, time: '10:00' }, devolucao: { date: dataHora(fim).date, time: '10:00' } });
+  const dados = { politicas: d.politicas, km: d.km };
+  cachePoliticas.set(String(branchId), { em: Date.now(), dados });
+  return dados;
 }
 
 // ---------- catálogo de frotas (grupos) ----------
@@ -233,6 +246,7 @@ function grupoDaApi(f, extras) {
     protecoes: (f.availableProtections || f.protections || []).map((x) => ({
       id: x.id ?? x.fleetProtectionId, codigo: x.code || null, nome: x.name, descricao: x.description || null,
       diaria: num(x.price), total: num(x.calculatedPrice), base: !!x.baseProtection, padrao: !!x.selected,
+      caucao: num(x.guaranteeValue ?? x.guaranteeValueBooking),   // caução em reais, por proteção
     })),
   };
 }
@@ -302,7 +316,8 @@ export async function calcularPreco({ branchId, fleetId, retirada, devolucao, pr
     taxas: num(d?.summary?.administrationTax),
     grupo: g.grupo,
     fleetId: g.fleetId,
-    protecoes: g.protecoes.filter((p) => protecoes.includes(p.codigo)).map((p) => ({ codigo: p.codigo, nome: p.nome })),
+    protecoes: g.protecoes.filter((p) => protecoes.includes(p.codigo)).map((p) => ({ codigo: p.codigo, nome: p.nome, caucao: p.caucao })),
+    caucao: g.protecoes.find((p) => protecoes.includes(p.codigo) && p.base)?.caucao ?? g.protecoes.find((p) => protecoes.includes(p.codigo))?.caucao ?? null,
     bruto: d,
   };
 }
@@ -380,6 +395,7 @@ export function normalizarReserva(r) {
     codigo: r.reservationCode || r.code || null,
     status: r.status?.reservation || r.status || null,
     pagamento: r.status?.payment || null,
+    faturamento: r.billingType || null,   // LOCAL_PAYMENT (na loja), PARTIAL_BILLING ou TOTAL_BILLING — o portal pode sobrescrever pelo contrato do integrador
     motivoCancelamento: r.status?.cancellationReason || null,
     criadaEm: r.createdDate || null,
     referencia: r.assistanceNumber || null,
@@ -390,6 +406,7 @@ export function normalizarReserva(r) {
     cambio: r.fleet?.transmission || r.fleet?.transmissionType || null,
     valor: num(r.value ?? r.priceBreakdown?.totalAmount),
     protecoes: (r.reservationDetails?.protections || []).map((p) => p.name || p.code),
+    caucao: num((r.reservationDetails?.protections || []).find((p) => /PROTECAO_(SUPER_)?X/.test(p.code || ''))?.guaranteeValueBooking ?? (r.reservationDetails?.protections || [])[0]?.guaranteeValueBooking),
     cliente: r.customer ? { nome: r.customer.name, email: r.customer.email } : null,
   };
 }
