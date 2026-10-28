@@ -7,6 +7,11 @@ const RE_DATA = /^\d{4}-\d{2}-\d{2}$/, RE_HORA = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export const PROTECOES_VALIDAS = ['PROTECAO_X', 'PROTECAO_SUPER_X', 'TERCEIROS', 'VIDROS', 'VIDROS_E_PNEUS'];
 
+// Nome de cada proteção nos textos para o cliente. Sai SEMPRE da lista de códigos que será reservada (nunca do que o portal
+// devolver na cotação), para o resumo nunca contradizer a reserva. A Proteção X (ou a Super X) é obrigatória e vem sempre.
+export const ROTULOS_PROTECAO = { PROTECAO_X: 'Proteção X (inclusa no total)', PROTECAO_SUPER_X: 'Super X', TERCEIROS: 'Terceiros', VIDROS: 'Vidros', VIDROS_E_PNEUS: 'Vidros e pneus' };
+export const nomesDasProtecoes = (codigos) => normalizarProtecoes(codigos).map((c) => ROTULOS_PROTECAO[c] || c);
+
 // datas no horário de Salvador (UTC-3, sem horário de verão)
 export const instante = (x) => new Date(`${x.date}T${x.time}:00-03:00`);
 

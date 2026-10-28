@@ -257,12 +257,24 @@ conversas.post('/:id/devolver', exigirPerfil('dono', 'atendente'), rota(async (r
   res.json(r);
 }));
 
-// ---------- transferir para outra loja (números de WhatsApp diferentes) ----------
+// ---------- transferir para outra loja do mesmo dono (números de WhatsApp diferentes) ----------
 // A conversa continua no WhatsApp da loja de origem; a loja de destino passa a ver e responder por ele.
 // Vai para a fila do destino (sem atendente, estado "aguardando"); a roleta de lá distribui.
+// Só vão para lojas "irmãs": as que têm ao menos um dono em comum com a loja de quem transfere (dono principal ou vinculado em
+// "Vincular dono"). Devolver para a loja de origem da conversa é sempre permitido (checado na rota de transferir).
+export async function lojasIrmas(c, lojaId) {
+  return (await c.query(
+    `WITH donos AS (
+       SELECT loja_id, id AS usuario_id FROM usuarios WHERE perfil = 'dono' AND status <> 'inativo' AND loja_id IS NOT NULL
+       UNION
+       SELECT ul.loja_id, ul.usuario_id FROM usuario_lojas ul JOIN usuarios u ON u.id = ul.usuario_id WHERE ul.perfil = 'dono' AND u.status <> 'inativo')
+     SELECT l.id, l.nome, l.cidade, l.uf FROM lojas l
+      WHERE l.ativa AND l.id <> $1
+        AND EXISTS (SELECT 1 FROM donos a JOIN donos b ON b.usuario_id = a.usuario_id WHERE a.loja_id = $1 AND b.loja_id = l.id)
+      ORDER BY l.nome`, [lojaId])).rows;
+}
 conversas.get('/lojas-destino', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
-  const rows = await comoSistema(async (c) => (await c.query('SELECT id, nome, cidade, uf FROM lojas WHERE ativa AND id <> $1 ORDER BY nome', [req.usuario.loja_id])).rows);
-  res.json(rows);
+  res.json(await comoSistema((c) => lojasIrmas(c, req.usuario.loja_id)));
 }));
 conversas.post('/:id/transferir-loja', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
   const id = uuid(req.params.id);
@@ -273,6 +285,10 @@ conversas.post('/:id/transferir-loja', exigirPerfil('dono', 'atendente'), rota(a
     if (!destino) throw erro(404, 'Loja de destino não encontrada.');
     if (destino.id === cv.loja_id && !cv.loja_atendimento_id) throw erro(400, 'A conversa já é desta loja.');
     const voltando = destino.id === cv.loja_id;   // devolver para a loja de origem
+    if (!voltando) {
+      const irmas = await comoSistema((cs) => lojasIrmas(cs, req.usuario.loja_id));
+      if (!irmas.some((l) => l.id === destino.id)) throw erro(403, 'Você só pode transferir para lojas do mesmo dono.');
+    }
     await c.query(`UPDATE conversas SET loja_atendimento_id = $2, transferida_em = CASE WHEN $2::uuid IS NULL THEN NULL ELSE now() END, transferida_por = $3,
                      estado = 'aguardando', atendente_id = NULL, atualizada_em = now() WHERE id = $1`, [cv.id, voltando ? null : destino.id, req.usuario.id]);
     await evento(c, cv, req, `${req.usuario.nome} transferiu a conversa para ${destino.nome}${d.nota ? ` — ${d.nota}` : ''}`);

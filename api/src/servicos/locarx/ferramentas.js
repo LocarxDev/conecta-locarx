@@ -8,7 +8,7 @@ import { registrarEvento, regrasDaLoja, fecharOportunidade } from '../crm/funis.
 import { normalizarValor } from '../crm/personalizacao.js';
 import { registrarOcorrencia } from '../ocorrencias.js';
 import * as cobrancas from '../pagamentos/cobrancas.js';
-import { reais, validarPeriodo, normalizarProtecoes, periodoTexto, dataBr, rotuloGrupo, ordenarPorPreco, textoOpcoes } from './cotacao.js';
+import { reais, validarPeriodo, normalizarProtecoes, nomesDasProtecoes, periodoTexto, dataBr, rotuloGrupo, ordenarPorPreco, textoOpcoes } from './cotacao.js';
 
 export function cpfValido(cpf) {
   const d = String(cpf || '').replace(/\D/g, '');
@@ -232,7 +232,7 @@ export function ferramentasDaLoja(ctx) {
         const pixOk = ctx.pixDisponivel && !ctx.simulacao;
         const forma = pixOk && a.forma_pagamento === 'pix' ? 'pix' : 'loja';
         if (a.forma_pagamento === 'pix' && !pixOk) return 'Pagamento via Pix não está disponível nesta loja. Siga com pagamento na loja, na retirada (forma_pagamento = "loja").';
-        const resumo = `*Resumo da reserva*\n🚗 ${cotacao.grupo ? `${rg.letra} – ${rg.nome}` : 'Grupo escolhido'}${variasFiliais && cotacao.filialNome ? `\n📍 Filial: ${cotacao.filialNome}` : ''}\n📅 Retirada: ${dataBr(cotacao.retirada)}\n📅 Devolução: ${dataBr(cotacao.devolucao)}\n🛡️ Proteção: ${(cotacao.nomesProtecoes?.length ? cotacao.nomesProtecoes : cotacao.protecoes).join(', ')}\n💰 Total: *${reais(cotacao.total)}* (${forma === 'pix' ? 'pagamento via Pix por aqui' : 'pagamento na loja, na retirada'})${cotacao.caucao != null ? `\n💳 Caução: ${reais(cotacao.caucao)} (pré-autorização no cartão, liberada após a devolução)` : ''}\n👤 ${cliente.nome} · CPF final ${cliente.cpf.slice(-2)} · ${cliente.email}`;
+        const resumo = `*Resumo da reserva*\n🚗 ${cotacao.grupo ? `${rg.letra} – ${rg.nome}` : 'Grupo escolhido'}${variasFiliais && cotacao.filialNome ? `\n📍 Filial: ${cotacao.filialNome}` : ''}\n📅 Retirada: ${dataBr(cotacao.retirada)}\n📅 Devolução: ${dataBr(cotacao.devolucao)}\n🛡️ Proteção: ${nomesDasProtecoes(cotacao.protecoes).join(', ')}\n💰 Total: *${reais(cotacao.total)}* (${forma === 'pix' ? 'pagamento via Pix por aqui' : 'pagamento na loja, na retirada'})${cotacao.caucao != null ? `\n💳 Caução: ${reais(cotacao.caucao)} (pré-autorização no cartão, liberada após a devolução)` : ''}\n👤 ${cliente.nome} · CPF final ${cliente.cpf.slice(-2)} · ${cliente.email}`;
         const assinatura = `${cliente.cpf}|${cliente.email}|${cotacao.em}|${forma}`;
 
         // passo 1: o resumo precisa ter sido enviado e o cliente precisa ter respondido depois dele

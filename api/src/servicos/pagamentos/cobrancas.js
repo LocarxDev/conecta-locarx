@@ -9,7 +9,7 @@ import { cifrar, decifrar } from '../seguranca.js';
 import * as abacate from './abacatepay.js';
 import * as locarx from '../locarx/api-locarx.js';
 import { registrarReserva } from '../locarx/ferramentas.js';
-import { reais, dataBr, rotuloGrupo } from '../locarx/cotacao.js';
+import { reais, dataBr, rotuloGrupo, nomesDasProtecoes } from '../locarx/cotacao.js';
 import { enviarAoCliente, enviarDocumentoAoCliente } from '../canais/envio.js';
 import { gerarComprovantePdf } from './comprovante.js';
 import { registrarOcorrencia, detalhesDoErro } from '../ocorrencias.js';
@@ -173,7 +173,7 @@ export async function confirmarPagamento(cobrancaId, o = {}) {
 
   // 4) avisa o cliente (e a equipe, pelo evento na conversa)
   if (cobranca.conversa_id) {
-    const nomes = cot.nomesProtecoes?.length ? cot.nomesProtecoes : cot.protecoes;
+    const nomes = nomesDasProtecoes(cot.protecoes);
     await enviarAoCliente(cobranca.conversa_id,
       `✅ *Pagamento confirmado e reserva criada!*\nCódigo: *${reserva.codigo || '—'}*\n🚗 ${rg.letra} – ${rg.nome}\n📅 Retirada: ${dataBr(cot.retirada)}\n📅 Devolução: ${dataBr(cot.devolucao)}\n🛡️ ${nomes.join(', ')}\n💰 Pago via Pix: *${reais(cobranca.valor)}*${cobranca.codigo ? ` (pagamento nº ${cobranca.codigo})` : ''}${cot.caucao != null ? `\n💳 Caução: ${reais(cot.caucao)} (pré-autorização no cartão, na retirada)` : ''}\n\nNa retirada, apresente CNH válida e o cartão de crédito para a caução. Qualquer dúvida é só chamar por aqui!`,
       { evento: `Pagamento Pix confirmado (${reais(cobranca.valor)}) — reserva ${reserva.codigo || ''} criada no portal` });
