@@ -444,6 +444,9 @@ export const exemplo = {
   },
   async salvarRoleta(d) { await espera(); const c = crmExemplo(); c.roleta.modo = d.modo; c.roleta.limite = d.limite; c.roleta.fora = Object.entries(d.participantes || {}).filter(([, v]) => !v).map(([k]) => k); salvar(); return this.roleta(); },
   async disponibilidade(disponivel) { await espera(150); const u = eu(); u.disponivel = disponivel; salvar(); return comLoja(u); },
+  async regrasFunil() { await espera(); const c = crmExemplo(); return c.regras || { perdidoSemRespostaHoras: 48, perdidoPeloAssistente: true, concluidoAoPagar: true, concluidoNaRetirada: true }; },
+  async salvarRegrasFunil(d) { await espera(); const c = crmExemplo(); c.regras = d; salvar(); return d; },
+  async minhaRoleta(participa) { await espera(150); const u = eu(); const c = crmExemplo(); c.roleta.fora = c.roleta.fora.filter((x) => x !== u.id); if (!participa) c.roleta.fora.push(u.id); salvar(); return { ...comLoja(u), naRoleta: participa }; },
   async tarefas({ situacao }) {
     await espera();
     if (situacao === 'feitas') return [];

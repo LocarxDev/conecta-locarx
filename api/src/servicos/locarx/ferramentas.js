@@ -24,7 +24,7 @@ export const ASSISTENTE_CANCELA = false;
 const SITUACAO = { CONFIRMED: 'confirmada', PENDING: 'pendente', INPROGRESS: 'em andamento (carro retirado)', COMPLETED: 'concluída (carro devolvido)', CANCELED: 'cancelada' };
 
 const PERIODO = {
-  data_retirada: { type: 'string', description: 'Data de retirada, AAAA-MM-DD' },
+  data_retirada: { type: 'string', description: 'Data de retirada, AAAA-MM-DD (o ano é o do "HOJE É"; sem ano dito pelo cliente, use a próxima ocorrência da data a partir de hoje)' },
   hora_retirada: { type: 'string', description: 'Hora de retirada, HH:MM (24h)' },
   data_devolucao: { type: 'string', description: 'Data de devolução, AAAA-MM-DD' },
   hora_devolucao: { type: 'string', description: 'Hora de devolução, HH:MM (24h)' },

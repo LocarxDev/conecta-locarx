@@ -43,6 +43,14 @@ const MODULOS_LOJA = [
   { rota: 'reservas', rotulo: 'Reservas', icone: 'reservas' },
 ];
 
+// Texto, estilo e dica do botão Disponível / Em pausa / Fora da roleta
+function rotuloDisp(u) {
+  if (u.naRoleta === false) return { texto: 'Fora da roleta', classe: '', dica: 'Você não recebe conversas da roleta, mas pode abrir qualquer conversa e tocar em Assumir. Clique para voltar à roleta.' };
+  return u.disponivel
+    ? { texto: 'Disponível', classe: ' ligada', dica: 'Você está recebendo conversas da roleta. Clique para pausar.' }
+    : { texto: 'Em pausa', classe: '', dica: 'Você não recebe conversas da roleta. Clique para ficar disponível.' };
+}
+
 function menuDoPerfil(perfilUsuario) {
   if (perfilUsuario === 'admin' || perfilUsuario === 'matriz') {
     return [
@@ -219,9 +227,8 @@ function desenharEstrutura(caminhoAtual) {
             <span>${PERFIS[u.perfil]}</span>
           </div>
           <div class="acoes">
-            ${ehRede ? '' : html`<button class="disponibilidade${u.disponivel ? ' ligada' : ''}" id="disponibilidade" aria-pressed="${!!u.disponivel}"
-              title="${u.disponivel ? 'Você está recebendo conversas da roleta. Clique para pausar.' : 'Você não recebe conversas da roleta. Clique para ficar disponível.'}">
-              <span class="ponto"></span><span class="rotulo">${u.disponivel ? 'Disponível' : 'Em pausa'}</span></button>`}
+            ${ehRede ? '' : html`<button class="disponibilidade${rotuloDisp(u).classe}" id="disponibilidade" aria-pressed="${!!u.disponivel && u.naRoleta !== false}" title="${rotuloDisp(u).dica}">
+              <span class="ponto"></span><span class="rotulo">${rotuloDisp(u).texto}</span></button>`}
             <button class="btn btn-texto btn-icone" id="trocar-tema" aria-label="${escuro ? 'Usar modo claro' : 'Usar modo escuro'}" title="${escuro ? 'Modo claro' : 'Modo escuro'}">${icone(escuro ? 'sol' : 'lua')}</button>
             <div class="usuario-menu">
               <button class="usuario-btn" id="usuario-btn" aria-haspopup="menu" aria-expanded="false">
@@ -230,6 +237,7 @@ function desenharEstrutura(caminhoAtual) {
               <div class="usuario-pop" id="usuario-pop" role="menu" hidden>
                 <div class="cab"><strong>${u.nome}</strong><span>${u.email}</span></div>
                 <a href="#/perfil" role="menuitem">${icone('perfil')}Meu perfil</a>
+                ${u.perfil === 'dono' ? html`<button type="button" role="menuitem" id="minha-roleta" title="Se desligar, as conversas não chegam para você sozinhas, mas você pode abrir qualquer uma e tocar em Assumir.">${icone('roleta')}<span id="minha-roleta-txt">${u.naRoleta === false ? 'Voltar a receber da roleta' : 'Não receber da roleta (só assumir)'}</span></button>` : ''}
                 <button type="button" role="menuitem" id="sair">${icone('sair')}Sair</button>
               </div>
             </div>
@@ -258,17 +266,33 @@ function desenharEstrutura(caminhoAtual) {
     botaoTema.title = modoEscuro ? 'Modo claro' : 'Modo escuro';
   });
 
-  // Disponível / Em pausa (roleta de atendimento)
+  // Disponível / Em pausa (roleta de atendimento). Quem é dono e saiu da roleta vê "Fora da roleta".
   const disp = $('#disponibilidade');
+  const pintarDisp = () => {
+    if (!disp) return;
+    const r = rotuloDisp(estado.usuario);
+    disp.className = 'disponibilidade' + r.classe;
+    disp.setAttribute('aria-pressed', String(!!estado.usuario.disponivel && estado.usuario.naRoleta !== false));
+    $('.rotulo', disp).textContent = r.texto;
+    disp.title = r.dica;
+    const t = $('#minha-roleta-txt'); if (t) t.textContent = estado.usuario.naRoleta === false ? 'Voltar a receber da roleta' : 'Não receber da roleta (só assumir)';
+  };
+  async function minhaRoleta(participa) {
+    try {
+      const novo = await api.minhaRoleta(participa);
+      estado.usuario = { ...estado.usuario, naRoleta: novo.naRoleta, disponivel: novo.disponivel };
+      pintarDisp();
+      avisar(participa ? 'Você voltou para a roleta: as conversas chegam para você quando estiver Disponível.' : 'Você saiu da roleta. As conversas vão para os atendentes; você continua podendo abrir qualquer conversa e tocar em Assumir.');
+    } catch (err) { if (err.status === 401) return location.reload(); avisar(err.message, 'erro'); }
+  }
+  $('#minha-roleta')?.addEventListener('click', () => minhaRoleta(estado.usuario.naRoleta === false));
   disp?.addEventListener('click', async () => {
+    if (estado.usuario.naRoleta === false) return minhaRoleta(true);
     disp.disabled = true;
     try {
       const novo = await api.disponibilidade(!estado.usuario.disponivel);
       estado.usuario = { ...estado.usuario, disponivel: novo.disponivel };
-      disp.classList.toggle('ligada', novo.disponivel);
-      disp.setAttribute('aria-pressed', String(novo.disponivel));
-      $('.rotulo', disp).textContent = novo.disponivel ? 'Disponível' : 'Em pausa';
-      disp.title = novo.disponivel ? 'Você está recebendo conversas da roleta. Clique para pausar.' : 'Você não recebe conversas da roleta. Clique para ficar disponível.';
+      pintarDisp();
       avisar(novo.disponivel ? 'Você está disponível: as conversas da roleta chegam para você.' : 'Você está em pausa: a roleta não entrega novas conversas para você.');
     } catch (err) { if (err.status === 401) return location.reload(); avisar(err.message, 'erro'); }
     finally { disp.disabled = false; }

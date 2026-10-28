@@ -178,6 +178,7 @@ const real = {
   roleta: () => chamar('GET', '/crm/roleta'),
   salvarRoleta: (d) => chamar('PUT', '/crm/roleta', d),
   disponibilidade: (disponivel) => chamar('PATCH', '/eu/disponibilidade', { disponivel }),
+  minhaRoleta: (participa) => chamar('PATCH', '/eu/roleta', { participa }),
 
   // etapa 6 — relatórios e rede
   relatorioLoja: (dias, filial) => chamar('GET', `/loja/relatorio?dias=${dias}${filial ? `&filial=${encodeURIComponent(filial)}` : ''}`),

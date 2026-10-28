@@ -64,8 +64,7 @@ export function montarPainelCliente(el, contatoId, { comLinkFicha = true, aoMuda
   }
 
   function desenhar() {
-    const principal = d.funis.find((f) => f.principal);
-    const noPrincipal = d.oportunidades.some((o) => o.funilId === principal?.id);
+    const livres = d.funis.filter((f) => !d.oportunidades.some((o) => o.funilId === f.id)); // funis em que o cliente ainda não está
     const aplicadas = d.aplicadas.map((a) => ({ ...d.etiquetas.find((e) => e.id === a.id), peloAssistente: a.peloAssistente })).filter((e) => e.id);
     render(el, html`<div class="pc" data-salva-sozinho>
       ${comLinkFicha ? html`<div class="pc-cab"><h3>Dados do cliente</h3><a class="btn btn-texto" href="#/clientes/${d.contato.id}">Ficha completa</a></div>` : ''}
@@ -79,10 +78,11 @@ export function montarPainelCliente(el, contatoId, { comLinkFicha = true, aoMuda
           return html`<div class="pc-funil">
             ${d.funis.length > 1 ? html`<span class="sub">${f.nome}</span>` : ''}
             <label class="sr-only" for="pc-op-${o.id}">Etapa no funil ${f.nome}</label>
-            <div class="pc-etapa" data-cor="${atual?.cor || '#64748b'}"><select id="pc-op-${o.id}" data-op="${o.id}">${f.etapas.map((e) => html`<option value="${e.id}" ${e.id === o.etapaId ? 'selected' : ''}>${e.nome}</option>`)}</select></div>
+            <div class="pc-etapa" data-cor="${atual?.cor || '#64748b'}"><select id="pc-op-${o.id}" data-op="${o.id}">${f.etapas.map((e) => html`<option value="${e.id}" ${e.id === o.etapaId ? 'selected' : ''}>${e.nome}</option>`)}
+              ${livres.map((outro) => html`<optgroup label="Mover para o funil ${outro.nome}">${outro.etapas.map((e) => html`<option value="${e.id}">${e.nome}</option>`)}</optgroup>`)}</select></div>
           </div>`;
         })}
-        ${!noPrincipal && principal ? html`<button class="btn btn-texto" data-entrar-funil>${icone('mais')}Colocar no funil ${principal.nome}</button>` : ''}
+        ${livres.map((f) => html`<button class="btn btn-texto" data-entrar-funil="${f.id}">${icone('mais')}Colocar no funil ${f.nome}</button>`)}
       </section>
 
       <section class="pc-bloco" aria-label="Etiquetas">
@@ -118,8 +118,7 @@ export function montarPainelCliente(el, contatoId, { comLinkFicha = true, aoMuda
     // funil
     $$('[data-op]', el).forEach((s) => s.addEventListener('change', async () => {
       const o = d.oportunidades.find((x) => x.id === s.dataset.op);
-      const f = d.funis.find((x) => x.id === o.funilId);
-      const etapa = f.etapas.find((e) => e.id === s.value);
+      const etapa = d.funis.flatMap((x) => x.etapas).find((e) => e.id === s.value);
       let motivoPerda;
       if (etapa.tipo === 'perdido') {
         motivoPerda = await pedirMotivo();
@@ -131,12 +130,11 @@ export function montarPainelCliente(el, contatoId, { comLinkFicha = true, aoMuda
         await carregar(); aoMudar?.();
       } catch (err) { s.value = o.etapaId; avisar(err.message, 'erro'); }
     }));
-    const entrar = $('[data-entrar-funil]', el);
-    entrar?.addEventListener('click', async () => {
+    $$('[data-entrar-funil]', el).forEach((entrar) => entrar.addEventListener('click', async () => {
       entrar.disabled = true;
-      try { await api.novaOportunidade({ contatoId, funilId: d.funis.find((f) => f.principal).id }); await carregar(); aoMudar?.(); }
+      try { await api.novaOportunidade({ contatoId, funilId: entrar.dataset.entrarFunil }); await carregar(); aoMudar?.(); }
       catch (err) { avisar(err.message, 'erro'); entrar.disabled = false; }
-    });
+    }));
 
     // etiquetas
     $('[data-editar-etiquetas]', el).addEventListener('click', () => { editandoEtiquetas = !editandoEtiquetas; desenhar(); if (editandoEtiquetas) $('.pc-escolher button', el)?.focus(); });

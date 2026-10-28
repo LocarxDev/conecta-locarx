@@ -95,6 +95,67 @@ export async function rodarAutomacoes() {
   }
 }
 
+// ---------- mensagem automática ao entrar numa etapa do funil ----------
+// Modelos que a automação das reservas já envia sozinha: se a etapa usar um deles, não manda de novo para a mesma reserva.
+const MODELOS_DA_RESERVA = ['lembrete_retirada', 'aviso_devolucao', 'pesquisa_satisfacao'];
+/** Tira do texto os {campos} que não tinham valor (ex.: {codigo} quando o cliente não tem reserva) e arruma os espaços. */
+export const limparCamposVazios = (texto) => texto.replace(/\{[a-z_]+\}/g, '').replace(/[ \t]{2,}/g, ' ').replace(/ +([.,!?])/g, '$1').trim();
+
+/**
+ * Varredura (a cada minuto): clientes que entraram numa etapa com mensagem configurada recebem o modelo escolhido, uma vez por entrada.
+ * Só vale para quem entrou depois de a mensagem ser ligada (mensagem_desde), nos últimos 3 dias, com o WhatsApp conectado,
+ * fora do horário de silêncio e se o cliente não pediu para parar. Funciona para qualquer caminho que mova o cliente
+ * (arrastar, menu do card, painel do cliente, assistente, automações): o gatilho do banco marca o momento da entrada.
+ */
+export async function rodarMensagensDeEtapa() {
+  const devidas = await comoSistema(async (c) => (await c.query(`
+    SELECT o.id AS op_id, o.etapa_id, o.loja_id, o.reserva_id, k.telefone, k.nome, l.nome AS loja_nome, m.texto, m.chave,
+           a.silencio_inicio, a.silencio_fim, cn.instancia, cv.id AS conversa_id, r.codigo, r.retirada, r.devolucao
+      FROM oportunidades o
+      JOIN etapas_funil e ON e.id = o.etapa_id AND e.modelo_chave IS NOT NULL AND e.mensagem_desde IS NOT NULL
+      JOIN funis f ON f.id = o.funil_id AND NOT f.arquivado
+      JOIN contatos k ON k.id = o.contato_id AND NOT k.optout
+      JOIN lojas l ON l.id = o.loja_id AND l.ativa
+      JOIN canais cn ON cn.loja_id = o.loja_id AND cn.status = 'conectado'
+      JOIN modelos_mensagem m ON m.loja_id = o.loja_id AND m.chave = e.modelo_chave AND m.ativo
+      LEFT JOIN assistentes a ON a.loja_id = o.loja_id
+      LEFT JOIN conversas cv ON cv.contato_id = k.id
+      LEFT JOIN reservas r ON r.id = o.reserva_id
+     WHERE o.etapa_em >= e.mensagem_desde AND o.etapa_em > now() - interval '3 days'
+       AND NOT EXISTS (SELECT 1 FROM mensagens_de_etapa x WHERE x.oportunidade_id = o.id AND x.etapa_id = o.etapa_id)
+     ORDER BY o.etapa_em LIMIT 100`)).rows);
+  let enviadas = 0;
+  for (const t of devidas) {
+    if (emSilencio(t)) continue; // fica pendente: sai quando o silêncio acabar (até 3 dias)
+    try {
+      // registra antes de enviar: nunca manda duas vezes, mesmo se o envio der erro
+      const vale = await comoSistema(async (c) => {
+        const n = (await c.query('INSERT INTO mensagens_de_etapa (oportunidade_id, etapa_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [t.op_id, t.etapa_id])).rowCount;
+        if (!n) return false;
+        if (t.reserva_id && MODELOS_DA_RESERVA.includes(t.chave)) {
+          return (await c.query('INSERT INTO automacoes_enviadas (reserva_id, tipo) VALUES ($1, $2) ON CONFLICT DO NOTHING', [t.reserva_id, t.chave])).rowCount > 0;
+        }
+        return true;
+      });
+      if (!vale) continue;
+      const texto = limparCamposVazios(preencherModelo(t.texto, {
+        nome: (t.nome || '').split(' ')[0] || 'cliente', loja: t.loja_nome, codigo: t.codigo,
+        data_retirada: t.retirada && dataBr(t.retirada), hora_retirada: t.retirada && horaBr(t.retirada),
+        data_devolucao: t.devolucao && dataBr(t.devolucao), hora_devolucao: t.devolucao && horaBr(t.devolucao),
+      }));
+      if (!texto) continue;
+      const externoId = await evolution.enviarTexto(t.instancia, t.telefone, texto);
+      enviadas++;
+      if (t.conversa_id) {
+        await comoSistema((c) => c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto, externo_id) VALUES ($1, $2, 'saida', 'assistente', 'texto', $3, $4)`,
+          [t.conversa_id, t.loja_id, texto, externoId]));
+      }
+    } catch (e) { console.error('[mensagem de etapa]', t.chave, e.message); }
+  }
+  return enviadas;
+}
+
 export function iniciarAutomacoes() {
   setInterval(() => rodarAutomacoes().catch((e) => console.error('[automações]', e.message)), 10 * 60_000).unref();
+  setInterval(() => rodarMensagensDeEtapa().catch((e) => console.error('[mensagens de etapa]', e.message)), 60_000).unref();
 }

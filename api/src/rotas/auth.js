@@ -4,6 +4,7 @@ import { z } from 'zod';
 import rateLimit from 'express-rate-limit';
 import { config } from '../config.js';
 import { comoSistema } from '../banco/conexao.js';
+import { distribuirPendentes } from '../servicos/crm/roleta.js';
 import { conferirSenha, hashSenha, problemasSenha, novoToken, hashToken, decifrar, codigo2faValido } from '../servicos/seguranca.js';
 import { emailRedefinicao } from '../servicos/email.js';
 import {
@@ -32,6 +33,11 @@ async function criarSessao(c, req, res, usuario) {
   // limpeza: sessões vencidas deste usuário
   await c.query('DELETE FROM sessoes WHERE usuario_id = $1 AND expira_em < now()', [usuario.id]);
   res.cookie(COOKIE_SESSAO, token, opcoesCookie(config.sessaoMaximaDias * 86_400_000));
+  // quem da loja entra no sistema já entra como "Disponível" (pode pausar no botão do topo) e recebe o que estava esperando
+  if (usuario.loja_id && ['dono', 'atendente'].includes(usuario.perfil)) {
+    await c.query('UPDATE usuarios SET disponivel = true, visto_em = now() WHERE id = $1', [usuario.id]);
+    await distribuirPendentes(c, usuario.loja_id).catch((e) => console.error('[roleta ao entrar]', e.message));
+  }
   return csrf;
 }
 

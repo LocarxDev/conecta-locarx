@@ -42,7 +42,7 @@ export async function montar(alvo, ctx) {
 
 const carregando = (area) => render(area, html`<section class="painel"><div class="painel-corpo"><div class="esqueleto"></div></div></section>`);
 const falhou = (area, err, ctx) => { if (err.status === 401) return ctx.sessaoExpirou(); render(area, html`<section class="painel"><div class="estado">${icone('alerta')}<h3>Não foi possível carregar</h3><p>${err.message}</p></div></section>`); };
-const trilhaEtapas = (f) => html`<div class="trilha-etapas">${f.etapas.map((e) => html`<span class="etapa-chip" data-cor="${e.cor}"><span class="ponto-cor"></span>${e.nome}${e.evento ? html`<span class="pc-robo" title="${EVENTOS.find((x) => x[0] === e.evento)[1]}">${icone('robo')}</span>` : ''}</span>`)}</div>`;
+const trilhaEtapas = (f) => html`<div class="trilha-etapas">${f.etapas.map((e) => html`<span class="etapa-chip" data-cor="${e.cor}"><span class="ponto-cor"></span>${e.nome}${e.evento ? html`<span class="pc-robo" title="${EVENTOS.find((x) => x[0] === e.evento)[1]}">${icone('robo')}</span>` : ''}${e.modeloChave ? html`<span class="pc-robo" title="Envia uma mensagem pelo WhatsApp quando o cliente entra aqui">${icone('conversas')}</span>` : ''}</span>`)}</div>`;
 
 // =====================================================================
 // FUNIS
@@ -103,8 +103,11 @@ async function funilPadrao(area, { ctx }) {
   $('#editar-padrao', area).addEventListener('click', () => editarFunil({ funil: f, escopo: 'rede' }, () => funilPadrao(area, { ctx })));
 }
 
-function editarFunil({ funil, escopo, novo = false }, aoSalvar) {
-  let etapas = funil.etapas.map((e) => ({ id: novo ? undefined : e.id, nome: e.nome, cor: e.cor, tipo: e.tipo, evento: e.evento || null, abertas: e.abertas || 0 }));
+async function editarFunil({ funil, escopo, novo = false }, aoSalvar) {
+  // modelos de mensagem da loja: a etapa pode enviar um deles quando o cliente chega nela (ex.: pesquisa de satisfação)
+  let modelos = [];
+  if (escopo === 'loja') { try { modelos = (await api.modelos()).filter((x) => x.ativo); } catch { modelos = []; } }
+  let etapas = funil.etapas.map((e) => ({ id: novo ? undefined : e.id, nome: e.nome, cor: e.cor, tipo: e.tipo, evento: e.evento || null, modeloChave: e.modeloChave || null, abertas: e.abertas || 0 }));
   const m = abrirModal({
     titulo: novo ? 'Novo funil' : `Editar funil · ${funil.nome}`,
     corpo: html`<form class="form" id="form-funil" novalidate>
@@ -113,7 +116,7 @@ function editarFunil({ funil, escopo, novo = false }, aoSalvar) {
       <div class="campo"><span class="rotulo-campo">Etapas, na ordem</span>
         <ol class="etapas-ed" id="etapas-ed"></ol>
         <button type="button" class="btn btn-texto" id="mais-etapa">${icone('mais')}Adicionar etapa</button>
-        <p class="ajuda">As etapas de venda concluída e de perdido não podem ser removidas, só renomeadas. Clientes de uma etapa removida vão para a primeira etapa em andamento.</p>
+        <p class="ajuda">As etapas de venda concluída e de perdido não podem ser removidas, só renomeadas. Clientes de uma etapa removida vão para a primeira etapa em andamento.${escopo === 'loja' ? ' A mensagem de uma etapa vai uma vez para cada cliente que entrar nela depois de você ligar, respeitando o horário de silêncio e quem pediu para não receber. Os textos ficam em Modelos de mensagem.' : ''}</p>
       </div></form>`,
     rodape: html`<button class="btn btn-contorno" data-fechar>Cancelar</button><button class="btn btn-primario" type="submit" form="form-funil">Salvar funil</button>`,
   });
@@ -125,6 +128,7 @@ function editarFunil({ funil, escopo, novo = false }, aoSalvar) {
     e.nome = $('[data-c=nome]', li).value;
     e.cor = $('[data-c=cor]', li).value;
     const ev = $('[data-c=evento]', li); if (ev) e.evento = ev.value || null;
+    const mm = $('[data-c=mensagem]', li); if (mm) e.modeloChave = mm.value || null;
   });
   function desenhar(foco) {
     render(lista, html`${etapas.map((e, i) => html`<li class="etapa-ed" data-i="${i}">
@@ -140,7 +144,10 @@ function editarFunil({ funil, escopo, novo = false }, aoSalvar) {
         <button type="button" class="btn btn-texto btn-icone" data-mover="-1" aria-label="Subir ${e.nome}" ${i === 0 ? 'disabled' : ''}>${icone('subir')}</button>
         <button type="button" class="btn btn-texto btn-icone" data-mover="1" aria-label="Descer ${e.nome}" ${i === etapas.length - 1 ? 'disabled' : ''}>${icone('descer')}</button>
         ${e.tipo === 'aberta' ? html`<button type="button" class="btn btn-texto btn-icone" data-remover aria-label="Remover ${e.nome}">${icone('lixo')}</button>` : html`<span class="btn-icone"></span>`}
-      </span></li>`)}`);
+      </span>
+      ${escopo === 'loja' && modelos.length ? html`<div class="etapa-msg"><label for="et-msg-${i}">${icone('conversas')}Ao entrar nesta etapa, enviar pelo WhatsApp:</label>
+        <select id="et-msg-${i}" data-c="mensagem"><option value="">Nenhuma mensagem</option>${modelos.map((x) => html`<option value="${x.chave}" ${e.modeloChave === x.chave ? 'selected' : ''}>${x.nome}</option>`)}</select></div>` : ''}
+      </li>`)}`);
     $$('[data-c=cor]', lista).forEach((s) => s.addEventListener('change', () => { const p = s.parentElement.querySelector('.ponto-cor'); p.dataset.cor = s.value; p.style.setProperty('--cor', s.value); }));
     $$('[data-mover]', lista).forEach((b) => b.addEventListener('click', () => {
       ler(); const i = Number(b.closest('li').dataset.i), j = i + Number(b.dataset.mover);
@@ -172,7 +179,7 @@ function editarFunil({ funil, escopo, novo = false }, aoSalvar) {
     if (new Set(nomes).size !== nomes.length) return avisar('Há duas etapas com o mesmo nome.', 'erro');
     const eventos = etapas.filter((e) => e.evento).map((e) => e.evento);
     if (new Set(eventos).size !== eventos.length) return avisar('Cada movimento automático só pode levar para uma etapa.', 'erro');
-    const corpo = { nome, etapas: etapas.map((e) => ({ id: e.id, nome: e.nome.trim(), cor: e.cor, tipo: e.tipo, evento: e.evento })) };
+    const corpo = { nome, etapas: etapas.map((e) => ({ id: e.id, nome: e.nome.trim(), cor: e.cor, tipo: e.tipo, evento: e.evento, ...(escopo === 'loja' ? { modeloChave: e.modeloChave } : {}) })) };
     if (form.elements.principal?.checked) corpo.principal = true;
     await comBotao($('[type=submit]', m.el), async () => {
       try {

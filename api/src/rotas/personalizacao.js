@@ -6,6 +6,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js';
 import { rota, erro, validar, zUuid, exigirPerfil, registrar } from '../http.js';
+import { garantirModelos } from '../servicos/crm/modelos.js';
 import { zFunil, ETAPAS_NOVO_FUNIL, garantirFunil, listarFunis, salvarFunil, arquivarFunil, propagarPadrao, etapaPublica, zRegrasFunil, regrasDaLoja } from '../servicos/crm/funis.js';
 import {
   zEtiqueta, zCampo, etiquetaPublica, campoPublico, listarEtiquetas, listarCampos, chaveDoNome,
@@ -48,6 +49,7 @@ personalizacaoLoja.post('/funis', dono, rota(async (req, res) => {
   const d = validar(zFunil, { etapas: ETAPAS_NOVO_FUNIL, ...req.body });
   const novo = await comContexto(ctx(req), async (c) => {
     await garantirFunil(c, req.usuario.loja_id);
+    await garantirModelos(c, req.usuario.loja_id);
     const fid = await salvarFunil(c, req.usuario.loja_id, null, d);
     await registrar(c, req, 'criou_funil', { alvo: fid });
     return (await listarFunis(c, req.usuario.loja_id)).find((f) => f.id === fid);
@@ -59,6 +61,7 @@ personalizacaoLoja.put('/funis/:id', dono, rota(async (req, res) => {
   const fid = id(req.params.id, 'Funil não encontrado.');
   const d = validar(zFunil, req.body);
   const f = await comContexto(ctx(req), async (c) => {
+    await garantirModelos(c, req.usuario.loja_id);
     await salvarFunil(c, req.usuario.loja_id, fid, d);
     await registrar(c, req, 'editou_funil', { alvo: fid });
     return (await listarFunis(c, req.usuario.loja_id)).find((x) => x.id === fid);

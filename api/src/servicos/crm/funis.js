@@ -20,6 +20,7 @@ export const zFunil = z.object({
     cor: zCor.default('#64748b'),
     tipo: z.enum(TIPOS).default('aberta'),
     evento: z.enum(EVENTOS).nullable().optional(),
+    modeloChave: z.string().regex(/^[a-z0-9_]{2,40}$/, 'Modelo inválido.').nullable().optional(), // mensagem enviada ao entrar na etapa
   })).min(3, 'O funil precisa de pelo menos 3 etapas.').max(15, 'No máximo 15 etapas.'),
 }).superRefine((f, ctx) => {
   const n = (t) => f.etapas.filter((e) => e.tipo === t).length;
@@ -43,7 +44,7 @@ export const ETAPAS_NOVO_FUNIL = [
 export const garantirFunil = async (c, lojaId) => (await c.query('SELECT garantir_funil_loja($1) AS id', [lojaId])).rows[0].id;
 
 export function etapaPublica(e) {
-  return { id: e.id, nome: e.nome, cor: e.cor, tipo: e.tipo, evento: e.evento || null, ordem: e.ordem };
+  return { id: e.id, nome: e.nome, cor: e.cor, tipo: e.tipo, evento: e.evento || null, modeloChave: e.modelo_chave || null, ordem: e.ordem };
 }
 
 /** Funis (com etapas) da loja, ou da rede quando lojaId = null. */
@@ -81,7 +82,12 @@ export async function salvarFunil(c, lojaId, funilId, d, { marcarPersonalizado =
   const existentes = (await c.query('SELECT * FROM etapas_funil WHERE funil_id = $1', [funil.id])).rows;
   const porId = new Map(existentes.map((e) => [e.id, e]));
   // o tipo das etapas que já existem é o do banco
-  const lista = d.etapas.map((e) => ({ ...e, tipo: porId.get(e.id)?.tipo || e.tipo, evento: e.evento || null }));
+  const lista = d.etapas.map((e) => ({ ...e, tipo: porId.get(e.id)?.tipo || e.tipo, evento: e.evento || null, modeloChave: lojaId ? (e.modeloChave || null) : null }));
+  const chaves = [...new Set(lista.map((e) => e.modeloChave).filter(Boolean))];
+  if (chaves.length) {
+    const ok = (await c.query('SELECT chave FROM modelos_mensagem WHERE loja_id = $1 AND chave = ANY($2)', [lojaId, chaves])).rows.map((r) => r.chave);
+    if (chaves.some((k) => !ok.includes(k))) throw erro(422, 'Escolha um modelo de mensagem que exista na sua loja.');
+  }
   const tipos = (t) => lista.filter((e) => e.tipo === t).length;
   if (tipos('ganho') !== 1 || tipos('perdido') !== 1 || tipos('aberta') < 1) throw erro(422, 'O funil precisa de uma etapa de venda concluída, uma de perdido e pelo menos uma em andamento.');
   if (lista.some((e) => e.evento && e.tipo !== 'aberta')) throw erro(422, 'Acontecimentos só em etapas em andamento.');
@@ -91,11 +97,15 @@ export async function salvarFunil(c, lojaId, funilId, d, { marcarPersonalizado =
   const ids = [];
   for (const [i, e] of lista.entries()) {
     if (e.id && porId.has(e.id)) {
-      await c.query('UPDATE etapas_funil SET nome = $2, cor = $3, evento = $4, ordem = $5 WHERE id = $1', [e.id, e.nome, e.cor, e.evento, i]);
+      // mensagem_desde: quem já estava na etapa antes de ligar/trocar a mensagem não recebe
+      await c.query(`UPDATE etapas_funil SET nome = $2, cor = $3, evento = $4, ordem = $5,
+          mensagem_desde = CASE WHEN modelo_chave IS DISTINCT FROM $6 THEN (CASE WHEN $6::text IS NULL THEN NULL ELSE now() END) ELSE mensagem_desde END, modelo_chave = $6 WHERE id = $1`,
+        [e.id, e.nome, e.cor, e.evento, i, e.modeloChave]);
       ids.push(e.id);
     } else {
-      const nova = (await c.query('INSERT INTO etapas_funil (funil_id, nome, cor, tipo, evento, ordem, origem_id) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id',
-        [funil.id, e.nome, e.cor, e.tipo, e.evento, i, e.origemId || null])).rows[0];
+      const nova = (await c.query(`INSERT INTO etapas_funil (funil_id, nome, cor, tipo, evento, ordem, origem_id, modelo_chave, mensagem_desde)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CASE WHEN $8::text IS NULL THEN NULL ELSE now() END) RETURNING id`,
+        [funil.id, e.nome, e.cor, e.tipo, e.evento, i, e.origemId || null, e.modeloChave])).rows[0];
       ids.push(nova.id);
       e.id = nova.id;
     }
