@@ -888,3 +888,29 @@ CREATE POLICY mensagens_transferida ON mensagens FOR ALL
 DROP POLICY IF EXISTS contatos_transferida ON contatos;
 CREATE POLICY contatos_transferida ON contatos FOR SELECT
   USING (EXISTS (SELECT 1 FROM conversas cv WHERE cv.contato_id = contatos.id AND cv.loja_atendimento_id = ctx_loja()));
+
+-- =====================================================================
+-- Mensagem automática ao entrar numa etapa do funil (ex.: pesquisa de satisfação em "Concluído")
+-- modelo_chave: qual modelo de mensagem da loja é enviado quando o cliente chega na etapa.
+-- mensagem_desde: só quem entrou na etapa depois disso recebe (ligar a mensagem não dispara para quem já estava lá).
+-- etapa_em: quando a oportunidade entrou na etapa atual (atualizado por gatilho, qualquer que seja o caminho que moveu).
+-- =====================================================================
+ALTER TABLE etapas_funil ADD COLUMN IF NOT EXISTS modelo_chave text CHECK (modelo_chave IS NULL OR modelo_chave ~ '^[a-z0-9_]{2,40}$');
+ALTER TABLE etapas_funil ADD COLUMN IF NOT EXISTS mensagem_desde timestamptz;
+ALTER TABLE oportunidades ADD COLUMN IF NOT EXISTS etapa_em timestamptz NOT NULL DEFAULT now();
+
+CREATE OR REPLACE FUNCTION oportunidade_etapa_em() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'INSERT' OR NEW.etapa_id IS DISTINCT FROM OLD.etapa_id THEN NEW.etapa_em := now(); END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS oportunidades_etapa_em ON oportunidades;
+CREATE TRIGGER oportunidades_etapa_em BEFORE INSERT OR UPDATE ON oportunidades FOR EACH ROW EXECUTE FUNCTION oportunidade_etapa_em();
+
+CREATE TABLE IF NOT EXISTS mensagens_de_etapa (
+  oportunidade_id uuid NOT NULL REFERENCES oportunidades(id) ON DELETE CASCADE,
+  etapa_id        uuid NOT NULL REFERENCES etapas_funil(id) ON DELETE CASCADE,
+  enviada_em      timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (oportunidade_id, etapa_id)
+);
+GRANT SELECT, INSERT, UPDATE, DELETE ON mensagens_de_etapa TO conecta_app;

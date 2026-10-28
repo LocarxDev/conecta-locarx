@@ -89,3 +89,12 @@ test('prompt: filiais com dados do portal entram no texto (endereço e horário)
   assert.ok(p.includes('FILIAIS DESTA LOJA') && p.includes('Av. Santos Dumont, 100') && p.includes('Seg a Sex 08:00–18:00; Sáb'));
   assert.ok(p.includes('e suas 2 filiais'));
 });
+
+test('prompt: proteção X ou Super X é obrigatória, seguro do cartão não substitui e nunca diz "sem proteção"', () => {
+  const p = montarSistema(base);
+  assert.match(p, /Proteção X ou a Super X \(uma das duas, sempre\)/);
+  assert.match(p, /Não existe reserva "sem proteção"/);
+  assert.match(p, /seguro do cartão não substitui/);
+  assert.match(p, /Nunca escreva "sem proteção"/);
+  assert.match(p, /Terceiros, Vidros e Vidros e Pneus são opcionais/);
+});

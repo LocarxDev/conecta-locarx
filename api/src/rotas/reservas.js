@@ -161,7 +161,7 @@ reservas.post('/cotacao/preco', exigirPerfil('dono', 'atendente'), limiteCotacao
   let r;
   try { r = await locarx.calcularPreco({ branchId: loja.branch_id, fleetId: d.fleetId, retirada: periodo.retirada, devolucao: periodo.devolucao, protecoes }); } catch (e) { throw erroLocarx(e); }
   const rotulo = cotacao.rotuloGrupo({ grupo: r.grupo }, 1);
-  const nomes = r.protecoes.length ? r.protecoes.map((x) => x.nome) : protecoes;
+  const nomes = cotacao.nomesDasProtecoes(protecoes);
   const resposta = {
     fleetId: d.fleetId, grupo: r.grupo, letra: rotulo.letra, nome: rotulo.nome, total: r.total, diaria: r.diaria, diarias: r.diarias, taxas: r.taxas, protecoes: nomes, codigos: protecoes, caucao: r.caucao,
     textoWhatsapp: `*${rotulo.letra} – ${rotulo.nome}*\n📅 Retirada: ${cotacao.dataBr(periodo.retirada)}\n📅 Devolução: ${cotacao.dataBr(periodo.devolucao)}\n🛡️ Proteção: ${nomes.join(', ')}\n💰 Total: *${cotacao.reais(r.total)}* (pagamento na loja, na retirada)${r.caucao != null ? `\n💳 Caução: ${cotacao.reais(r.caucao)} (pré-autorização no cartão, liberada após a devolução)` : ''}`,
@@ -219,7 +219,7 @@ reservas.post('/reservas', exigirPerfil('dono', 'atendente'), limiteCotacao, rot
     throw amigavel;
   }
   const rotulo = cotacao.rotuloGrupo({ grupo: preco.grupo }, 1);
-  const nomes = preco.protecoes.length ? preco.protecoes.map((x) => x.nome) : protecoes;
+  const nomes = cotacao.nomesDasProtecoes(protecoes);
   if (d.pagamento === 'pix' && !(await cobrancas.contaDaLoja(req.usuario.loja_id)).disponivel) throw erro(409, 'Pagamento Pix não está disponível para esta loja.');
   const resumo = `*Resumo da reserva*\n🚗 ${rotulo.letra} – ${rotulo.nome}${loja.filial && !loja.filial.principal ? `\n📍 Filial: ${loja.filial.nome}` : ''}\n📅 Retirada: ${cotacao.dataBr(periodo.retirada)}\n📅 Devolução: ${cotacao.dataBr(periodo.devolucao)}\n🛡️ Proteção: ${nomes.join(', ')}\n💰 Total: *${cotacao.reais(preco.total)}* (${d.pagamento === 'pix' ? 'pagamento via Pix pelo WhatsApp' : 'pagamento na loja, na retirada'})${preco.caucao != null ? `\n💳 Caução: ${cotacao.reais(preco.caucao)} (pré-autorização no cartão, liberada após a devolução)` : ''}\n👤 ${cliente.nome} · CPF final ${cliente.cpf.slice(-2)} · ${cliente.email}`;
   if (!d.confirmar) return res.json({ passo: 'resumo', grupo: preco.grupo, letra: rotulo.letra, nome: rotulo.nome, total: preco.total, diarias: preco.diarias, protecoes: nomes, resumo, pagamento: d.pagamento });

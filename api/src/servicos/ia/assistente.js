@@ -14,6 +14,7 @@ import { pixDisponivel, verificarCobranca, contaDaLoja } from '../pagamentos/cob
 import { regrasDaLoja } from '../crm/funis.js';
 import { moduloLigado } from '../modulos.js';
 import { filiaisComPortal, filialPublica } from '../locarx/filiais.js';
+import { nomesDasProtecoes } from '../locarx/cotacao.js';
 
 const provedoresCanal = { evolution };
 const ESPERA_MS = 4000;              // espera o cliente terminar de digitar várias mensagens seguidas
@@ -21,9 +22,15 @@ const timers = new Map();
 const emAndamento = new Set();
 
 const DIAS = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab'];
-export function agoraBahia() {
-  const d = new Date(Date.now() - 3 * 3_600_000);
-  return { dia: DIAS[d.getUTCDay()], hhmm: d.toISOString().slice(11, 16), iso: d.toISOString().slice(0, 16).replace('T', ' '), hora: d.getUTCHours() };
+const DIAS_POR_EXTENSO = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado'];
+export function agoraBahia(instante = Date.now()) {
+  const d = new Date(instante - 3 * 3_600_000);
+  const ano = d.getUTCFullYear();
+  return {
+    dia: DIAS[d.getUTCDay()], hhmm: d.toISOString().slice(11, 16), iso: d.toISOString().slice(0, 16).replace('T', ' '), hora: d.getUTCHours(),
+    ano, dataBr: d.toISOString().slice(0, 10).split('-').reverse().join('/'), porExtenso: DIAS_POR_EXTENSO[d.getUTCDay()],
+    diasParaFimDoAno: Math.round((Date.UTC(ano, 11, 31) - Date.UTC(ano, d.getUTCMonth(), d.getUTCDate())) / 86_400_000),
+  };
 }
 export function dentroDoHorario(horario) {
   if (!horario || !Object.keys(horario).length) return true;
@@ -119,7 +126,7 @@ export function textoReservaEmAndamento(cv) {
   }
   if (cv.opcoes?.filialNome || cv.cotacao?.filialNome) linhas.push(`Filial escolhida: ${cv.cotacao?.filialNome || cv.opcoes?.filialNome}.`);
   if (cv.cotacao?.total != null) {
-    linhas.push(`Cotação atual (é a que criar_reserva vai reservar): ${cv.cotacao.grupo || 'grupo'} fleet_id ${cv.cotacao.fleetId}, ${cv.cotacao.retirada?.date} ${cv.cotacao.retirada?.time} → ${cv.cotacao.devolucao?.date} ${cv.cotacao.devolucao?.time}, proteções ${(cv.cotacao.nomesProtecoes || cv.cotacao.protecoes || []).join(', ')}, total R$ ${Number(cv.cotacao.total).toFixed(2).replace('.', ',')}.${cv.resumo_enviado_em ? ' O RESUMO já foi enviado: se o cliente confirmar, chame criar_reserva com cliente_confirmou = true.' : ''}`);
+    linhas.push(`Cotação atual (é a que criar_reserva vai reservar): ${cv.cotacao.grupo || 'grupo'} fleet_id ${cv.cotacao.fleetId}, ${cv.cotacao.retirada?.date} ${cv.cotacao.retirada?.time} → ${cv.cotacao.devolucao?.date} ${cv.cotacao.devolucao?.time}, proteções ${nomesDasProtecoes(cv.cotacao.protecoes).join(', ')}, total R$ ${Number(cv.cotacao.total).toFixed(2).replace('.', ',')}.${cv.resumo_enviado_em ? ' O RESUMO já foi enviado: se o cliente confirmar, chame criar_reserva com cliente_confirmou = true.' : ''}`);
   }
   if (cv.pixPendente) {
     linhas.push(`Pix PENDENTE de R$ ${Number(cv.pixPendente.valor).toFixed(2).replace('.', ',')} (vence ${new Date(cv.pixPendente.expira_em).toLocaleString('pt-BR', { timeZone: 'America/Bahia', hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })})${cv.pixPendente.dev_mode ? ', ambiente de teste' : ''}. Não gere outro; se o cliente disser que pagou, use verificar_pagamento. A reserva será criada sozinha na confirmação.`);
@@ -147,7 +154,7 @@ export function montarSistema({ loja, a, rede, contato, historicoReservas, crm, 
     ? `Cliente recorrente: já alugou ${historicoReservas.length}x nesta loja; última vez grupo ${historicoReservas[0].grupo || 'não informado'} em ${new Date(historicoReservas[0].retirada).toLocaleDateString('pt-BR')}. Cumprimente pelo nome e, se fizer sentido, sugira o mesmo grupo.`
     : 'Primeiro contato registrado com este cliente.';
   return `Você é ${a.nome}, assistente virtual da ${loja.nome} (${loja.cidade}/${loja.uf}), uma loja da rede LocarX Aluguel de Carros. Você atende clientes pelo WhatsApp.
-Agora em Salvador: ${agora.iso} (${agora.dia}). Use esta data para entender "amanhã", "sexta" etc. e sempre confirme as datas com o cliente.
+HOJE É ${agora.porExtenso}, ${agora.dataBr} (ano ${agora.ano}), ${agora.hhmm} em Salvador (${agora.iso}). Use esta data para entender "amanhã", "sexta" etc. e sempre confirme as datas com o cliente.
 
 REGRAS OBRIGATÓRIAS
 1. Português do Brasil, cordial, objetivo e curto (mensagem de WhatsApp: no máximo 3 parágrafos curtos). Pode usar *negrito* do WhatsApp com moderação. Não use títulos nem tabelas.
@@ -164,6 +171,8 @@ REGRAS OBRIGATÓRIAS
 11b. Fotos, vídeos, documentos e figurinhas: você NÃO consegue ver o conteúdo. Nunca finja que viu. Se o cliente mandar uma foto ou arquivo: (a) se parecer documento (CNH, RG, comprovante, contrato) pelo contexto ou pela legenda, agradeça, diga que um atendente vai conferir e use chamar_atendente com o motivo "cliente enviou documento/foto"; (b) se for figurinha ou foto sem relação, siga a conversa normalmente; (c) caso contrário, diga que não consegue abrir imagens por aqui e peça para escrever a informação (datas, dúvida). Nunca peça foto de documento: a CNH é conferida na loja, na retirada.
 11. Se a consulta não encontrar carro nas datas pedidas, NÃO procure outras datas por conta própria: avise o cliente e chame um atendente. Só consulte outra data se o próprio cliente pedir.
 12. Reservas pelo assistente só com retirada a partir de 24 horas de agora. Para retirada antes disso, chame um atendente.
+13. PROTEÇÃO. Toda reserva tem OBRIGATORIAMENTE a Proteção X ou a Super X (uma das duas, sempre); a Proteção X já está incluída no total mostrado. Terceiros, Vidros e Vidros e Pneus são opcionais e podem ser contratados junto com a X ou com a Super X (Vidros e Vidros e Pneus não se combinam entre si). Não existe reserva "sem proteção": se o cliente disser que não quer proteção, que já tem seguro do cartão, seguro próprio ou que dispensa, explique com cordialidade que a Proteção X é obrigatória e já está no valor, que o seguro do cartão não substitui e que o cliente continua responsável pelo veículo durante a locação, e siga com a X (ou a Super X, se ele preferir). Nunca escreva "sem proteção" nem "dispensada" em nenhuma mensagem. No resumo, copie a linha "🛡️ Proteção" exatamente como a ferramenta devolveu.
+14. DATAS E ANO. O ano atual é ${agora.ano}${agora.diasParaFimDoAno <= 120 ? ` e ele acaba em ${agora.diasParaFimDoAno} dias` : ''}. Quando o cliente disser só dia e mês (sem o ano), use SEMPRE a próxima vez em que essa data acontece a partir de hoje: se ainda não passou neste ano, é em ${agora.ano}; se já passou, é em ${agora.ano + 1}. Nunca use um ano anterior a ${agora.ano}. Retirada no fim do ano com devolução em janeiro: a devolução é no ano seguinte (ex.: retirar 31/12/${agora.ano} e devolver 02/01/${agora.ano + 1}). Ao confirmar com o cliente, escreva o ano quando a locação passar pela virada do ano. Se a data não existir no calendário (31/11, 30/02), não chame atendente: diga com cordialidade que essa data não existe e pergunte a data certa.
 
 ROTEIRO DE RESERVA (uma etapa por mensagem; se o cliente já deu a informação, não pergunte de novo)
 ${filiais.length > 1 ? `Passo 0 — Filial. Esta loja tem ${filiais.length} filiais: ${filiais.map((f) => f.nome).join(', ')}. Antes de consultar, pergunte em qual delas o cliente quer retirar (se ele já disse, não pergunte) e informe filial nas ferramentas. Retirada e devolução na mesma filial.\n` : ''}Passo 1 — Período. Você precisa de 4 coisas: data e hora da retirada, data e hora da devolução. Pergunte o que faltar em uma mensagem só (ex.: "Para qual dia e horário você quer retirar, e quando devolve?"). Converta "sexta", "dia 15", "de manhã" para data e hora reais usando a data de hoje; se a hora não vier, pergunte (não chute). Se a data informada já passou (antes de hoje), NÃO consulte nem chame atendente: diga que essa data já passou e pergunte a data certa (ex.: "13/10 já passou — você quis dizer 13/11?"). Repita o período entendido em uma linha antes de consultar ("Então retirada 15/11 às 10h e devolução 18/11 às 10h, certo?") — pode consultar na mesma resposta se o cliente já foi claro.

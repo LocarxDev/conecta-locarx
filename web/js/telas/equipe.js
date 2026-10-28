@@ -35,7 +35,7 @@ async function painelRoleta(alvo, ctx) {
     : u.online ? html`<span class="selo ok">Disponível</span>` : html`<span class="selo alerta" title="Marcou disponível, mas está sem o Conecta aberto">Disponível, fora do Conecta</span>`);
   render(alvo, html`<section class="painel">
     <div class="painel-cab"><div><h2>${icone('roleta')} Roleta de atendimento</h2>
-      <span class="sub">Quando o assistente chama um atendente (ou a conversa chega sem assistente), ela vai para alguém que está <strong>Disponível</strong>. Cada pessoa liga e pausa no botão do topo da tela.${r.aguardando ? ` Agora: ${r.aguardando} conversa(s) aguardando.` : ''}</span></div></div>
+      <span class="sub">Quando o assistente chama um atendente (ou a conversa chega sem assistente), ela vai para alguém que está <strong>Disponível</strong>. Quem entra no Conecta já fica Disponível; cada pessoa pode pausar no botão do topo da tela. O dono pode desligar a própria participação (só ele escolhe isso para si): continua podendo abrir qualquer conversa e tocar em <strong>Assumir</strong>.${r.aguardando ? ` Agora: ${r.aguardando} conversa(s) aguardando.` : ''}</span></div></div>
     <form class="painel-corpo form" id="form-roleta" novalidate>
       <fieldset class="opcoes-modo"><legend class="rotulo-campo">Como distribuir</legend>
         ${MODOS.map(([v, t, ajuda]) => html`<label class="opcao-modo"><input type="radio" name="modo" value="${v}" ${r.modo === v ? 'checked' : ''}><span><strong>${t}</strong><span class="sub">${ajuda}</span></span></label>`)}
@@ -44,7 +44,7 @@ async function painelRoleta(alvo, ctx) {
         <input id="r-limite" name="limite" type="number" min="0" max="100" value="${r.limite}" inputmode="numeric"><p class="ajuda">0 = sem limite. Quem chegar no limite deixa de receber até encerrar alguma.</p></div>
       <div class="tabela-caixa"><table class="tabela">
         <thead><tr><th>Pessoa</th><th>Situação</th><th class="col-opcional">Em andamento</th><th>Participa da roleta</th></tr></thead>
-        <tbody>${r.equipe.map((u) => html`<tr><td><strong>${u.nome}</strong>${u.id === ctx.usuario.id ? html` <span class="sub">(você)</span>` : ''}<br><span class="sub">${u.perfil === 'dono' ? 'Dono da loja' : 'Atendente'}</span></td>
+        <tbody>${r.equipe.map((u) => html`<tr><td><strong>${u.nome}</strong>${u.id === ctx.usuario.id ? html` <span class="sub">(você)</span>` : ''}<br><span class="sub">${u.perfil === 'dono' ? 'Dono da loja' : 'Atendente'}</span>${u.perfil === 'dono' && !u.naRoleta ? html`<br><span class="sub">Fora da roleta: só atende quando assumir uma conversa.</span>` : ''}</td>
           <td>${situacao(u)}</td><td class="col-opcional num">${u.emAndamento}</td>
           <td><label class="interruptor"><input type="checkbox" data-participa="${u.id}" ${u.naRoleta ? 'checked' : ''}><span class="sr-only">${u.nome} participa da roleta</span><span class="trilho"></span></label></td></tr>`)}</tbody></table></div>
       <div><button class="btn btn-primario" type="submit">Salvar roleta</button></div>

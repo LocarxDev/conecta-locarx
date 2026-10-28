@@ -422,10 +422,19 @@ export function normalizarReserva(r) {
 // com cliente fictício e a cancela em seguida — prova o caminho de escrita de ponta a ponta.
 export const ehHomologacao = () => /hml|homolog|sandbox|test/i.test(config.locarx?.url || '');
 
+// Datas do teste: retirada de segunda a quarta (a partir de 2 dias à frente, calendário de Salvador, UTC-3) e devolução 2 dias depois
+// (quarta a sexta), sempre às 10:00. Assim o teste nunca cai em domingo/feriado de fim de semana, quando a filial não opera.
+export function datasDoDiagnostico(agora = Date.now()) {
+  const ini = new Date(agora - 3 * 3_600_000 + 2 * 86_400_000);
+  while (![1, 2, 3].includes(ini.getUTCDay())) ini.setUTCDate(ini.getUTCDate() + 1);
+  const fim = new Date(ini.getTime() + 2 * 86_400_000);
+  const dia = (d) => d.toISOString().slice(0, 10);
+  return { retirada: { date: dia(ini), time: '10:00' }, devolucao: { date: dia(fim), time: '10:00' } };
+}
+
 export async function diagnostico(branchId, { reservaTeste = false } = {}) {
   const resultado = { ambiente: { ok: true, amostra: JSON.stringify({ url: config.locarx?.url || null, homologacao: ehHomologacao(), token: config.locarx?.token ? `…${config.locarx.token.slice(-4)}` : null }) } };
-  const amanha = new Date(Date.now() + 2 * 86_400_000); const depois = new Date(Date.now() + 4 * 86_400_000);
-  const retirada = { date: dataHora(amanha).date, time: '10:00' }, devolucao = { date: dataHora(depois).date, time: '10:00' };
+  const { retirada, devolucao } = datasDoDiagnostico();
   let grupo = null;
   const passos = {
     locality: async () => { const f = await dadosDaFilial(branchId); if (!f) throw new ErroLocarx(`Filial ${branchId} não existe neste ambiente da API (${config.locarx.url}). Confira o vínculo da loja: os ids mudam entre homologação e produção.`, 404, null); return { filial: f.nome, endereco: f.endereco, horarios: f.horariosTexto, especiais: f.especiaisTexto, iata: f.iata, cityCode: f.cityCode }; },

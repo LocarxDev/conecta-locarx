@@ -297,9 +297,9 @@ export async function montar(alvo, ctx) {
       corpo: html`<form class="form" id="form-transferir">
         ${eu.perfil === 'dono' ? html`<div class="campo"><label for="t-pessoa">Passar para alguém desta loja</label>
           <select id="t-pessoa" name="atendenteId"><option value="">— escolher —</option>${equipe.map((p) => html`<option value="${p.id}">${p.nome}${p.id === eu.id ? ' (você)' : ''}</option>`)}</select></div>` : html`<input type="hidden" name="atendenteId" value="">`}
-        ${lojas.length ? html`<div class="campo"><label for="t-loja">Ou para outra loja</label>
+        ${(lojas.length || origem) ? html`<div class="campo"><label for="t-loja">Ou para outra loja</label>
           <select id="t-loja" name="lojaId"><option value="">— escolher —</option>${origem ? html`<option value="${origem.id}">↩ Devolver para ${origem.nome} (origem)</option>` : ''}${lojas.filter((l) => l.id !== origem?.id).map((l) => html`<option value="${l.id}">${l.nome} · ${l.cidade}/${l.uf}</option>`)}</select>
-          <p class="ajuda">A conversa continua neste mesmo WhatsApp; a equipe da outra loja passa a ver e responder por ele. Vai para a fila de lá.</p></div>
+          <p class="ajuda">Só aparecem lojas do mesmo dono. A conversa continua neste mesmo WhatsApp; a equipe da outra loja passa a ver e responder por ele. Vai para a fila de lá.</p></div>
         <div class="campo"><label for="t-nota">Recado para quem vai atender (opcional)</label><input id="t-nota" name="nota" maxlength="300" placeholder="Ex.: cliente quer retirar em Feira de Santana dia 12"></div>` : ''}
       </form>`,
       rodape: html`<button class="btn btn-contorno" data-fechar>Cancelar</button><button class="btn btn-primario" type="submit" form="form-transferir">Transferir</button>`,

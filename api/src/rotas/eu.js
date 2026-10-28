@@ -25,6 +25,19 @@ eu.patch('/disponibilidade', rota(async (req, res) => {
   res.json(usuarioPublico(u));
 }));
 
+// O dono (gestor) pode ficar fora da roleta: não recebe conversas sozinho, mas continua podendo "Assumir" qualquer uma.
+eu.patch('/roleta', rota(async (req, res) => {
+  if (req.usuario.perfil !== 'dono') throw erro(403, 'Só o dono da loja escolhe isso para si. Os atendentes são ajustados pelo dono em Equipe.');
+  const { participa } = validar(z.object({ participa: z.boolean() }), req.body);
+  await comContexto(ctx(req), async (c) => {
+    await c.query('UPDATE usuarios SET na_roleta = $2 WHERE id = $1', [req.usuario.id, participa]);
+    await registrar(c, req, participa ? 'entrou_na_roleta' : 'saiu_da_roleta');
+  });
+  if (participa && req.usuario.disponivel) await comoSistema((c) => distribuirPendentes(c, req.usuario.loja_id));
+  const u = await comContexto(ctx(req), (c) => euComLoja(c, req.usuario.id));
+  res.json(usuarioPublico(u));
+}));
+
 eu.patch('/', rota(async (req, res) => {
   const d = validar(z.object({ nome: zNome, email: zEmail, senhaAtual: z.string().max(200).optional() }), req.body);
   const trocouEmail = d.email !== req.usuario.email;

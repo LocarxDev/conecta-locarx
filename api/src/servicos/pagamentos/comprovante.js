@@ -4,7 +4,7 @@
 import PDFDocument from 'pdfkit';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { reais, dataBr, rotuloGrupo } from '../locarx/cotacao.js';
+import { reais, dataBr, rotuloGrupo, nomesDasProtecoes } from '../locarx/cotacao.js';
 
 const VERMELHO = '#d7261e';
 const PRETO = '#1a1a1a';
@@ -70,7 +70,7 @@ export function gerarComprovantePdf(o) {
       return yy;
     };
     const w2 = (largura - 16) / 2;
-    const prot = o.cotacao ? (o.cotacao.nomesProtecoes?.length ? o.cotacao.nomesProtecoes : o.cotacao.protecoes) : null;
+    const prot = o.cotacao ? nomesDasProtecoes(o.cotacao.protecoes) : null;
     const fim1 = col('Reserva', [
       ['Código da reserva', o.reservaCodigo || 'em processamento pela loja'],
       ['Grupo', rg ? `${rg.letra} – ${rg.nome}` : null],
