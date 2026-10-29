@@ -24,7 +24,7 @@ export async function montar(alvo, ctx) {
 
   render(alvo, html`
     <div class="cabecalho-pagina">
-      <div class="titulos"><h1>Status do WhatsApp</h1><p>Servidor do WhatsApp (Evolution) e o número conectado em cada loja. ${admin ? 'Daqui você reconecta e desconecta as lojas.' : 'Só consulta: a conexão é feita pelo dono da loja.'}</p></div>
+      <div class="titulos"><h1>Status do WhatsApp</h1><p>Servidor do WhatsApp (Evolution) e o número conectado em cada loja. ${admin ? 'Daqui você reconecta, troca o número e desconecta as lojas.' : 'Só consulta: a conexão é feita pelo dono da loja.'}</p></div>
       <button class="btn btn-contorno" id="verificar-tudo" title="Pergunta à Evolution a situação real de cada instância">${icone('roleta')}Verificar agora</button>
     </div>
     <div id="area-status"><div class="resumo">${[1, 2, 3, 4].map(() => html`<div class="resumo-item"><div class="esqueleto"></div><div class="esqueleto"></div></div>`)}</div></div>`);
@@ -57,20 +57,32 @@ export async function montar(alvo, ctx) {
             <td class="col-opcional num">${l.recebidas24h} <span class="sub">↓ ${l.enviadas24h} ↑ em 24 h</span><div class="sub">${l.ultimaMensagemEm ? 'última ' + quando(l.ultimaMensagemEm).toLowerCase() : 'nenhuma ainda'}</div></td>
             <td class="nowrap"><div class="acoes-linha">
               ${admin && l.ativa && l.status !== 'conectado' ? html`<button class="btn btn-texto" data-conectar="${l.id}" title="Gera o QR code para o celular da loja ler">Reconectar</button>` : ''}
-              ${admin && l.status === 'conectado' ? html`<button class="btn btn-texto" data-desconectar="${l.id}">Desconectar</button>` : ''}
+              ${admin && l.ativa && l.instancia ? html`<button class="btn btn-texto" data-trocar="${l.id}" title="Desliga o número atual e gera um QR novo para outro número">Trocar número</button>` : ''}
+              ${admin && l.instancia && l.status !== 'desconectado' ? html`<button class="btn btn-texto" data-desconectar="${l.id}">Desconectar</button>` : ''}
               <a class="btn btn-texto" href="#/lojas/${l.id}" title="Abrir a loja">${icone('seta')}</a>
             </div></td>
           </tr>`)}</tbody></table></div>
       </section>`);
     $$('[data-conectar]', area).forEach((b) => b.addEventListener('click', () => conectar(dados.lojas.find((l) => l.id === b.dataset.conectar))));
     $$('[data-desconectar]', area).forEach((b) => b.addEventListener('click', () => desconectar(dados.lojas.find((l) => l.id === b.dataset.desconectar))));
+    $$('[data-trocar]', area).forEach((b) => b.addEventListener('click', () => trocar(dados.lojas.find((l) => l.id === b.dataset.trocar))));
+  }
+
+  // ---------- trocar número: desliga o atual e abre o QR de uma instância nova ----------
+  async function trocar(l) {
+    if (!l || !(await confirmar({
+      titulo: `Trocar o número de ${l.nome}`,
+      texto: `${l.numero ? `O número ${formatarNumero(l.numero)} deixa de receber mensagens no Conecta. ` : ''}Em seguida aparece um QR code novo: leia com o celular do número novo. O histórico das conversas continua guardado.`,
+      botao: 'Trocar número', perigo: true,
+    }))) return;
+    conectar(l, () => api.trocarNumeroWhatsappLoja(l.id), `Novo número para ${l.nome}`);
   }
 
   // ---------- reconectar: QR code numa janela (quem lê é o celular da loja) ----------
-  function conectar(l) {
+  function conectar(l, iniciar = () => api.conectarWhatsappLoja(l.id), titulo = `Reconectar ${l.nome}`) {
     if (!l) return;
     const m = abrirModal({
-      titulo: `Reconectar ${l.nome}`,
+      titulo,
       corpo: html`<div class="whats-grade"><div class="qr-caixa" id="qr-area"><div class="qr-espera">Gerando o QR code…</div></div>
         <ol class="passos">
           <li><div>No celular da loja, abra o WhatsApp</div></li>
@@ -89,13 +101,13 @@ export async function montar(alvo, ctx) {
       catch (err) { if (err.status === 401) return ctx.sessaoExpirou(); avisar(err.message, 'erro'); }
       timerQr = setTimeout(acompanhar, 3000);
     };
-    api.conectarWhatsappLoja(l.id).then((r) => { if (r.status === 'conectado') return terminou(); mostrar(r); timerQr = setTimeout(acompanhar, 3000); })
-      .catch((err) => { if (err.status === 401) return ctx.sessaoExpirou(); avisar(err.message, 'erro'); m.fechar(); });
+    iniciar().then((r) => { if (r.aviso) avisar(r.aviso, 'erro'); if (r.status === 'conectado') return terminou(); mostrar(r); timerQr = setTimeout(acompanhar, 3000); })
+      .catch((err) => { if (err.status === 401) return ctx.sessaoExpirou(); avisar(err.message, 'erro'); m.fechar(); carregar(); });
   }
 
   async function desconectar(l) {
-    if (!l || !(await confirmar({ titulo: `Desconectar ${l.nome}`, texto: 'A loja para de receber mensagens no Conecta até alguém conectar o número de novo. O histórico continua guardado.', botao: 'Desconectar', perigo: true }))) return;
-    try { await api.desconectarWhatsappLoja(l.id); avisar('WhatsApp desconectado.'); carregar(); } catch (err) { avisar(err.message, 'erro'); }
+    if (!l || !(await confirmar({ titulo: `Desconectar ${l.nome}`, texto: 'A loja para de receber mensagens no Conecta até alguém conectar um número de novo. O histórico continua guardado.', botao: 'Desconectar', perigo: true }))) return;
+    try { const r = await api.desconectarWhatsappLoja(l.id); avisar(r.aviso || 'WhatsApp desconectado.', r.aviso ? 'erro' : undefined); carregar(); } catch (err) { avisar(err.message, 'erro'); }
   }
 
   async function carregar(aoVivo = false) {

@@ -78,6 +78,7 @@ const real = {
   conectarCanal: () => chamar('POST', '/loja/canal/conectar', {}),
   qrCanal: () => chamar('GET', '/loja/canal/qr'),
   desconectarCanal: () => chamar('POST', '/loja/canal/desconectar', {}),
+  trocarNumeroCanal: () => chamar('POST', '/loja/canal/trocar-numero', {}),
   listarConversas: ({ desde, busca } = {}) => chamar('GET', '/conversas?' + new URLSearchParams(Object.entries({ desde, busca }).filter(([, v]) => v))),
   mensagens: (id, { depois } = {}) => chamar('GET', `/conversas/${encodeURIComponent(id)}/mensagens` + (depois ? '?depois=' + encodeURIComponent(depois) : '')),
   marcarLida: (id) => chamar('POST', `/conversas/${encodeURIComponent(id)}/lida`, {}),
@@ -142,6 +143,7 @@ const real = {
   conectarWhatsappLoja: (lojaId) => chamar('POST', `/admin/whatsapp/${encodeURIComponent(lojaId)}/conectar`, {}),
   qrWhatsappLoja: (lojaId) => chamar('GET', `/admin/whatsapp/${encodeURIComponent(lojaId)}/qr`),
   desconectarWhatsappLoja: (lojaId) => chamar('POST', `/admin/whatsapp/${encodeURIComponent(lojaId)}/desconectar`, {}),
+  trocarNumeroWhatsappLoja: (lojaId) => chamar('POST', `/admin/whatsapp/${encodeURIComponent(lojaId)}/trocar-numero`, {}),
 
   // etapa 5 — CRM
   contatos: (q) => chamar('GET', '/crm/contatos?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),

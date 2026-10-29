@@ -79,10 +79,23 @@ export const evolution = {
   // Desconectar = sair do WhatsApp E apagar a instância na Evolution. Só o logout deixa a sessão antiga guardada
   // (e, se ela estiver corrompida ou em loop de reconexão, o QR para outro número não aparece). Apagando, o próximo
   // "Conectar" recria a instância do zero e aceita qualquer número.
+  // Devolve { apagada: true } só quando a Evolution confirma que a instância não existe mais.
+  // Uma sessão presa em loop de reconexão às vezes recusa o logout/delete: tenta de novo e confere no fim.
   async desconectar(instancia) {
-    const ignorar = (e) => { if (![400, 404].includes(e.status)) throw e; };
-    await chamar('DELETE', `/instance/logout/${enc(instancia)}`).catch(ignorar);
-    await chamar('DELETE', `/instance/delete/${enc(instancia)}`).catch(ignorar);
+    let ultimoErro = null;
+    for (let tentativa = 1; tentativa <= 3; tentativa++) {
+      await chamar('DELETE', `/instance/logout/${enc(instancia)}`).catch(() => {});   // falhar aqui não impede o delete
+      try { await chamar('DELETE', `/instance/delete/${enc(instancia)}`); } catch (e) { if (e.status !== 404) ultimoErro = e; }
+      if (!(await this.existe(instancia))) return { apagada: true };
+      await new Promise((r) => setTimeout(r, 800 * tentativa));
+    }
+    return { apagada: false, erro: ultimoErro?.message || 'a instância continua na Evolution' };
+  },
+
+  // a instância existe na Evolution? (404 = não existe; outro erro = não dá para saber, conta como existente)
+  async existe(instancia) {
+    try { await chamar('GET', `/instance/connectionState/${enc(instancia)}`); return true; }
+    catch (e) { return e.status !== 404; }
   },
 
   async enviarTexto(instancia, telefone, texto) {
