@@ -8,6 +8,7 @@ import { iniciarVarreduras } from './servicos/ia/assistente.js';
 import { iniciarAutomacoes } from './servicos/crm/modelos.js';
 import { iniciarVarreduraPix } from './servicos/pagamentos/cobrancas.js';
 import { aplicarRegrasFunil } from './servicos/crm/funis.js';
+import { iniciarLimpezaSite } from './servicos/site/chat.js';
 
 async function criarAdminInicial() {
   if (!config.adminInicial) return;
@@ -32,6 +33,7 @@ async function iniciar() {
   iniciarVarreduras();
   iniciarAutomacoes();
   iniciarVarreduraPix();
+  if (config.site) iniciarLimpezaSite();
   // regras automáticas do funil (perdido sem resposta / concluído na retirada): a cada 10 min
   const funil = () => comoSistema(aplicarRegrasFunil).then((f) => { if (f.perdidas || f.concluidas) console.log(`[funil] automático: ${f.perdidas} perdida(s), ${f.concluidas} concluída(s)`); }).catch((e) => console.error('[funil] regras:', e.message));
   setTimeout(funil, 20_000); setInterval(funil, 10 * 60_000).unref();

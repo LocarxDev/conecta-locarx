@@ -36,7 +36,7 @@ test('datas: dia que não existe (31/11, 30/02) é recusado, sem virar 01/12', (
 test('prompt: diz o ano de hoje e como completar dia/mês sem ano', () => {
   const a = agoraBahia(HOJE);
   assert.equal(a.ano, 2026); assert.equal(a.dataBr, '28/10/2026'); assert.equal(a.porExtenso, 'quarta-feira'); assert.equal(a.diasParaFimDoAno, 64);
-  const t = montarSistema({ loja: { nome: 'LocarX Salvador', cidade: 'Salvador', uf: 'BA' }, a: { nome: 'Lívia', instrucoes: '', boas_vindas: '' }, rede: {}, contato: { nome: 'Ana' }, historicoReservas: [], crm: null });
+  const t = montarSistema({ loja: { nome: 'LocarX Salvador', cidade: 'Salvador', uf: 'BA' }, a: { nome: 'Lia', instrucoes: '', boas_vindas: '' }, rede: {}, contato: { nome: 'Ana' }, historicoReservas: [], crm: null });
   assert.match(t, /HOJE É .*\(ano \d{4}\)/);
   assert.match(t, /14\. DATAS E ANO/);
   assert.match(t, /Nunca use um ano anterior/);

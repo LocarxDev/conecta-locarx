@@ -63,8 +63,18 @@ export const config = {
     chavePublica: process.env.ABACATEPAY_PUBLIC_KEY?.trim() || null,
     validadeMinutos: Number(process.env.PIX_VALIDADE_MINUTOS) || 30,
   } : null,
-  // Servidor MCP (LocarX Tools para outros sistemas, ex.: Lívia I.A. e chat do site). Desligado sem MCP_TOKEN.
+  // Servidor MCP (LocarX Tools para outros sistemas, ex.: Lia I.A. e chat do site). Desligado sem MCP_TOKEN.
   mcpToken: process.env.MCP_TOKEN && process.env.MCP_TOKEN.length >= 32 ? process.env.MCP_TOKEN : null,
+  // Chat do site (widget no site da LocarX). Origens dos sites que podem abrir o chat (ex.: https://www.locarx.com.br,https://teste.exemplo.com).
+  // Sem SITE_ORIGENS o chat do site fica desligado. TURNSTILE_SECRET (Cloudflare) é opcional: com ele, o código por WhatsApp só sai para quem passou no desafio.
+  site: process.env.SITE_ORIGENS ? {
+    origens: process.env.SITE_ORIGENS.split(',').map((o) => o.trim().replace(/\/+$/, '')).filter(Boolean),
+    turnstileSecret: process.env.TURNSTILE_SECRET?.trim() || null,
+    turnstileChave: process.env.TURNSTILE_SITEKEY?.trim() || null,
+    limiteIaDia: Number(process.env.SITE_LIMITE_IA_DIA) || 1500,
+    limiteCodigosDia: Number(process.env.SITE_LIMITE_CODIGOS_DIA) || 300,
+    diasSessao: Number(process.env.SITE_DIAS_SESSAO) || 30,
+  } : null,
   // Só para testes no computador: IA simulada, sem chamar Anthropic/OpenAI
   iaSimulada: process.env.IA_SIMULADA === '1' && !producao,
   // Em desenvolvimento local (http://localhost) o cookie não pode ter o prefixo __Host- nem Secure.

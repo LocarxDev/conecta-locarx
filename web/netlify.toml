@@ -37,3 +37,10 @@
   for = "/assets/*"
   [headers.values]
     Cache-Control = "public, max-age=604800"
+
+# Chat do site (widget + página de teste): sem cache longo, para as mudanças valerem na hora
+[[headers]]
+  for = "/chat/*"
+  [headers.values]
+    Cache-Control = "no-cache"
+    X-Robots-Tag = "noindex"

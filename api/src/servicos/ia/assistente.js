@@ -15,6 +15,10 @@ import { regrasDaLoja } from '../crm/funis.js';
 import { moduloLigado } from '../modulos.js';
 import { filiaisComPortal, filialPublica } from '../locarx/filiais.js';
 import { nomesDasProtecoes } from '../locarx/cotacao.js';
+import { ferramentasDoSite } from '../site/ferramentas-site.js';
+import { promptDoSite } from '../site/prompt.js';
+import { visitanteAtivo } from '../site/presenca.js';
+import { descreverUi } from '../site/ui.js';
 
 const provedoresCanal = { evolution };
 const ESPERA_MS = 4000;              // espera o cliente terminar de digitar várias mensagens seguidas
@@ -48,9 +52,9 @@ export async function estadoInicial(c, lojaId) {
   return 'assistente';
 }
 
-export function agendar(conversaId) {
+export function agendar(conversaId, espera = ESPERA_MS) {
   clearTimeout(timers.get(conversaId));
-  timers.set(conversaId, setTimeout(() => { timers.delete(conversaId); processar(conversaId).catch((e) => console.error('[assistente]', e.message)); }, ESPERA_MS));
+  timers.set(conversaId, setTimeout(() => { timers.delete(conversaId); processar(conversaId).catch((e) => console.error('[assistente]', e.message)); }, espera));
 }
 
 // A IA às vezes escreve em Markdown (**negrito**, ### título, - item). O WhatsApp usa *negrito* e não tem títulos.
@@ -64,17 +68,29 @@ export function paraWhatsApp(texto) {
     .trim();
 }
 
-async function enviarComoAssistente(c, conversa, canal, textoBruto) {
+// Entrega a resposta do assistente. WhatsApp: pela Evolution. Chat do site: grava na conversa (o widget busca); se o visitante saiu da tela,
+// manda também pelo WhatsApp (número já confirmado por código). `ui` = componentes do chat do site (cartões, botões…) que acompanham o texto.
+async function enviarComoAssistente(c, conversa, canal, textoBruto, ui = null) {
   const texto = paraWhatsApp(textoBruto);
-  const partes = texto.match(/[\s\S]{1,3800}(?=\s|$)|[\s\S]{1,3800}/g) || [];
-  for (const parte of partes) {
-    const externoId = await provedoresCanal[canal.provedor].enviarTexto(canal.instancia, conversa.telefone, parte.trim());
+  let partes = texto.match(/[\s\S]{1,3800}(?=\s|$)|[\s\S]{1,3800}/g) || [];
+  if (!partes.length && ui?.length) partes = [''];
+  const site = conversa.canal === 'site';
+  const soSite = site && (!canal || canal.status !== 'conectado' || await visitanteAtivo(c, conversa.id));
+  const fallback = (ui || []).map((u) => u.fallback).filter(Boolean).join('\n\n');
+  for (const [i, parte] of partes.entries()) {
+    const ultima = i === partes.length - 1;
+    const uiDaParte = ultima && ui?.length ? ui : null;
+    let externoId = null;
+    if (!soSite) {
+      const paraZap = (parte.trim() + (uiDaParte && fallback ? `\n\n${fallback}` : '')).trim();
+      externoId = await provedoresCanal[canal.provedor].enviarTexto(canal.instancia, conversa.telefone, paraZap);
+    }
     await c.query(
-      `INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto, externo_id) VALUES ($1, $2, 'saida', 'assistente', 'texto', $3, $4)`,
-      [conversa.id, conversa.loja_id, parte.trim(), externoId]);
+      `INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto, externo_id, ui) VALUES ($1, $2, 'saida', 'assistente', 'texto', $3, $4, $5)`,
+      [conversa.id, conversa.loja_id, parte.trim() || null, externoId, uiDaParte ? JSON.stringify(uiDaParte) : null]);
   }
   await c.query(`UPDATE conversas SET ultima_previa = $2, ultima_mensagem_em = now(), bot_respondeu_em = now(), atualizada_em = now() WHERE id = $1`,
-    [conversa.id, texto.slice(0, 140)]);
+    [conversa.id, (texto || fallback).slice(0, 140)]);
 }
 
 async function repassar(c, conversa, motivo, mensagemCliente) {
@@ -148,7 +164,7 @@ export function textoFiliais(filiais = []) {
   return `\nFILIAIS DESTA LOJA (dados oficiais do portal LocarX — use para endereço, horário e para perguntar onde o cliente retira). Se perguntarem quais lojas/unidades/filiais existem, liste TODAS as ${comDados.length}, nunca só a principal:\n${linhas.join('\n')}`;
 }
 
-export function montarSistema({ loja, a, rede, contato, historicoReservas, crm, conversa = null, pix = false, filiais = [] }) {
+export function montarSistema({ loja, a, rede, contato, historicoReservas, crm, conversa = null, pix = false, filiais = [], site = null }) {
   const agora = agoraBahia();
   const recorrente = historicoReservas.length
     ? `Cliente recorrente: já alugou ${historicoReservas.length}x nesta loja; última vez grupo ${historicoReservas[0].grupo || 'não informado'} em ${new Date(historicoReservas[0].retirada).toLocaleDateString('pt-BR')}. Cumprimente pelo nome e, se fizer sentido, sugira o mesmo grupo.`
@@ -199,7 +215,7 @@ ${crm ? textoCrm(crm) : ''}
 
 ${textoReservaEmAndamento(conversa)}
 
-CLIENTE: ${contato.nome || 'nome não informado'}. ${recorrente}`;
+CLIENTE: ${contato.nome || 'nome não informado'}. ${recorrente}${site ? '\n' + promptDoSite(site) : ''}`;
 }
 
 export async function processar(conversaId, { forcar = false } = {}) {
@@ -220,7 +236,8 @@ async function processarAgora(conversaId) {
     const a = (await c.query('SELECT * FROM assistentes WHERE loja_id = $1', [conversa.loja_id])).rows[0];
     const canal = (await c.query('SELECT * FROM canais WHERE loja_id = $1', [conversa.loja_id])).rows[0];
     const loja = (await c.query('SELECT * FROM lojas WHERE id = $1', [conversa.loja_id])).rows[0];
-    if (!a?.ativo || !canal || canal.status !== 'conectado' || !loja?.ativa || !moduloLigado(loja.modulos, 'assistente')) return null;
+    if (!a?.ativo || !loja?.ativa || !moduloLigado(loja.modulos, 'assistente')) return null;
+    if (conversa.canal !== 'site' && (!canal || canal.status !== 'conectado')) return null;
     if (!a.chave_cifrada && !config.iaSimulada) return { repassar: 'assistente sem chave de IA configurada', conversa };
     const hoje = (await c.query(`SELECT count(*)::int AS n FROM uso_ia WHERE loja_id = $1 AND criado_em >= now() - interval '24 hours'`, [conversa.loja_id])).rows[0].n;
     if (a.limite_diario && hoje >= a.limite_diario) return { repassar: 'limite diário de respostas do assistente atingido', conversa };
@@ -280,7 +297,7 @@ async function processarAgora(conversaId) {
   const DESCRICAO = { imagem: 'enviou uma foto', video: 'enviou um vídeo', documento: 'enviou um documento', localizacao: 'enviou uma localização', figurinha: 'enviou uma figurinha', audio: 'enviou um áudio (não foi possível ouvir; peça para escrever)', outro: 'enviou uma mensagem que não é texto' };
   const historico = msgs.map((m) => ({
     papel: m.direcao === 'entrada' ? 'cliente' : 'assistente',
-    texto: m.tipo === 'texto' ? m.texto
+    texto: m.tipo === 'texto' ? [m.texto, descreverUi(m.ui)].filter(Boolean).join(' ')
       : m.tipo === 'audio' && m.transcricao ? `[áudio transcrito] ${m.transcricao}`
       : `[o ${m.direcao === 'entrada' ? 'cliente' : 'atendente'} ${DESCRICAO[m.tipo] || 'enviou um arquivo'}]${m.texto ? ' ' + m.texto : ''}`,
   })).filter((h) => h.texto);
@@ -293,8 +310,11 @@ async function processarAgora(conversaId) {
     locarxDisponivel: !!config.locarx, pixDisponivel: prep.pix, regrasFunil: prep.regrasFunil, simulacao: false, campos: crm.campos, etiquetas: crm.etiquetas, opcoesAnteriores: conversa.opcoes?.grupos || [],
     enviarDepois: [],   // mensagens que o sistema manda logo após a resposta da IA (ex.: código Pix em mensagem própria)
     aoChamarAtendente: async (args) => { pedidoAtendente = args; },
+    // chat do site: componentes de tela (cartões, calendário, botões) que acompanham a resposta
+    canalSite: conversa.canal === 'site', ui: [], aoMostrar: (u) => ctxFerramentas.ui.push(u), preVerificacao: false,
   };
   const ferramentas = ferramentasDaLoja(ctxFerramentas);
+  if (conversa.canal === 'site') ferramentas.push(...ferramentasDoSite(ctxFerramentas));
 
   // 5) IA
   let resposta, erroIa = null;
@@ -302,7 +322,7 @@ async function processarAgora(conversaId) {
   try {
     const opcoes = {
       provedor: a.provedor, modelo: a.modelo, chave: a.chave_cifrada ? decifrar(a.chave_cifrada) : null,
-      sistema: montarSistema({ loja, a, rede, contato: { nome: conversa.contato_nome }, historicoReservas, crm, conversa, pix: prep.pix, filiais: prep.filiais }), historico, ferramentas,
+      sistema: montarSistema({ loja, a, rede, contato: { nome: conversa.contato_nome }, historicoReservas, crm, conversa, pix: prep.pix, filiais: prep.filiais, site: conversa.canal === 'site' ? { antes: false, nomeCliente: conversa.contato_nome } : null }), historico, ferramentas,
     };
     resposta = config.iaSimulada ? await simularIa(opcoes) : await conversarComIa(opcoes);
   } catch (e) { erroIa = e; console.error('[assistente] IA:', e.message); }
@@ -311,7 +331,7 @@ async function processarAgora(conversaId) {
   const eventos = [...(resposta?.eventos || [])];
   const prometeuSemAgir = !erroIa && resposta?.texto && eventos.some((e) => e.tipo === 'nudge') && !eventos.some((e) => e.tipo === 'ferramenta');
   if (prometeuSemAgir) eventos.push({ tipo: 'erro', em: new Date().toISOString(), erro: 'A IA disse que ia agir, foi cobrada e mesmo assim não usou ferramenta. Conversa repassada à equipe.' });
-  if (!erroIa && !resposta?.texto) eventos.push({ tipo: 'erro', em: new Date().toISOString(), erro: 'A IA devolveu resposta vazia.' });
+  if (!erroIa && !resposta?.texto && !ctxFerramentas.ui.length) eventos.push({ tipo: 'erro', em: new Date().toISOString(), erro: 'A IA devolveu resposta vazia.' });
   const falhas = eventos.filter((e) => e.erro).length;
   // o que falhou vai para as ocorrências (Monitor da administração), com o motivo
   if (erroIa) await registrarOcorrencia({ lojaId: loja.id, conversaId: conversa.id, origem: 'assistente', tipo: 'ia', nivel: 'erro', mensagem: `IA indisponível: ${String(erroIa.message).slice(0, 200)}`, detalhes: { provedor: a.provedor, modelo: a.modelo, status: erroIa.status || null } });
@@ -338,8 +358,8 @@ async function processarAgora(conversaId) {
     // a conversa pode ter sido assumida por alguém enquanto a IA pensava
     const atual = (await c.query('SELECT estado FROM conversas WHERE id = $1', [conversa.id])).rows[0];
     if (atual?.estado !== 'assistente') return;
-    if (resposta.texto && !ctxFerramentas.suprimirResposta) {
-      try { await enviarComoAssistente(c, conversa, canal, resposta.texto); } catch (e) { console.error('[assistente] envio:', e.message); }
+    if ((resposta.texto || ctxFerramentas.ui.length) && !ctxFerramentas.suprimirResposta) {
+      try { await enviarComoAssistente(c, conversa, canal, resposta.texto, ctxFerramentas.ui.length ? ctxFerramentas.ui : null); } catch (e) { console.error('[assistente] envio:', e.message); }
     }
     for (const extra of ctxFerramentas.enviarDepois || []) {
       try { await enviarComoAssistente(c, conversa, canal, extra); } catch (e) { console.error('[assistente] envio extra:', e.message); }
@@ -352,7 +372,7 @@ async function processarAgora(conversaId) {
         await c.query(`INSERT INTO perguntas_sem_resposta (loja_id, conversa_id, pergunta) VALUES ($1, $2, $3)`,
           [loja.id, conversa.id, String(pedidoAtendente.pergunta || ultimaDoCliente?.texto || '').slice(0, 1000)]);
       }
-    } else if (!resposta.texto) {
+    } else if (!resposta.texto && !ctxFerramentas.ui.length) {
       await repassar(c, conversa, 'o assistente não conseguiu responder');
     }
   });

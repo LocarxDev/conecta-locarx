@@ -201,7 +201,7 @@ export async function montar(alvo, ctx) {
     render(listaEl, html`${lista.map((c) => html`
       <a class="item-conversa${c.naoLidas ? ' nao-lida' : ''}${aberta?.id === c.id ? ' ativa' : ''}" href="#/conversas/${c.id}" data-id="${c.id}">
         <span class="avatar">${c.contato.nome ? iniciais(c.contato.nome) : '#'}</span>
-        <span class="meio"><span class="nome">${nomeDe(c)}</span><span class="previa">${c.previa || ''}</span>
+        <span class="meio"><span class="nome">${nomeDe(c)}${c.canal === 'site' ? html` <span class="selo neutro sem-ponto" title="Veio pelo chat do site">Site</span>` : ''}</span><span class="previa">${c.previa || ''}</span>
           ${c.etiquetas?.length ? html`<span class="etiquetas-conversa">${c.etiquetas.slice(0, 3).map((e) => chipEtiqueta(e))}${c.etiquetas.length > 3 ? html`<span class="sub">+${c.etiquetas.length - 3}</span>` : ''}</span>` : ''}</span>
         <span class="lado"><span class="hora">${quandoCurto(c.ultimaMensagemEm)}</span>
           ${c.naoLidas ? html`<span class="bolinha">${c.naoLidas > 99 ? '99+' : c.naoLidas}</span>` : html`<span class="marca-estado ${c.estado}" title="${c.estado}"></span>`}</span>

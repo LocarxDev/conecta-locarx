@@ -50,6 +50,7 @@ export function ferramentasDaLoja(ctx) {
     if (f.branchId !== ctx.branchId || !ctx.branchEscolhido) {
       ctx.branchId = f.branchId; ctx.branchEscolhido = true; ctx.filialNome = f.nome;
       if (!ctx.simulacao && ctx.conversaId) await comoSistema((c) => c.query(`UPDATE conversas SET opcoes = coalesce(opcoes, '{}'::jsonb) || $2::jsonb WHERE id = $1`, [ctx.conversaId, { branchId: f.branchId, filialNome: f.nome }]));
+      if (ctx.simulacao) ctx.aoGuardar?.('opcoes_mesclar', { branchId: f.branchId, filialNome: f.nome });
     }
     return ctx.branchId;
   }
@@ -150,6 +151,28 @@ export function ferramentasDaLoja(ctx) {
             grupos: [...(a.mais_opcoes ? (ctx.opcoesAnteriores || []) : []), ...mostrar.map((g, i) => ({ letra: rotuloGrupo(g, i + (a.mais_opcoes ? 4 : 1)).letra, fleet_id: g.fleetId, grupo: g.grupo, total: g.total }))] };
           await comoSistema((c) => c.query('UPDATE conversas SET opcoes = $2 WHERE id = $1', [ctx.conversaId, opcoes]));
         }
+        if (ctx.simulacao && ctx.aoGuardar) {
+          ctx.aoGuardar('opcoes', { periodo: { data_retirada: a.data_retirada, hora_retirada: a.hora_retirada, data_devolucao: a.data_devolucao, hora_devolucao: a.hora_devolucao }, em: new Date().toISOString(), branchId: ctx.branchId, filialNome: ctx.filialNome || null,
+            grupos: [...(a.mais_opcoes ? (ctx.opcoesAnteriores || []) : []), ...mostrar.map((g, i) => ({ letra: rotuloGrupo(g, i + (a.mais_opcoes ? 4 : 1)).letra, fleet_id: g.fleetId, grupo: g.grupo, total: g.total }))] });
+        }
+        // chat do site: os carros aparecem como cartões na tela; a IA só escreve uma frase de abertura
+        if (ctx.canalSite && ctx.aoMostrar) {
+          const comFoto = new Set();
+          for (const g of mostrar) if (g.foto || await locarx.fotoDoGrupo(g.fleetId)) comFoto.add(String(g.fleetId));
+          const cartoes = mostrar.map((g, i) => {
+            const r = rotuloGrupo(g, i + (a.mais_opcoes ? 4 : 1));
+            return { fleetId: g.fleetId, foto: comFoto.has(String(g.fleetId)), letra: r.letra, nome: r.nome, modelos: g.exemplos, cambio: g.cambio ? String(g.cambio).toLowerCase().replace('automatic', 'automático') : null, passageiros: g.passageiros, malas: g.malas, portas: g.portas, itens: (g.itens || []).slice(0, 4), diaria: g.diaria, diarias: g.diarias, total: g.total };
+          });
+          ctx.aoMostrar({ tipo: 'carros', periodo, grupos: cartoes, haMais: !a.mais_opcoes && grupos.length > 3, fallback: texto });
+          return {
+            cartoes_na_tela: true,
+            grupos: mostrar.map((g, i) => ({ letra: rotuloGrupo(g, i + (a.mais_opcoes ? 4 : 1)).letra, fleet_id: g.fleetId, grupo: g.grupo, cambio: g.cambio, total: reais(g.total) })),
+            protecoes_disponiveis: (mostrar[0].protecoes || []).map((x) => ({ codigo: x.codigo, nome: x.nome, diaria: reais(x.diaria), basica: x.base, caucao: x.caucao != null ? reais(x.caucao) : null })),
+            caucao: mostrar[0].protecoes?.find((x) => x.base && x.padrao)?.caucao != null ? `Caução (pré-autorização no cartão de crédito, liberada após a devolução): ${reais(mostrar[0].protecoes.find((x) => x.base && x.padrao).caucao)} com a Proteção X. Informe se o cliente perguntar.` : null,
+            ha_mais_opcoes: !a.mais_opcoes && grupos.length > 3,
+            instrucao: `OS CARROS JÁ ESTÃO APARECENDO NA TELA DO CLIENTE como cartões (com foto do carro, câmbio, diária e total ${periodo}). Escreva só UMA frase curta de abertura (ex.: "Encontrei estas opções para ${periodo}:") e peça para escolher um cartão. NÃO liste os carros, letras nem preços no texto. O botão "Escolher" do cartão manda a letra e o fleet_id para você.`,
+          };
+        }
         return {
           texto_para_cliente: texto,
           grupos: mostrar.map((g, i) => ({ letra: rotuloGrupo(g, i + (a.mais_opcoes ? 4 : 1)).letra, fleet_id: g.fleetId, grupo: g.grupo, cambio: g.cambio, total: reais(g.total) })),
@@ -172,11 +195,14 @@ export function ferramentasDaLoja(ctx) {
         catch (e) { if (e.dicaAssistente) return `Cálculo recusado pelo portal (${e.codigo}): ${e.dicaAssistente}`; throw e; }
         const cotacao = { fleetId: r.fleetId ?? a.fleet_id, grupo: r.grupo, caucao: r.caucao ?? null, branchId: ctx.branchId, filialNome: variasFiliais ? ctx.filialNome : null, retirada: p.retirada, devolucao: p.devolucao, protecoes, nomesProtecoes: r.protecoes.map((x) => x.nome), total: r.total, diaria: r.diaria, diarias: r.diarias, em: new Date().toISOString() };
         ctx.cotacao = cotacao;
+        if (ctx.simulacao) ctx.aoGuardar?.('cotacao', cotacao);
         if (!ctx.simulacao && ctx.conversaId) {
           await comoSistema((c) => c.query('UPDATE conversas SET cotacao = $2, resumo_enviado_em = NULL WHERE id = $1', [ctx.conversaId, cotacao]));
         }
         await marcarEtapa(ctx, 'cotacao', r.total);
-        return { grupo: r.grupo, fleet_id: r.fleetId, total: reais(r.total), diaria: reais(r.diaria), diarias: r.diarias, protecoes: r.protecoes.length ? r.protecoes.map((x) => x.nome) : protecoes, caucao: r.caucao != null ? `${reais(r.caucao)} (pré-autorização no cartão, liberada após a devolução; não entra no total)` : null, pagamento: ctx.pixDisponivel && !ctx.simulacao ? 'na loja, na retirada, ou agora via Pix pelo WhatsApp — pergunte qual o cliente prefere (Passo 4b)' : 'na loja, na retirada', proximo_passo: ctx.pixDisponivel && !ctx.simulacao ? 'Informe o total ao cliente e pergunte a forma de pagamento (loja ou Pix). Depois peça nome completo, CPF e e-mail (se ainda não tiver) e chame criar_reserva com forma_pagamento.' : 'Informe o total ao cliente. Para fechar, peça nome completo, CPF e e-mail (se ainda não tiver) e chame criar_reserva.' };
+        const saida = { grupo: r.grupo, fleet_id: r.fleetId, total: reais(r.total), diaria: reais(r.diaria), diarias: r.diarias, protecoes: r.protecoes.length ? r.protecoes.map((x) => x.nome) : protecoes, caucao: r.caucao != null ? `${reais(r.caucao)} (pré-autorização no cartão, liberada após a devolução; não entra no total)` : null, pagamento: ctx.pixDisponivel && !ctx.simulacao ? 'na loja, na retirada, ou agora via Pix pelo WhatsApp — pergunte qual o cliente prefere (Passo 4b)' : 'na loja, na retirada', proximo_passo: ctx.pixDisponivel && !ctx.simulacao ? 'Informe o total ao cliente e pergunte a forma de pagamento (loja ou Pix). Depois peça nome completo, CPF e e-mail (se ainda não tiver) e chame criar_reserva com forma_pagamento.' : 'Informe o total ao cliente. Para fechar, peça nome completo, CPF e e-mail (se ainda não tiver) e chame criar_reserva.' };
+        if (ctx.preVerificacao) saida.proximo_passo = 'Informe o total ao cliente. Para reservar, ele precisa confirmar o WhatsApp: pergunte se quer reservar e, se sim, chame mostrar_na_tela com tipo "cadastro".';
+        return saida;
       },
     },
     {
@@ -210,7 +236,7 @@ export function ferramentasDaLoja(ctx) {
         if (!ctx.simulacao && ctx.conversaId) {
           await comoSistema((c) => c.query('UPDATE conversas SET condutor = $2 WHERE id = $1', [ctx.conversaId, { nome: String(a.nome).trim().slice(0, 100), email: String(a.email).trim().toLowerCase(), cpf_cifrado: cifrar(String(a.cpf).replace(/\D/g, '')), cpf_final: String(a.cpf).replace(/\D/g, '').slice(-2), cnh: cnh || null, em: new Date().toISOString() }]));
         }
-        const cliente = { nome: String(a.nome).trim().slice(0, 100), cpf: String(a.cpf).replace(/\D/g, ''), cnh, email: String(a.email).trim().toLowerCase(), telefone, observacoes: 'Pagamento: na loja, na retirada.\nOrigem: Conecta LocarX - WhatsApp (assistente virtual)', referencia: ctx.conversaId ? `CONECTA-${String(ctx.conversaId).slice(0, 8)}` : null };
+        const cliente = { nome: String(a.nome).trim().slice(0, 100), cpf: String(a.cpf).replace(/\D/g, ''), cnh, email: String(a.email).trim().toLowerCase(), telefone, observacoes: `Pagamento: na loja, na retirada.\nOrigem: Conecta LocarX - ${ctx.canalSite ? 'Chat do site' : 'WhatsApp'} (assistente virtual)`, referencia: ctx.conversaId ? `CONECTA-${String(ctx.conversaId).slice(0, 8)}` : null };
 
         // cotação guardada (o que o cliente viu) e controle do resumo
         let cv = null;

@@ -181,6 +181,7 @@ export async function detalhe(alvo, ctx) {
         <div class="dado"><dt>Filial no portal LocarX</dt><dd>${filial(loja.filial)}${loja.filialPortal?.encontrada ? html`<div class="sub">${loja.filialPortal.nome} · ${loja.filialPortal.ambiente}${loja.filialPortal.horarios ? ' · ' + loja.filialPortal.horarios : ''}</div>` : ''}</dd></div>
         <div class="dado"><dt>WhatsApp da loja</dt><dd>${seloWhats(loja.whatsapp)}</dd></div>
         <div class="dado"><dt>Assistente virtual</dt><dd><span class="selo neutro">Desligado</span></dd></div>
+        ${ehAdmin ? html`<div class="dado"><dt>Chat do site</dt><dd id="site-chat-dd"><span class="sub">Carregando…</span></dd></div>` : ''}
         <div class="dado"><dt>Pessoas com acesso</dt><dd class="num">${loja.usuarios.filter((u) => u.status === 'ativo').length} ativas</dd></div>
         <div class="dado"><dt>Recebimento do Pix</dt><dd>${loja.pix?.proprio
           ? html`<span class="selo marca sem-ponto">Conta própria</span> <span class="sub">${loja.pix.temChave ? `chave …${loja.pix.chaveFinal}${loja.pix.devMode === true ? ' · sandbox' : loja.pix.devMode === false ? ' · produção' : ''}` : 'a loja ainda não cadastrou a chave'}</span>`
@@ -339,6 +340,24 @@ export async function detalhe(alvo, ctx) {
   }));
 
   painelEquipe($('#equipe-loja', alvo), { ctx, lojaId, podeGerir: ehAdmin, podeConvidarDono: ehAdmin, titulo: 'Equipe da loja' });
+
+  // chat do site (widget da Lia no site da LocarX): liga/desliga por loja
+  const caixaSite = $('#site-chat-dd', alvo);
+  if (caixaSite) {
+    const desenharSite = async () => {
+      try {
+        const r = await api.siteChat();
+        const eu = r.lojas.find((l) => l.id === lojaId);
+        render(caixaSite, html`${eu?.ativo ? html`<span class="selo ok">Ligado</span>` : html`<span class="selo neutro">Desligado</span>`}
+          ${!r.ligado ? html` <span class="sub">o servidor ainda não tem o site autorizado (variável SITE_ORIGENS)</span>` : r.protegido ? html` <span class="sub">acesso restrito por chave de teste</span>` : ''}
+          <div><button class="btn btn-texto" id="alternar-site-chat">${eu?.ativo ? 'Desligar chat do site' : 'Ligar chat do site'}</button></div>`);
+        $('#alternar-site-chat', caixaSite).addEventListener('click', async () => {
+          try { await api.siteChatLoja(lojaId, !eu?.ativo); avisar(eu?.ativo ? 'Chat do site desligado para esta loja.' : 'Chat do site ligado para esta loja.'); desenharSite(); } catch (err) { avisar(err.message, 'erro'); }
+        });
+      } catch (err) { render(caixaSite, html`<span class="sub">${err.message}</span>`); }
+    };
+    desenharSite();
+  }
 
   $('#pix-proprio', alvo)?.addEventListener('click', async () => {
     const ligar = !loja.pix?.proprio;

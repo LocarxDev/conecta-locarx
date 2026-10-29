@@ -194,7 +194,10 @@ export const previaDe = (tipo, texto) => (texto ? String(texto).slice(0, 140) : 
 
 const PALAVRAS_SAIR = /^\s*(parar|sair|stop|cancelar mensagens|não quero mais mensagens|nao quero mais mensagens)\s*[.!]?\s*$/i;
 
-async function registrarRecebida(lojaId, m) {
+// Registra uma mensagem do cliente (WhatsApp ou chat do site) no contato/conversa da loja.
+// opcoes.canal: por onde o cliente falou agora ('whatsapp' | 'site'); opcoes.semAgendar: o chamador agenda o assistente depois.
+export async function registrarRecebida(lojaId, m, opcoes = {}) {
+  const canalNovo = opcoes.canal === 'site' ? 'site' : 'whatsapp';
   const r = await comoSistema(async (c) => {
     if (m.externoId) {
       const ja = (await c.query('SELECT 1 FROM mensagens WHERE loja_id = $1 AND externo_id = $2', [lojaId, m.externoId])).rowCount;
@@ -210,9 +213,10 @@ async function registrarRecebida(lojaId, m) {
     const reabrir = entrada && (!anterior || anterior.estado === 'encerrada');
     const estadoNovo = reabrir ? await estadoInicial(c, lojaId) : null;
     const conversa = (await c.query(
-      `INSERT INTO conversas (loja_id, contato_id, estado, nao_lidas, ultima_previa, ultima_mensagem_em, ultima_do_cliente, humano_respondeu_em)
-       VALUES ($1, $2, coalesce($6::text, 'aguardando'), $3, $4, now(), CASE WHEN $5::boolean THEN now() END, CASE WHEN $5::boolean THEN NULL ELSE now() END)
+      `INSERT INTO conversas (loja_id, contato_id, estado, nao_lidas, ultima_previa, ultima_mensagem_em, ultima_do_cliente, humano_respondeu_em, canal)
+       VALUES ($1, $2, coalesce($6::text, 'aguardando'), $3, $4, now(), CASE WHEN $5::boolean THEN now() END, CASE WHEN $5::boolean THEN NULL ELSE now() END, $7)
        ON CONFLICT (loja_id, contato_id) DO UPDATE SET
+         canal = CASE WHEN $5::boolean THEN $7 ELSE conversas.canal END,
          nao_lidas = conversas.nao_lidas + $3,
          estado = CASE WHEN $6::text IS NOT NULL THEN $6::text
                        WHEN NOT $5::boolean AND conversas.estado = 'assistente' THEN 'humano'
@@ -223,8 +227,8 @@ async function registrarRecebida(lojaId, m) {
          humano_respondeu_em = CASE WHEN $5::boolean THEN conversas.humano_respondeu_em ELSE now() END,
          bot_respondeu_em = CASE WHEN $6::text IS NOT NULL THEN NULL ELSE conversas.bot_respondeu_em END,
          atualizada_em = now()
-       RETURNING id, estado, ausencia_enviada_em`,
-      [lojaId, contato.id, entrada ? 1 : 0, previaDe(m.tipo, m.texto), entrada, estadoNovo])).rows[0];
+       RETURNING id, estado, canal, ausencia_enviada_em`,
+      [lojaId, contato.id, entrada ? 1 : 0, previaDe(m.tipo, m.texto), entrada, estadoNovo, canalNovo])).rows[0];
     await c.query(
       `INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto, midia, externo_id, criada_em)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
@@ -249,11 +253,18 @@ async function registrarRecebida(lojaId, m) {
         ausencia = a.msg_ausencia;
       }
     }
-    return { conversa, ausencia };
+    return { conversa, ausencia, contatoId: contato.id };
   });
-  if (!r) return;
-  if (r.conversa.estado === 'assistente' && !m.deMim) agendar(r.conversa.id);
-  if (r.ausencia) await enviarAusencia(lojaId, r.conversa.id, m.telefone, r.ausencia).catch((e) => console.error('[ausencia]', e.message));
+  if (!r) return null;
+  if (r.conversa.estado === 'assistente' && !m.deMim && !opcoes.semAgendar) agendar(r.conversa.id, canalNovo === 'site' ? 1200 : undefined);
+  if (r.ausencia) {
+    if (canalNovo === 'site') {
+      await comoSistema((c) => c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto) VALUES ($1, $2, 'saida', 'assistente', 'texto', $3)`, [r.conversa.id, lojaId, r.ausencia]));
+    } else {
+      await enviarAusencia(lojaId, r.conversa.id, m.telefone, r.ausencia).catch((e) => console.error('[ausencia]', e.message));
+    }
+  }
+  return { conversaId: r.conversa.id, contatoId: r.contatoId, estado: r.conversa.estado };
 }
 
 async function enviarAusencia(lojaId, conversaId, telefone, texto) {

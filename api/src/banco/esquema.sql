@@ -914,3 +914,73 @@ CREATE TABLE IF NOT EXISTS mensagens_de_etapa (
   PRIMARY KEY (oportunidade_id, etapa_id)
 );
 GRANT SELECT, INSERT, UPDATE, DELETE ON mensagens_de_etapa TO conecta_app;
+
+-- =====================================================================
+-- Chat do site (widget no site da LocarX): o visitante conversa sem cadastro; para reservar ou falar com
+-- atendente confirma o WhatsApp com um código de 6 dígitos. Até confirmar, a conversa fica só em site_*
+-- (nada entra no CRM); ao confirmar, vira contato + conversa (canal 'site') e segue o motor normal do assistente.
+-- =====================================================================
+ALTER TABLE lojas ADD COLUMN IF NOT EXISTS site_chat boolean NOT NULL DEFAULT false;
+ALTER TABLE conversas ADD COLUMN IF NOT EXISTS canal text NOT NULL DEFAULT 'whatsapp' CHECK (canal IN ('whatsapp', 'site'));
+ALTER TABLE conversas ADD COLUMN IF NOT EXISTS site_sessao_id uuid;
+ALTER TABLE mensagens ADD COLUMN IF NOT EXISTS ui jsonb;
+
+CREATE TABLE IF NOT EXISTS site_sessoes (
+  id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  token_hash          text NOT NULL UNIQUE,
+  loja_id             uuid REFERENCES lojas(id) ON DELETE SET NULL,
+  opcoes              jsonb,
+  cotacao             jsonb,
+  nome                text CHECK (length(nome) <= 120),
+  telefone            text CHECK (telefone ~ '^[0-9]{10,15}$'),
+  codigo_hash         text,
+  codigo_expira       timestamptz,
+  codigo_tentativas   integer NOT NULL DEFAULT 0,
+  codigos_enviados    integer NOT NULL DEFAULT 0,
+  codigo_enviado_em   timestamptz,
+  verificada_em       timestamptz,
+  confirmada_ate      timestamptz,
+  contato_id          uuid REFERENCES contatos(id) ON DELETE SET NULL,
+  conversa_id         uuid REFERENCES conversas(id) ON DELETE SET NULL,
+  pendente_desde      timestamptz,
+  respondida_em       timestamptz,
+  ip                  text,
+  origem              text,
+  navegador           text,
+  ultimo_poll         timestamptz,
+  criada_em           timestamptz NOT NULL DEFAULT now(),
+  ultimo_uso          timestamptz NOT NULL DEFAULT now(),
+  expira_em           timestamptz NOT NULL DEFAULT now() + interval '30 days'
+);
+CREATE INDEX IF NOT EXISTS site_sessoes_expira ON site_sessoes (expira_em);
+CREATE INDEX IF NOT EXISTS site_sessoes_conversa ON site_sessoes (conversa_id) WHERE conversa_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS site_sessoes_ip ON site_sessoes (ip, criada_em);
+
+CREATE TABLE IF NOT EXISTS site_mensagens (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  sessao_id   uuid NOT NULL REFERENCES site_sessoes(id) ON DELETE CASCADE,
+  papel       text NOT NULL CHECK (papel IN ('cliente', 'assistente')),
+  texto       text CHECK (length(texto) <= 4000),
+  ui          jsonb,
+  criada_em   timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS site_mensagens_sessao ON site_mensagens (sessao_id, criada_em);
+
+-- contagem diária de respostas da IA e de códigos enviados pelo site (teto contra abuso/custo)
+CREATE TABLE IF NOT EXISTS site_uso (
+  dia      date NOT NULL,
+  tipo     text NOT NULL CHECK (tipo IN ('ia', 'codigo')),
+  total    integer NOT NULL DEFAULT 0,
+  PRIMARY KEY (dia, tipo)
+);
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON site_sessoes, site_mensagens, site_uso TO conecta_app;
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['site_sessoes', 'site_mensagens', 'site_uso'] LOOP
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %I', t || '_sistema', t);
+    EXECUTE format('CREATE POLICY %I ON %I FOR ALL USING (ctx_perfil() = ''sistema'') WITH CHECK (ctx_perfil() = ''sistema'')', t || '_sistema', t);
+  END LOOP;
+END $$;

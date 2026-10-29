@@ -103,7 +103,7 @@ Tudo fica num projeto só do Railway, com 5 serviços: `Postgres`, `conecta-api`
 | `WEBHOOK_SEGREDO` | gere com `openssl rand -hex 32` |
 | `LOCARX_API_URL` | `https://api.locarx.com.br/api` (homologação: `https://portalhml.locarx.com.br/api`) |
 | `LOCARX_API_TOKEN` | token exclusivo do Conecta no portal LocarX |
-| `MCP_TOKEN` | opcional: gere com `openssl rand -hex 32` para outros sistemas (Lívia I.A., chat do site) consultarem o LocarX Tools |
+| `MCP_TOKEN` | opcional: gere com `openssl rand -hex 32` para outros sistemas (Lia I.A., chat do site) consultarem o LocarX Tools |
 
 No PowerShell, sem openssl: `[Convert]::ToBase64String((1..32 | % {[byte](Get-Random -Max 256)}))`
 
