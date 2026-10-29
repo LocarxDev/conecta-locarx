@@ -107,6 +107,12 @@ const real = {
   importarConhecimento: (d) => chamar('POST', '/conhecimento/importar', d),
   rede: () => chamar('GET', '/admin/rede'),
   salvarRede: (d) => chamar('PUT', '/admin/rede', d),
+  // prompt da Lia (regras da rede)
+  promptRede: () => chamar('GET', '/admin/prompt'),
+  salvarPromptRede: (d) => chamar('PUT', '/admin/prompt', d),
+  restaurarPromptRede: (id) => chamar('POST', `/admin/prompt/restaurar/${encodeURIComponent(id)}`),
+  conferirPromptRede: (texto) => chamar('POST', '/admin/prompt/conflitos', { texto }),
+  previaPromptRede: (lojaId) => chamar('GET', `/admin/prompt/previa${lojaId ? '?loja=' + encodeURIComponent(lojaId) : ''}`),
   importarPoliticasLocarx: (branchId) => chamar('POST', '/admin/rede/importar-politicas', branchId ? { branchId } : {}),
   importarPortalLoja: (filialId) => chamar('POST', '/conhecimento/importar-portal', filialId ? { filialId } : {}),
   incluirSinonimo: (termos) => chamar('POST', '/admin/sinonimos', { termos }),
