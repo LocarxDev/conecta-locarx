@@ -206,7 +206,11 @@ export async function detalhe(alvo, ctx) {
         ${ehAdmin ? html`<div class="acoes-form"><button class="btn btn-primario" type="submit">Salvar módulos</button><span class="sub">${Object.values(loja.modulos || {}).every(Boolean) ? 'Hoje: tudo liberado.' : 'Hoje: plano com restrições.'}</span></div>` : ''}
       </form>
     </section>
-    <section class="painel" id="filiais-loja">
+    ${loja.central ? html`<section class="painel" id="filiais-loja">
+      <div class="painel-cab"><div><h2>Filiais da rede</h2><span class="sub">A Central não tem filial própria: consulta e reserva em todas as filiais do portal LocarX (a lista vem do portal e se atualiza sozinha a cada hora).</span></div></div>
+      <div class="painel-corpo"><p><strong>${(loja.filiais || []).length}</strong> filiais em <strong>${new Set((loja.filiais || []).map((f) => `${f.cidade}/${f.uf}`)).size}</strong> cidades.</p>
+        <p class="sub">${[...new Set((loja.filiais || []).map((f) => `${f.cidade}/${f.uf}`))].sort().join(' · ')}</p></div>
+    </section>` : html`<section class="painel" id="filiais-loja">
       <div class="painel-cab"><div><h2>Filiais da franquia</h2><span class="sub">Várias filiais do portal LocarX no mesmo WhatsApp e na mesma equipe (ex.: Aeroporto e Centro). A principal é a padrão.</span></div>
         ${ehAdmin ? html`<button class="btn btn-contorno" id="nova-filial">${icone('mais')}Adicionar filial</button>` : ''}</div>
       <div class="tabela-caixa"><table class="tabela"><thead><tr><th>Filial</th><th>Nº no portal</th><th>Situação</th><th><span class="sr-only">Ações</span></th></tr></thead>
@@ -217,7 +221,7 @@ export async function detalhe(alvo, ctx) {
           <td>${f.ativa ? html`<span class="selo ok">Ativa</span>` : html`<span class="selo neutro">Desativada</span>`}</td>
           <td><div class="acoes-linha">${ehAdmin && !f.principal ? html`<button class="btn btn-texto" data-filial-principal="${f.id}">Tornar principal</button><button class="btn btn-texto" data-filial-remover="${f.id}">Remover</button>` : ''}</div></td>
         </tr>`)}</tbody></table></div>
-    </section>
+    </section>`}
     <section class="painel" id="acessos-loja">
       <div class="painel-cab"><div><h2>Donos vinculados de outras lojas</h2><span class="sub">Para quem tem mais de uma loja: escolha a pessoa na lista e ela passa a ver esta loja também (troca no topo da tela).</span></div>
         ${ehAdmin ? html`<button class="btn btn-contorno" id="dar-acesso">${icone('mais')}Vincular dono</button>` : ''}</div>
@@ -373,8 +377,9 @@ export async function detalhe(alvo, ctx) {
   // Central de Reservas: esta loja reserva em qualquer filial da rede
   const caixaCentral = $('#central-dd', alvo);
   if (caixaCentral) {
-    api.siteChat().then((r) => {
-      const eu = r.lojas.find((l) => l.id === lojaId);
+    // não depende do chat do site: se a lista da rede falhar, mostra o estado desta loja mesmo assim
+    api.siteChat().catch(() => ({ lojas: [{ id: lojaId, central: !!loja.central }] })).then((r) => {
+      const eu = r.lojas.find((l) => l.id === lojaId) || { id: lojaId, central: !!loja.central };
       const outra = r.lojas.find((l) => l.central && l.id !== lojaId);
       render(caixaCentral, html`${eu?.central ? html`<span class="selo ok">Ligada</span>` : html`<span class="selo neutro">Desligada</span>`}
         <div class="sub">${eu?.central

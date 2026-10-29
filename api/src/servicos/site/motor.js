@@ -23,16 +23,21 @@ export async function processarSite(sessaoId) {
   try { await rodar(sessaoId); } finally { rodando.delete(sessaoId); }
 }
 
-async function responder(sessaoId, texto, ui, estado = null) {
+// respondida_em recebe o momento da mensagem que foi respondida (não o "agora"): se o visitante mandou outra
+// mensagem enquanto a IA respondia, ela continua pendente e a próxima varredura responde.
+async function responder(sessaoId, texto, ui, estado = null, pendenteDesde = null) {
+  let sobrou = false;
   await comoSistema(async (c) => {
     await c.query(`INSERT INTO site_mensagens (sessao_id, papel, texto, ui) VALUES ($1, 'assistente', $2, $3)`, [sessaoId, texto || null, ui?.length ? JSON.stringify(ui) : null]);
     await c.query(
-      `UPDATE site_sessoes SET respondida_em = now(),
+      `UPDATE site_sessoes SET respondida_em = coalesce($7::timestamptz, now()),
               opcoes = CASE WHEN $2::boolean THEN $3::jsonb ELSE opcoes END,
               cotacao = CASE WHEN $4::boolean THEN $5::jsonb ELSE cotacao END,
               loja_id = coalesce($6, loja_id) WHERE id = $1`,
-      [sessaoId, !!estado?.mudouOpcoes, estado?.opcoes ?? null, !!estado?.mudouCotacao, estado?.cotacao ?? null, estado?.lojaId ?? null]);
+      [sessaoId, !!estado?.mudouOpcoes, estado?.opcoes ?? null, !!estado?.mudouCotacao, estado?.cotacao ?? null, estado?.lojaId ?? null, pendenteDesde]);
+    sobrou = (await c.query('SELECT 1 FROM site_sessoes WHERE id = $1 AND pendente_desde IS NOT NULL AND (respondida_em IS NULL OR respondida_em < pendente_desde)', [sessaoId])).rowCount > 0;
   });
+  if (sobrou) { const { agendarSite } = await import('./chat.js'); agendarSite(sessaoId, 300); }
 }
 
 async function rodar(sessaoId) {
@@ -55,7 +60,7 @@ async function rodar(sessaoId) {
     return { s, loja, a, rede, filiais, msgs, lojasSite: lojas };
   });
   if (!prep) return;
-  if (prep.aviso) { await responder(sessaoId, prep.aviso, null); return; }
+  if (prep.aviso) { await responder(sessaoId, prep.aviso, null, null, prep.s.pendente_desde); return; }
 
   const { s, loja, a, rede, filiais, msgs, lojasSite } = prep;
   const estado = { opcoes: s.opcoes || null, cotacao: s.cotacao || null, lojaId: s.loja_id || (loja.central ? loja.id : null), mudouOpcoes: false, mudouCotacao: false };
@@ -132,5 +137,5 @@ async function rodar(sessaoId) {
   if (erroIa || (!texto && !ctx.ui.length)) {
     texto = 'Desculpe, tive um problema para responder agora. Pode tentar de novo em instantes? Se preferir, fale com a loja pelo WhatsApp.';
   }
-  await responder(sessaoId, texto, ctx.ui, estado);
+  await responder(sessaoId, texto, ctx.ui, estado, prep.s.pendente_desde);
 }

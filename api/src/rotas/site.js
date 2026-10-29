@@ -154,12 +154,13 @@ siteAdmin.get('/site-chat', exigirPerfil('admin', 'matriz'), rota(async (req, re
   const r = await comContexto(contextoDoUsuario(req.usuario), async (c) => (await c.query('SELECT id, nome, cidade, uf, tipo, site_chat, central FROM lojas ORDER BY cidade, nome')).rows);
   // números dos últimos 30 dias por loja (as tabelas do chat só abrem para o sistema; a lista de lojas acima já respeita quem pediu)
   const ids = r.map((l) => l.id);
-  const uso = new Map((await comoSistema(async (c) => (await c.query(
+  // se a contagem falhar (ex.: tabela ainda não migrada), a tela continua funcionando com zeros
+  const uso = new Map(await comoSistema(async (c) => (await c.query(
     `SELECT l.id,
             (SELECT count(*)::int FROM site_sessoes s WHERE s.loja_id = l.id AND s.criada_em > now() - interval '30 days') AS conversas,
             (SELECT count(*)::int FROM site_sessoes s WHERE s.loja_id = l.id AND s.verificada_em IS NOT NULL AND s.criada_em > now() - interval '30 days') AS confirmaram,
             (SELECT count(*)::int FROM reservas rv JOIN conversas cv ON cv.id = rv.conversa_id WHERE rv.loja_id = l.id AND cv.canal = 'site' AND rv.criada_em > now() - interval '30 days') AS reservas
-       FROM lojas l WHERE l.id = ANY($1::uuid[])`, [ids]))).rows).map((x) => [x.id, x]));
+       FROM lojas l WHERE l.id = ANY($1::uuid[])`, [ids])).rows).catch((e) => { console.error('[site-chat] contagem:', e.message); return []; }).then((rows) => rows.map((x) => [x.id, x])));
   res.json({ ligado: !!config.site, protegido: !!process.env.SITE_CHAVE_TESTE?.trim(),
     lojas: r.map((l) => ({ id: l.id, nome: l.nome, cidade: l.cidade, uf: l.uf, tipo: l.tipo, ativo: !!l.site_chat, central: !!l.central, ultimos30dias: { conversas: uso.get(l.id)?.conversas || 0, confirmaram: uso.get(l.id)?.confirmaram || 0, reservas: uso.get(l.id)?.reservas || 0 } })) });
 }));

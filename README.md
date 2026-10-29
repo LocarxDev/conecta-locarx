@@ -178,3 +178,6 @@ node --env-file=.env src/servidor.js
 - `IA_SIMULADA=1` usa uma IA de mentira (só fora de produção), para testar sem gastar créditos.
 - O front precisa estar no mesmo endereço da API (como no Netlify): sirva `web/` com um proxy que repasse `/api` para a porta 3000.
 - Demonstração sem servidor: troque `USAR_EXEMPLO` para `true` em `web/js/api.js`.
+
+## Mensagens automáticas da rede (Padrões do CRM)
+A administração/matriz cria e edita os modelos de mensagem (aba **Padrões do CRM → Mensagens automáticas**), com o momento do envio (horas/dias antes ou depois da retirada ou devolução). Cada loja recebe uma cópia, liga/desliga e, se permitido, troca o texto. Rotas: `/api/admin/modelos` (rede) e `/api/crm/modelos` (loja). Tabela `modelos_mensagem` com `loja_id` nulo = padrão da rede; função SQL `sincronizar_modelos`.

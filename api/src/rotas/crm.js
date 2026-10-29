@@ -5,7 +5,7 @@ import { comContexto, contextoDoUsuario } from '../banco/conexao.js';
 import { cifrar } from '../servicos/seguranca.js';
 import { evolution } from '../servicos/canais/evolution.js';
 import { cpfValido } from '../servicos/locarx/ferramentas.js';
-import { MODELOS_PADRAO, garantirModelos, preencherModelo } from '../servicos/crm/modelos.js';
+import { garantirModelos, preencherModelo, quandoTexto } from '../servicos/crm/modelos.js';
 import { garantirFunil } from '../servicos/crm/funis.js';
 import { listarEtiquetas, etiquetaPublica } from '../servicos/crm/personalizacao.js';
 import { rota, erro, validar, zUuid, zEmail, exigirPerfil, registrar } from '../http.js';
@@ -259,16 +259,30 @@ crm.delete('/tarefas/:id', loja, rota(async (req, res) => {
 // ---------- modelos de mensagem ----------
 crm.get('/modelos', loja, rota(async (req, res) => {
   const rows = await comContexto(ctx(req), (c) => garantirModelos(c, req.usuario.loja_id));
-  res.json(rows.map((m) => ({ chave: m.chave, nome: m.nome, texto: m.texto, automatico: m.automatico, ativo: m.ativo, quando: MODELOS_PADRAO[m.chave]?.quando || null })));
+  res.json(rows.map((m) => ({
+    chave: m.chave, nome: m.nome, texto: m.texto, automatico: m.automatico, ativo: m.ativo, quando: quandoTexto(m),
+    daRede: m.da_rede, personalizado: m.personalizado, podeEditar: m.permite_editar,
+  })));
 }));
 
+// A loja liga/desliga e, se a rede permitir, troca o texto. Voltar ao texto da rede = escrever o mesmo texto (ou usar "restaurar").
 crm.put('/modelos/:chave', exigirPerfil('dono'), rota(async (req, res) => {
   const chave = String(req.params.chave);
-  if (!MODELOS_PADRAO[chave]) throw erro(404, 'Modelo não encontrado.');
-  const d = validar(z.object({ texto: z.string().trim().min(2, 'Escreva o texto.').max(1000), ativo: z.boolean() }), req.body);
+  const d = validar(z.object({ texto: z.string().trim().min(2, 'Escreva o texto.').max(1000).optional(), ativo: z.boolean(), restaurar: z.boolean().optional() }), req.body);
   await comContexto(ctx(req), async (c) => {
     await garantirModelos(c, req.usuario.loja_id);
-    await c.query('UPDATE modelos_mensagem SET texto = $3, ativo = $4 WHERE loja_id = $1 AND chave = $2', [req.usuario.loja_id, chave, d.texto, d.ativo]);
+    const m = (await c.query('SELECT * FROM modelos_mensagem WHERE loja_id = $1 AND chave = $2', [req.usuario.loja_id, chave])).rows[0];
+    if (!m) throw erro(404, 'Modelo não encontrado.');
+    const rede = (await c.query('SELECT texto FROM modelos_mensagem WHERE loja_id IS NULL AND chave = $1', [chave])).rows[0];
+    let texto = m.texto, personalizado = m.personalizado;
+    if (d.restaurar && rede) { texto = rede.texto; personalizado = false; }
+    else if (d.texto !== undefined && d.texto !== m.texto) {
+      if (m.da_rede && !m.permite_editar) throw erro(403, 'A rede não permite alterar o texto deste modelo. Você pode desligá-lo.');
+      texto = d.texto; personalizado = rede ? d.texto !== rede.texto : true;
+    }
+    await c.query('UPDATE modelos_mensagem SET texto = $3, personalizado = $4, desligado_loja = $5, ativo = $6 WHERE loja_id = $1 AND chave = $2',
+      [req.usuario.loja_id, chave, texto, personalizado, !d.ativo, d.ativo]);
+    await garantirModelos(c, req.usuario.loja_id); // se a rede desligou o modelo, continua desligado
   });
   res.json({ ok: true });
 }));

@@ -158,6 +158,12 @@ const real = {
   excluirTarefa: (id) => chamar('DELETE', `/crm/tarefas/${encodeURIComponent(id)}`),
   modelos: () => chamar('GET', '/crm/modelos'),
   salvarModelo: (chave, d) => chamar('PUT', `/crm/modelos/${encodeURIComponent(chave)}`, d),
+  // mensagens automáticas da rede (administração e matriz)
+  modelosRede: () => chamar('GET', '/admin/modelos'),
+  criarModeloRede: (d) => chamar('POST', '/admin/modelos', d),
+  salvarModeloRede: (chave, d) => chamar('PUT', `/admin/modelos/${encodeURIComponent(chave)}`, d),
+  restaurarModeloRede: (chave) => chamar('POST', `/admin/modelos/${encodeURIComponent(chave)}/restaurar`),
+  excluirModeloRede: (chave) => chamar('DELETE', `/admin/modelos/${encodeURIComponent(chave)}`),
   mensagemAtiva: (id, d) => chamar('POST', `/crm/contatos/${encodeURIComponent(id)}/mensagem`, d),
 
   // etapa 7 — funis, etiquetas, campos, painel do cliente e roleta

@@ -4,22 +4,41 @@ import { evolution } from '../canais/evolution.js';
 import { agoraBahia } from '../ia/assistente.js';
 
 export const MODELOS_PADRAO = {
-  lembrete_retirada: { nome: 'Lembrete de retirada', automatico: true, quando: 'Na véspera da retirada', texto: 'Olá, {nome}! Passando para lembrar que sua reserva {codigo} na {loja} tem retirada em {data_retirada} às {hora_retirada}. Traga CNH, documento com foto e cartão de crédito do condutor. Qualquer dúvida, é só responder aqui.' },
-  aviso_devolucao: { nome: 'Aviso de devolução', automatico: true, quando: 'No dia da devolução', texto: 'Olá, {nome}! Hoje é o dia da devolução do carro da reserva {codigo}, às {hora_devolucao}, na {loja}. Lembre-se de devolver com o mesmo nível de combustível. Boa viagem!' },
-  pesquisa_satisfacao: { nome: 'Pesquisa de satisfação', automatico: true, quando: 'No dia seguinte à devolução', texto: 'Olá, {nome}! Obrigado por alugar com a {loja}. De 0 a 10, quanto você recomendaria a LocarX para um amigo? Sua resposta ajuda muito a gente.' },
-  confirmacao_reserva: { nome: 'Confirmação de reserva', automatico: false, quando: 'Enviar manualmente', texto: 'Olá, {nome}! Sua reserva {codigo} na {loja} está confirmada: retirada em {data_retirada} às {hora_retirada}. O pagamento é feito na loja, na retirada.' },
-  retomar_cotacao: { nome: 'Retomar cotação', automatico: false, quando: 'Enviar manualmente', texto: 'Olá, {nome}! Ainda posso ajudar com a sua locação na {loja}? Se quiser, confirmo a disponibilidade e o valor para as suas datas.' },
-  contrato: { nome: 'Contrato', automatico: false, quando: 'Enviar manualmente', texto: 'Olá, {nome}! Aqui é da {loja}. Precisamos falar sobre o contrato da sua locação. Pode responder esta mensagem quando puder?' },
-  multa: { nome: 'Aviso de multa', automatico: false, quando: 'Enviar manualmente', texto: 'Olá, {nome}! Aqui é da {loja}. Recebemos uma notificação de multa referente à sua locação. Pode responder esta mensagem para tratarmos a indicação do condutor?' },
-  cobranca: { nome: 'Pagamento pendente', automatico: false, quando: 'Enviar manualmente', texto: 'Olá, {nome}! Aqui é da {loja}. Identificamos um valor pendente referente à sua locação. Pode responder esta mensagem para combinarmos?' },
+  lembrete_retirada: { nome: 'Lembrete de retirada', automatico: true, gatilho: 'retirada', horas: -24, texto: 'Olá, {nome}! Passando para lembrar que sua reserva {codigo} na {loja} tem retirada em {data_retirada} às {hora_retirada}. Traga CNH, documento com foto e cartão de crédito do condutor. Qualquer dúvida, é só responder aqui.' },
+  aviso_devolucao: { nome: 'Aviso de devolução', automatico: true, gatilho: 'devolucao', horas: -3, texto: 'Olá, {nome}! Hoje é o dia da devolução do carro da reserva {codigo}, às {hora_devolucao}, na {loja}. Lembre-se de devolver com o mesmo nível de combustível. Boa viagem!' },
+  pesquisa_satisfacao: { nome: 'Pesquisa de satisfação', automatico: true, gatilho: 'devolucao', horas: 24, texto: 'Olá, {nome}! Obrigado por alugar com a {loja}. De 0 a 10, quanto você recomendaria a LocarX para um amigo? Sua resposta ajuda muito a gente.' },
+  confirmacao_reserva: { nome: 'Confirmação de reserva', automatico: false, texto: 'Olá, {nome}! Sua reserva {codigo} na {loja} está confirmada: retirada em {data_retirada} às {hora_retirada}. O pagamento é feito na loja, na retirada.' },
+  retomar_cotacao: { nome: 'Retomar cotação', automatico: false, texto: 'Olá, {nome}! Ainda posso ajudar com a sua locação na {loja}? Se quiser, confirmo a disponibilidade e o valor para as suas datas.' },
+  contrato: { nome: 'Contrato', automatico: false, texto: 'Olá, {nome}! Aqui é da {loja}. Precisamos falar sobre o contrato da sua locação. Pode responder esta mensagem quando puder?' },
+  multa: { nome: 'Aviso de multa', automatico: false, texto: 'Olá, {nome}! Aqui é da {loja}. Recebemos uma notificação de multa referente à sua locação. Pode responder esta mensagem para tratarmos a indicação do condutor?' },
+  cobranca: { nome: 'Pagamento pendente', automatico: false, texto: 'Olá, {nome}! Aqui é da {loja}. Identificamos um valor pendente referente à sua locação. Pode responder esta mensagem para combinarmos?' },
 };
 
-export async function garantirModelos(c, lojaId) {
+/** Cria os padrões da rede (loja_id nulo) que ainda não existem. A administração edita; as lojas herdam. */
+export async function semearModelosRede(c) {
   for (const [chave, m] of Object.entries(MODELOS_PADRAO)) {
-    await c.query(`INSERT INTO modelos_mensagem (loja_id, chave, nome, texto, automatico) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (loja_id, chave) DO NOTHING`,
-      [lojaId, chave, m.nome, m.texto, m.automatico]);
+    await c.query(`INSERT INTO modelos_mensagem (loja_id, chave, nome, texto, automatico, gatilho, deslocamento_horas)
+      VALUES (NULL, $1, $2, $3, $4, $5, $6) ON CONFLICT (chave) WHERE loja_id IS NULL DO NOTHING`,
+      [chave, m.nome, m.texto, m.automatico, m.gatilho || null, m.horas || 0]);
   }
+}
+
+/** Leva os padrões da rede às lojas (uma loja, ou todas se lojaId for nulo). Texto que a loja personalizou é preservado. */
+export const sincronizarModelos = (c, lojaId = null) => c.query('SELECT sincronizar_modelos($1)', [lojaId]);
+
+export async function garantirModelos(c, lojaId) {
+  await sincronizarModelos(c, lojaId);
   return (await c.query('SELECT * FROM modelos_mensagem WHERE loja_id = $1 ORDER BY automatico DESC, nome', [lojaId])).rows;
+}
+
+/** "24 horas antes da retirada", "1 dia depois da devolução"… */
+export function quandoTexto(m) {
+  if (!m.automatico || !m.gatilho) return 'Enviar manualmente';
+  const alvo = m.gatilho === 'retirada' ? 'da retirada' : 'da devolução';
+  const h = Number(m.deslocamento_horas ?? m.horas ?? 0), a = Math.abs(h);
+  if (!a) return `No horário ${m.gatilho === 'retirada' ? 'da retirada' : 'da devolução'}`;
+  const un = a % 24 === 0 ? `${a / 24} ${a / 24 === 1 ? 'dia' : 'dias'}` : `${a} ${a === 1 ? 'hora' : 'horas'}`;
+  return `${un} ${h < 0 ? 'antes' : 'depois'} ${alvo}`;
 }
 
 export function preencherModelo(texto, vars) {
@@ -56,24 +75,28 @@ export async function rodarAutomacoes() {
         FROM oportunidades o JOIN contatos k ON k.id = o.contato_id JOIN etapas_funil e ON e.id = o.etapa_id AND e.evento = 'cotacao'
        WHERE o.fechada_em IS NULL AND o.atualizada_em < now() - interval '24 hours' AND o.atualizada_em > now() - interval '7 days'
          AND NOT EXISTS (SELECT 1 FROM tarefas t WHERE t.contato_id = o.contato_id AND t.automatica AND t.criada_em > o.atualizada_em)`);
-    // mensagens automáticas devidas
+    // padrões da rede chegam às lojas antes de procurar o que enviar
+    await sincronizarModelos(c, null);
+    // mensagens automáticas devidas: cada modelo automático tem um momento (horas antes/depois da retirada ou da devolução).
+    // Vale por até 36 h depois do momento (cobre o horário de silêncio); nas "antes", só enquanto o evento ainda não passou.
     return (await c.query(`
-      SELECT r.id AS reserva_id, r.codigo, r.retirada, r.devolucao, r.loja_id, k.telefone, k.nome, l.nome AS loja_nome, t.tipo, m.texto,
+      SELECT r.id AS reserva_id, r.codigo, r.retirada, r.devolucao, r.loja_id, k.telefone, k.nome, l.nome AS loja_nome, m.chave AS tipo, m.texto,
              a.silencio_inicio, a.silencio_fim, cn.instancia, cn.provedor, cn.status AS canal_status, cv.id AS conversa_id
-        FROM reservas r
+        FROM modelos_mensagem m
+        JOIN reservas r ON r.loja_id = m.loja_id
         JOIN contatos k ON k.id = r.contato_id AND NOT k.optout
         JOIN lojas l ON l.id = r.loja_id AND l.ativa
         JOIN canais cn ON cn.loja_id = r.loja_id
         LEFT JOIN assistentes a ON a.loja_id = r.loja_id
         LEFT JOIN conversas cv ON cv.contato_id = k.id
-        CROSS JOIN LATERAL (VALUES
-          ('lembrete_retirada', r.retirada BETWEEN now() + interval '10 hours' AND now() + interval '36 hours'),
-          ('aviso_devolucao', r.devolucao BETWEEN now() AND now() + interval '10 hours'),
-          ('pesquisa_satisfacao', r.devolucao BETWEEN now() - interval '30 hours' AND now() - interval '12 hours')
-        ) AS t(tipo, devido)
-        JOIN modelos_mensagem m ON m.loja_id = r.loja_id AND m.chave = t.tipo AND m.ativo
-       WHERE t.devido AND r.status NOT IN ('cancelada') AND r.codigo IS NOT NULL
-         AND NOT EXISTS (SELECT 1 FROM automacoes_enviadas e WHERE e.reserva_id = r.id AND e.tipo = t.tipo)
+        CROSS JOIN LATERAL (SELECT (CASE m.gatilho WHEN 'retirada' THEN r.retirada ELSE r.devolucao END) AS ref) x
+       WHERE m.loja_id IS NOT NULL AND m.automatico AND m.ativo AND m.gatilho IS NOT NULL
+         AND r.status NOT IN ('cancelada') AND r.codigo IS NOT NULL
+         AND x.ref + make_interval(hours => m.deslocamento_horas) <= now()
+         AND x.ref + make_interval(hours => m.deslocamento_horas) > now() - interval '36 hours'
+         AND (m.deslocamento_horas >= 0 OR x.ref > now())
+         AND NOT EXISTS (SELECT 1 FROM automacoes_enviadas e WHERE e.reserva_id = r.id AND e.tipo = m.chave)
+       ORDER BY x.ref
        LIMIT 100`)).rows;
   });
   for (const t of tarefas) {
@@ -96,8 +119,8 @@ export async function rodarAutomacoes() {
 }
 
 // ---------- mensagem automática ao entrar numa etapa do funil ----------
-// Modelos que a automação das reservas já envia sozinha: se a etapa usar um deles, não manda de novo para a mesma reserva.
-const MODELOS_DA_RESERVA = ['lembrete_retirada', 'aviso_devolucao', 'pesquisa_satisfacao'];
+// Modelos automáticos com momento definido (antes/depois da retirada ou devolução) a automação das reservas já envia sozinha:
+// se a etapa usar um deles, não manda de novo para a mesma reserva.
 /** Tira do texto os {campos} que não tinham valor (ex.: {codigo} quando o cliente não tem reserva) e arruma os espaços. */
 export const limparCamposVazios = (texto) => texto.replace(/\{[a-z_]+\}/g, '').replace(/[ \t]{2,}/g, ' ').replace(/ +([.,!?])/g, '$1').trim();
 
@@ -109,7 +132,7 @@ export const limparCamposVazios = (texto) => texto.replace(/\{[a-z_]+\}/g, '').r
  */
 export async function rodarMensagensDeEtapa() {
   const devidas = await comoSistema(async (c) => (await c.query(`
-    SELECT o.id AS op_id, o.etapa_id, o.loja_id, o.reserva_id, k.telefone, k.nome, l.nome AS loja_nome, m.texto, m.chave,
+    SELECT o.id AS op_id, o.etapa_id, o.loja_id, o.reserva_id, k.telefone, k.nome, l.nome AS loja_nome, m.texto, m.chave, (m.automatico AND m.gatilho IS NOT NULL) AS da_reserva,
            a.silencio_inicio, a.silencio_fim, cn.instancia, cv.id AS conversa_id, r.codigo, r.retirada, r.devolucao
       FROM oportunidades o
       JOIN etapas_funil e ON e.id = o.etapa_id AND e.modelo_chave IS NOT NULL AND e.mensagem_desde IS NOT NULL
@@ -132,7 +155,7 @@ export async function rodarMensagensDeEtapa() {
       const vale = await comoSistema(async (c) => {
         const n = (await c.query('INSERT INTO mensagens_de_etapa (oportunidade_id, etapa_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [t.op_id, t.etapa_id])).rowCount;
         if (!n) return false;
-        if (t.reserva_id && MODELOS_DA_RESERVA.includes(t.chave)) {
+        if (t.reserva_id && t.da_reserva) {
           return (await c.query('INSERT INTO automacoes_enviadas (reserva_id, tipo) VALUES ($1, $2) ON CONFLICT DO NOTHING', [t.reserva_id, t.chave])).rowCount > 0;
         }
         return true;

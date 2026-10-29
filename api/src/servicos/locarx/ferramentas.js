@@ -4,6 +4,7 @@ import { comoSistema } from '../../banco/conexao.js';
 import { buscarConhecimento } from '../ia/conhecimento.js';
 import * as locarx from './api-locarx.js';
 import { filialDaCentral, semAcento as semAcentoFilial } from './filiais.js';
+const ESTADOS = { AC: 'Acre', AL: 'Alagoas', AP: 'Amapá', AM: 'Amazonas', BA: 'Bahia', CE: 'Ceará', DF: 'Distrito Federal', ES: 'Espírito Santo', GO: 'Goiás', MA: 'Maranhão', MT: 'Mato Grosso', MS: 'Mato Grosso do Sul', MG: 'Minas Gerais', PA: 'Pará', PB: 'Paraíba', PR: 'Paraná', PE: 'Pernambuco', PI: 'Piauí', RJ: 'Rio de Janeiro', RN: 'Rio Grande do Norte', RS: 'Rio Grande do Sul', RO: 'Rondônia', RR: 'Roraima', SC: 'Santa Catarina', SP: 'São Paulo', SE: 'Sergipe', TO: 'Tocantins' };
 import { lojaDaFilial, ehCentral, avisarLojaDestino } from '../central.js';
 import { cifrar, decifrar } from '../seguranca.js';
 import { registrarEvento, regrasDaLoja, fecharOportunidade } from '../crm/funis.js';
@@ -87,16 +88,28 @@ export function ferramentasDaLoja(ctx) {
       parametros: { type: 'object', properties: { busca: { type: 'string', description: 'cidade, aeroporto ou nome (ex.: "Recife", "aeroporto de Salvador"). Vazio = lista de cidades' } } },
       executar: async ({ busca } = {}) => {
         const q = semAcentoFilial(busca);
+        const cidadesPorUf = () => {
+          const m = new Map();
+          for (const f of ctx.filiais) { const k = f.uf || '??'; if (!m.has(k)) m.set(k, new Set()); m.get(k).add(f.cidade); }
+          return [...m.entries()].sort().map(([uf, cs]) => `${ESTADOS[uf] || uf}: ${[...cs].sort().join(', ')}`);
+        };
         if (!q) {
-          const cidades = [...new Set(ctx.filiais.map((f) => `${f.cidade}/${f.uf}`))];
-          return { total_de_filiais: ctx.filiais.length, cidades: cidades.slice(0, 80), instrucao: 'Pergunte a cidade ao cliente e chame buscar_filiais com ela.' };
+          return { total_de_filiais: ctx.filiais.length, cidades_por_estado: cidadesPorUf().slice(0, 30), instrucao: 'Pergunte a cidade ao cliente e chame buscar_filiais com ela. Se precisar listar, mostre só as cidades do estado dele e dos vizinhos.' };
         }
-        const achadas = ctx.filiais.filter((f) => semAcentoFilial(`${f.cidade} ${f.uf} ${f.nome} ${f.tipo || ''}`).includes(q) || (q.includes('aeroporto') && /aeroporto/i.test(`${f.nome} ${f.tipo}`) && semAcentoFilial(f.cidade).split(' ').some((w) => w.length > 3 && q.includes(w))));
-        if (!achadas.length) return `Nenhuma filial encontrada para "${busca}". Confirme o nome da cidade com o cliente ou chame buscar_filiais sem busca para ver as cidades atendidas. Se a cidade não aparecer, avise que não há loja LocarX lá e use chamar_atendente se ele insistir.`;
+        const norm = (f) => ({ cidade: semAcentoFilial(f.cidade), uf: semAcentoFilial(f.uf), estado: semAcentoFilial(ESTADOS[f.uf] || ''), nome: semAcentoFilial(f.nome), tipo: semAcentoFilial(f.tipo || '') });
+        // 1) cidade exata; 2) estado (sigla ou nome); 3) qualquer parte (nome da filial, aeroporto…)
+        const cidadeExata = ctx.filiais.filter((f) => norm(f).cidade === q);
+        const porEstado = cidadeExata.length ? [] : ctx.filiais.filter((f) => { const n = norm(f); return n.uf === q || (n.estado && n.estado === q); });
+        const parcial = cidadeExata.length || porEstado.length ? [] : ctx.filiais.filter((f) => { const n = norm(f); return `${n.cidade} ${n.uf} ${n.nome} ${n.tipo}`.includes(q) || (q.includes('aeroporto') && /aeroporto/.test(`${n.nome} ${n.tipo}`) && n.cidade.split(' ').some((w) => w.length > 3 && q.includes(w))); });
+        const achadas = cidadeExata.length ? cidadeExata : porEstado.length ? porEstado : parcial;
+        if (!achadas.length) {
+          return { encontradas: 0, aviso: `Nenhuma filial em "${busca}".`, cidades_por_estado: cidadesPorUf().slice(0, 30),
+            instrucao: 'Não há loja LocarX nessa cidade. Pela geografia, sugira ao cliente a(s) cidade(s) atendida(s) mais próxima(s) (mesmo estado ou vizinho) e pergunte se serve. Se não servir, use chamar_atendente.' };
+        }
         return {
-          encontradas: achadas.length,
+          encontradas: achadas.length, busca_por: cidadeExata.length ? 'cidade' : porEstado.length ? 'estado' : 'nome',
           filiais: achadas.slice(0, 8).map((f) => ({ filial: f.nome, cidade: `${f.cidade}/${f.uf}`, tipo: f.portal?.tipo || f.tipo || null, endereco: f.portal?.endereco || null, horario_de_atendimento: f.portal?.horarios || null })),
-          instrucao: achadas.length > 1 ? 'Há mais de uma opção: mostre ao cliente e pergunte em qual retira. Depois use o nome exato em filial.' : 'Confirme com o cliente que é essa filial e use o nome exato em filial.',
+          instrucao: achadas.length > 1 ? 'Há mais de uma opção: mostre ao cliente (nome e cidade) e pergunte em qual retira. Depois use o nome exato em filial.' : 'Confirme com o cliente que é essa filial (diga a cidade dela) e use o nome exato em filial.',
         };
       },
     }] : []),

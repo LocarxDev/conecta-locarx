@@ -5,7 +5,7 @@ import { novoToken, hashToken } from './servicos/seguranca.js';
 import { emailConvite } from './servicos/email.js';
 import { criarApp } from './app.js';
 import { iniciarVarreduras } from './servicos/ia/assistente.js';
-import { iniciarAutomacoes } from './servicos/crm/modelos.js';
+import { iniciarAutomacoes, semearModelosRede, sincronizarModelos } from './servicos/crm/modelos.js';
 import { iniciarVarreduraPix } from './servicos/pagamentos/cobrancas.js';
 import { aplicarRegrasFunil } from './servicos/crm/funis.js';
 import { iniciarLimpezaSite } from './servicos/site/chat.js';
@@ -29,6 +29,8 @@ async function criarAdminInicial() {
 
 async function iniciar() {
   await migrar();
+  // padrões de mensagem da rede (uma vez) e cópia para as lojas; falha aqui não impede a API de subir
+  await comoSistema(async (c) => { await semearModelosRede(c); await sincronizarModelos(c, null); }).catch((e) => console.error('[inicio] modelos de mensagem:', e.message));
   await criarAdminInicial();
   iniciarVarreduras();
   iniciarAutomacoes();

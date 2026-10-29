@@ -42,10 +42,14 @@ test('buscar_filiais só existe na Central e acha por cidade, aeroporto e sem ac
   const aero = await t.executar({ busca: 'aeroporto de salvador' });
   assert.ok(aero.filiais.some((f) => /Aeroporto/.test(f.filial)));
   assert.equal((await t.executar({ busca: 'são luís' })).encontradas, 1);
-  assert.match(await t.executar({ busca: 'Atlantis' }), /Nenhuma filial encontrada/);
+  const nada = await t.executar({ busca: 'Atlantis' });
+  assert.equal(nada.encontradas, 0); assert.ok(nada.cidades_por_estado.some((x) => /Pernambuco: .*Recife/.test(x)));
+  // estado (sigla ou nome) lista as filiais dele; cidade exata vem antes de qualquer parecida
+  assert.equal((await t.executar({ busca: 'PE' })).busca_por, 'estado');
+  assert.equal((await t.executar({ busca: 'Pernambuco' })).encontradas, (await t.executar({ busca: 'PE' })).encontradas);
   const cidades = await t.executar({});
   assert.equal(cidades.total_de_filiais, 4);
-  assert.ok(cidades.cidades.includes('Recife/PE'));
+  assert.ok(cidades.cidades_por_estado.some((x) => /Recife/.test(x)));
 });
 
 test('Central: consultar sem filial escolhida pede a cidade e não assume a filial própria', async () => {
