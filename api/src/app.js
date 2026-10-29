@@ -17,6 +17,7 @@ import { crm } from './rotas/crm.js';
 import { personalizacaoLoja, personalizacaoRede } from './rotas/personalizacao.js';
 import { relatorioLoja, relatorioRede } from './rotas/relatorios.js';
 import { webhookAbacatePay, pagamentosLoja, pagamentosAdmin } from './rotas/pagamentos.js';
+import { site, siteAdmin, corsDoSite } from './rotas/site.js';
 
 export function criarApp() {
   const app = express();
@@ -42,6 +43,9 @@ export function criarApp() {
   // MCP (LocarX Tools): servidor-a-servidor, protegido por token próprio
   app.use('/api/mcp', express.json({ limit: '100kb' }), mcp);
 
+  // chat do site (widget no site da LocarX): público, sem cookies, com CORS e limites próprios
+  app.use('/api/site', corsDoSite, express.json({ limit: '20kb' }), site);
+
   app.use('/api', cors);
   app.use('/api', rateLimit({ windowMs: 60_000, limit: 900, standardHeaders: 'draft-7', legacyHeaders: false, message: { mensagem: 'Muitas requisições. Aguarde um minuto.' } }));
   app.use('/api', verificarOrigem);
@@ -64,7 +68,7 @@ export function criarApp() {
   app.use('/api/loja/relatorio', exigirModulo('relatorios'));
   app.use(['/api/loja/respostas', '/api/crm/modelos'], exigirModulo('automacoes'));
   app.use(['/api/loja/assistente', '/api/loja/perguntas'], exigirModulo('assistente'));
-  app.use('/api/admin', admin, equipeAdmin, rede, locarxAdmin, relatorioRede, personalizacaoRede, canalAdmin, pagamentosAdmin);
+  app.use('/api/admin', admin, equipeAdmin, rede, locarxAdmin, relatorioRede, personalizacaoRede, canalAdmin, pagamentosAdmin, siteAdmin);
   app.use('/api/loja', loja, equipeLoja, canal, respostas, assistente, reservas, relatorioLoja, pagamentosLoja);
   app.use('/api/crm', crm, personalizacaoLoja);
   app.use('/api/conhecimento', conhecimento);

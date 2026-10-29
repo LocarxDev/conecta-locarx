@@ -6,7 +6,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js';
 import { rota, erro, validar, zUuid, exigirPerfil, registrar } from '../http.js';
-import { garantirModelos } from '../servicos/crm/modelos.js';
+import { MODELOS_PADRAO, garantirModelos, semearModelosRede, sincronizarModelos, quandoTexto } from '../servicos/crm/modelos.js';
 import { zFunil, ETAPAS_NOVO_FUNIL, garantirFunil, listarFunis, salvarFunil, arquivarFunil, propagarPadrao, etapaPublica, zRegrasFunil, regrasDaLoja } from '../servicos/crm/funis.js';
 import {
   zEtiqueta, zCampo, etiquetaPublica, campoPublico, listarEtiquetas, listarCampos, chaveDoNome,
@@ -98,6 +98,104 @@ personalizacaoRede.put('/funil-padrao', rede, rota(async (req, res) => {
   const lojasAtualizadas = await comoSistema((c) => propagarPadrao(c, r.fid));
   const funil = await comContexto(ctx(req), async (c) => (await listarFunis(c, null))[0]);
   res.json({ funil, lojasAtualizadas });
+}));
+
+// =====================================================================
+// MENSAGENS AUTOMÁTICAS DA REDE (Padrões do CRM)
+// A administração cria e edita os modelos; cada loja recebe uma cópia, pode ligar/desligar e (se permitido) trocar o texto.
+// =====================================================================
+const zModeloRede = z.object({
+  nome: z.string().trim().min(2, 'Dê um nome ao modelo.').max(80),
+  texto: z.string().trim().min(2, 'Escreva o texto da mensagem.').max(1000),
+  automatico: z.boolean(),
+  gatilho: z.enum(['retirada', 'devolucao']).nullish(),
+  horas: z.number().int().min(-720).max(720).default(0),
+  ativo: z.boolean().default(true),
+  permiteEditar: z.boolean().default(true),
+}).superRefine((d, ctx) => {
+  if (d.automatico && !d.gatilho) ctx.addIssue({ code: 'custom', path: ['gatilho'], message: 'Escolha quando a mensagem é enviada.' });
+});
+const modeloRedePublico = (m, lojas) => ({
+  chave: m.chave, nome: m.nome, texto: m.texto, automatico: m.automatico, gatilho: m.gatilho || null, horas: m.deslocamento_horas,
+  ativo: m.ativo, permiteEditar: m.permite_editar, quando: quandoTexto(m), padrao: !!MODELOS_PADRAO[m.chave], textoPadrao: MODELOS_PADRAO[m.chave]?.texto || null,
+  lojas: lojas?.[m.chave] || { total: 0, personalizaram: 0, desligaram: 0 },
+});
+async function listarModelosRede(req) {
+  await comContexto(ctx(req), (c) => semearModelosRede(c));
+  const rows = await comContexto(ctx(req), async (c) => (await c.query('SELECT * FROM modelos_mensagem WHERE loja_id IS NULL ORDER BY automatico DESC, nome')).rows);
+  // só contagens: a administração não lê o conteúdo das lojas
+  const lojas = await comoSistema(async (c) => {
+    await sincronizarModelos(c, null);
+    const r = await c.query(`SELECT chave, count(*)::int AS total, count(*) FILTER (WHERE personalizado)::int AS personalizaram, count(*) FILTER (WHERE desligado_loja)::int AS desligaram
+      FROM modelos_mensagem WHERE loja_id IS NOT NULL AND da_rede GROUP BY chave`);
+    return Object.fromEntries(r.rows.map((x) => [x.chave, { total: x.total, personalizaram: x.personalizaram, desligaram: x.desligaram }]));
+  });
+  return rows.map((m) => modeloRedePublico(m, lojas));
+}
+
+personalizacaoRede.get('/modelos', rede, rota(async (req, res) => res.json(await listarModelosRede(req))));
+
+personalizacaoRede.post('/modelos', rede, rota(async (req, res) => {
+  const d = validar(zModeloRede, req.body);
+  await comContexto(ctx(req), async (c) => {
+    await semearModelosRede(c);
+    const n = (await c.query('SELECT count(*)::int AS n FROM modelos_mensagem WHERE loja_id IS NULL')).rows[0].n;
+    if (n >= 40) throw erro(409, 'Limite de 40 modelos na rede.');
+    const base = 'rede_' + chaveDoNome(d.nome).slice(0, 28);
+    let chave = base;
+    for (let i = 2; (await c.query('SELECT 1 FROM modelos_mensagem WHERE loja_id IS NULL AND chave = $1', [chave])).rowCount; i++) chave = `${base}_${i}`;
+    await c.query(`INSERT INTO modelos_mensagem (loja_id, chave, nome, texto, automatico, ativo, gatilho, deslocamento_horas, permite_editar)
+      VALUES (NULL, $1, $2, $3, $4, $5, $6, $7, $8)`,
+      [chave, d.nome, d.texto, d.automatico, d.ativo, d.automatico ? d.gatilho : null, d.automatico ? d.horas : 0, d.permiteEditar]);
+    await registrar(c, req, 'criou_modelo_rede', { detalhes: { chave } });
+  });
+  await comoSistema((c) => sincronizarModelos(c, null));
+  res.status(201).json(await listarModelosRede(req));
+}));
+
+personalizacaoRede.put('/modelos/:chave', rede, rota(async (req, res) => {
+  const chave = String(req.params.chave);
+  const d = validar(zModeloRede, req.body);
+  await comContexto(ctx(req), async (c) => {
+    await semearModelosRede(c);
+    const r = await c.query(`UPDATE modelos_mensagem SET nome = $2, texto = $3, automatico = $4, ativo = $5, gatilho = $6, deslocamento_horas = $7, permite_editar = $8
+      WHERE loja_id IS NULL AND chave = $1`,
+      [chave, d.nome, d.texto, d.automatico, d.ativo, d.automatico ? d.gatilho : null, d.automatico ? d.horas : 0, d.permiteEditar]);
+    if (!r.rowCount) throw erro(404, 'Modelo não encontrado.');
+    await registrar(c, req, 'editou_modelo_rede', { detalhes: { chave } });
+  });
+  await comoSistema((c) => sincronizarModelos(c, null));
+  res.json(await listarModelosRede(req));
+}));
+
+// volta o texto de um modelo da rede ao original do sistema (só os que já vêm com o sistema)
+personalizacaoRede.post('/modelos/:chave/restaurar', rede, rota(async (req, res) => {
+  const chave = String(req.params.chave), p = MODELOS_PADRAO[chave];
+  if (!p) throw erro(404, 'Só os modelos que vêm com o sistema têm texto original.');
+  await comContexto(ctx(req), async (c) => {
+    await c.query(`UPDATE modelos_mensagem SET nome = $2, texto = $3, automatico = $4, gatilho = $5, deslocamento_horas = $6 WHERE loja_id IS NULL AND chave = $1`,
+      [chave, p.nome, p.texto, p.automatico, p.gatilho || null, p.horas || 0]);
+    await registrar(c, req, 'restaurou_modelo_rede', { detalhes: { chave } });
+  });
+  await comoSistema((c) => sincronizarModelos(c, null));
+  res.json(await listarModelosRede(req));
+}));
+
+personalizacaoRede.delete('/modelos/:chave', rede, rota(async (req, res) => {
+  const chave = String(req.params.chave);
+  if (MODELOS_PADRAO[chave]) throw erro(409, 'Os modelos que vêm com o sistema não podem ser apagados. Desligue o modelo se não quiser usá-lo.');
+  const achou = await comContexto(ctx(req), async (c) => {
+    const r = await c.query('DELETE FROM modelos_mensagem WHERE loja_id IS NULL AND chave = $1', [chave]);
+    if (r.rowCount) await registrar(c, req, 'apagou_modelo_rede', { detalhes: { chave } });
+    return r.rowCount;
+  });
+  if (!achou) throw erro(404, 'Modelo não encontrado.');
+  // tira o modelo das lojas e das etapas de funil que o usavam
+  await comoSistema(async (c) => {
+    await c.query('UPDATE etapas_funil SET modelo_chave = NULL, mensagem_desde = NULL WHERE modelo_chave = $1', [chave]);
+    await c.query('DELETE FROM modelos_mensagem WHERE loja_id IS NOT NULL AND da_rede AND chave = $1', [chave]);
+  });
+  res.status(204).end();
 }));
 
 // =====================================================================

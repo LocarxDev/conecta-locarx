@@ -3,7 +3,7 @@
 // para o atendente revisar e, se quiser, reserva pela API com o mesmo resumo e confirmação do assistente.
 // A mesma peça aparece na tela Cotação (#/cotacao) e numa janela dentro da conversa (botão "Cotação").
 import { api } from '../api.js';
-import { html, render, $, $$, icone, avisar, abrirModal, comBotao, marcarErros, dadosDoForm, telefoneBr } from '../util.js';
+import { html, render, $, $$, icone, avisar, abrirModal, comBotao, marcarErros, dadosDoForm, telefoneBr, buscavel } from '../util.js';
 
 const reais = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }));
 const cambio = (c) => (c ? String(c).toLowerCase().replace('automatic', 'automático') : '—');
@@ -53,10 +53,14 @@ export function montarCotacao(alvo, { ctx, conversa = null, compacto = false, ao
   // franquia com mais de uma filial: escolher onde o cliente retira (a cotação, o preço e a reserva seguem a escolha)
   filiaisDaLoja().then((lista) => {
     if (lista.length < 2 || !form.isConnected) return;
-    const escolhida = inicial?.filial?.id || lista.find((f) => f.principal)?.id || lista[0].id;
+    // lista longa (Central de Reservas, rede inteira): nada é escolhido por padrão e dá para buscar por cidade
+    const longa = lista.length > 8;
+    const escolhida = inicial?.filial?.id || lista.find((f) => f.principal)?.id || (longa ? '' : lista[0].id);
+    const rotuloF = (f) => (longa && f.cidade ? `${f.cidade}/${f.uf} — ${f.nome}` : f.nome);
     const campo = document.createElement('div'); campo.className = 'campo campo-filial';
-    render(campo, html`<label for="filialId">Filial</label><select id="filialId" name="filialId">${lista.map((f) => html`<option value="${f.id}" ${f.id === escolhida ? 'selected' : ''}>${f.nome}</option>`)}</select>`);
+    render(campo, html`<label for="filialId">Filial</label><select id="filialId" name="filialId" ${longa ? 'required' : ''}>${longa && !escolhida ? html`<option value="" selected>Escolha a filial de retirada…</option>` : ''}${lista.map((f) => html`<option value="${f.id}" ${f.id === escolhida ? 'selected' : ''}>${rotuloF(f)}</option>`)}</select>`);
     $('.periodo-cotacao', form).prepend(campo);
+    buscavel($('#filialId', campo), { minimo: 8 });
     $('.acoes-form .sub', form).textContent = 'Retirada e devolução na filial escolhida. Os totais incluem a Proteção X e as taxas.';
     if (periodo && !periodo.filialId) periodo.filialId = escolhida;
   });
@@ -70,6 +74,7 @@ export function montarCotacao(alvo, { ctx, conversa = null, compacto = false, ao
     const dados = dadosDoForm(form);
     const erros = {};
     for (const [k, rotulo] of [['dataRetirada', 'Informe a data de retirada.'], ['horaRetirada', 'Informe a hora.'], ['dataDevolucao', 'Informe a data de devolução.'], ['horaDevolucao', 'Informe a hora.']]) if (!dados[k]) erros[k] = rotulo;
+    if (form.elements.filialId && !dados.filialId) erros.filialId = 'Escolha a filial de retirada.';
     if (!Object.keys(erros).length && `${dados.dataDevolucao}T${dados.horaDevolucao}` <= `${dados.dataRetirada}T${dados.horaRetirada}`) erros.dataDevolucao = 'A devolução precisa ser depois da retirada.';
     if (!marcarErros(form, erros)) return;
     comBotao($('#consultar', form), async () => {

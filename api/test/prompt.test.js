@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { montarSistema } from '../src/servicos/ia/assistente.js';
 
-const base = { loja: { nome: 'LocarX Salvador', cidade: 'Salvador', uf: 'BA' }, a: { nome: 'Lívia', instrucoes: '', boas_vindas: '' }, rede: {}, contato: { nome: 'Ana' }, historicoReservas: [], crm: null };
+const base = { loja: { nome: 'LocarX Salvador', cidade: 'Salvador', uf: 'BA' }, a: { nome: 'Lia', instrucoes: '', boas_vindas: '' }, rede: {}, contato: { nome: 'Ana' }, historicoReservas: [], crm: null };
 
 test('prompt: roteiro de reserva completo, na ordem', () => {
   const p = montarSistema(base);
@@ -97,4 +97,11 @@ test('prompt: proteção X ou Super X é obrigatória, seguro do cartão não su
   assert.match(p, /seguro do cartão não substitui/);
   assert.match(p, /Nunca escreva "sem proteção"/);
   assert.match(p, /Terceiros, Vidros e Vidros e Pneus são opcionais/);
+});
+
+test('prompt: regra de aplicativos (não aluga) e frota (atendente)', async () => {
+  const { montarSistema } = await import('../src/servicos/ia/assistente.js');
+  const t = montarSistema({ loja: { nome: 'LocarX Salvador', cidade: 'Salvador', uf: 'BA' }, a: { nome: 'Lia', instrucoes: '', boas_vindas: '' }, rede: {}, contato: { nome: 'Ana' }, historicoReservas: [], crm: null });
+  assert.match(t, /NÃO aluga para motoristas de aplicativo \(Uber, 99/);
+  assert.match(t, /FROTA.*chamar_atendente/);
 });

@@ -57,6 +57,9 @@ const real = {
   modulosCatalogo: () => chamar('GET', '/admin/modulos'),
   salvarModulosLoja: (id, modulos) => chamar('PATCH', `/admin/lojas/${encodeURIComponent(id)}`, { modulos }),
   pixProprioLoja: (id, pixProprio) => chamar('PATCH', `/admin/lojas/${encodeURIComponent(id)}`, { pixProprio }),
+  siteChat: () => chamar('GET', '/admin/site-chat'),
+  centralLoja: (id, central) => chamar('PUT', `/admin/lojas/${encodeURIComponent(id)}/central`, { central }),
+  siteChatLoja: (id, ativo) => chamar('PUT', `/admin/lojas/${encodeURIComponent(id)}/site-chat`, { ativo }),
   salvarChaveAbacatePay: (chave) => chamar('PUT', '/loja/pagamentos/chave', { chave }),
   removerChaveAbacatePay: () => chamar('DELETE', '/loja/pagamentos/chave'),
   listarEquipe: (lojaId) => chamar('GET', lojaId ? `/admin/lojas/${encodeURIComponent(lojaId)}/usuarios` : '/loja/usuarios'),
@@ -110,6 +113,8 @@ const real = {
 
   // etapa 4 — reservas e API LocarX
   reservas: (q) => chamar('GET', '/loja/reservas?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
+  centralInfo: () => chamar('GET', '/loja/central'),
+  relatorioCentral: (dias, destino) => chamar('GET', '/loja/relatorio/central?' + new URLSearchParams(Object.entries({ dias, destino }).filter(([, v]) => v))),
   atualizarReserva: (id) => chamar('POST', `/loja/reservas/${encodeURIComponent(id)}/atualizar`, {}),
   filiaisLocarx: () => chamar('GET', '/admin/locarx/filiais'),
   // filiais da franquia (várias filiais do portal num só WhatsApp)
@@ -153,6 +158,12 @@ const real = {
   excluirTarefa: (id) => chamar('DELETE', `/crm/tarefas/${encodeURIComponent(id)}`),
   modelos: () => chamar('GET', '/crm/modelos'),
   salvarModelo: (chave, d) => chamar('PUT', `/crm/modelos/${encodeURIComponent(chave)}`, d),
+  // mensagens automáticas da rede (administração e matriz)
+  modelosRede: () => chamar('GET', '/admin/modelos'),
+  criarModeloRede: (d) => chamar('POST', '/admin/modelos', d),
+  salvarModeloRede: (chave, d) => chamar('PUT', `/admin/modelos/${encodeURIComponent(chave)}`, d),
+  restaurarModeloRede: (chave) => chamar('POST', `/admin/modelos/${encodeURIComponent(chave)}/restaurar`),
+  excluirModeloRede: (chave) => chamar('DELETE', `/admin/modelos/${encodeURIComponent(chave)}`),
   mensagemAtiva: (id, d) => chamar('POST', `/crm/contatos/${encodeURIComponent(id)}/mensagem`, d),
 
   // etapa 7 — funis, etiquetas, campos, painel do cliente e roleta

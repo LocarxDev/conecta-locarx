@@ -9,6 +9,26 @@ export async function simularIa({ historico, ferramentas }) {
   if (/\bsuv\b/.test(t) && ferramentas.some((f) => f.nome === 'salvar_informacoes')) await usar('salvar_informacoes', { informacoes: { carro_desejado: 'SUV', motivo: /uber|99/.test(t) ? 'aplicativo' : undefined } });
   if (/\buber\b|\b99\b/.test(t) && ferramentas.some((f) => f.nome === 'aplicar_etiqueta')) await usar('aplicar_etiqueta', { etiquetas: ['Aplicativo'] });
   let texto;
+  // chat do site (só testes): reage aos componentes da tela
+  if (ferramentas.some((f) => f.nome === 'mostrar_na_tela')) {
+    const m = ultima.match(/data_retirada (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}); data_devolucao (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/);
+    if (m) {
+      const r = await usar('consultar_disponibilidade', { data_retirada: m[1], hora_retirada: m[2], data_devolucao: m[3], hora_devolucao: m[4] }).catch((x) => x.message);
+      texto = typeof r === 'string' ? r : 'Encontrei estas opções:';
+    } else if (/\[Escolhi o grupo/.test(ultima)) {
+      await usar('mostrar_na_tela', { tipo: 'botoes', opcoes: ['Proteção X', 'Super X'] });
+      texto = 'Boa escolha! Quer manter a Proteção X ou prefere a Super X?';
+    } else if (/reservar|atendente/.test(t) && ferramentas.some((f) => f.nome === 'escolher_loja')) {
+      await usar('mostrar_na_tela', { tipo: 'cadastro' });
+      texto = 'Para reservar, confirme seu WhatsApp com um código.';
+    } else if (/confirmei meu whatsapp/.test(t)) {
+      texto = 'Obrigada! Número confirmado. Vamos continuar de onde paramos.';
+    } else if (/cidade|loja/.test(t) && ferramentas.some((f) => f.nome === 'escolher_loja')) {
+      await usar('mostrar_na_tela', { tipo: 'lojas', cidade: 'Salvador' });
+      texto = 'Escolha a loja de retirada:';
+    } else texto = 'Posso ajudar com sua locação. Em qual cidade você quer retirar?';
+    return { texto, uso: { entrada: 100, saida: 30 }, usadas };
+  }
   const dadosCliente = { nome: 'Ana Paula Souza', cpf: '529.982.247-25', email: 'ana@exemplo.com' };
   if (/fechar/.test(t) && ferramentas.some((f) => f.nome === 'criar_reserva')) {
     const d = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10), e = new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10);

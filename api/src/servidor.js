@@ -5,9 +5,10 @@ import { novoToken, hashToken } from './servicos/seguranca.js';
 import { emailConvite } from './servicos/email.js';
 import { criarApp } from './app.js';
 import { iniciarVarreduras } from './servicos/ia/assistente.js';
-import { iniciarAutomacoes } from './servicos/crm/modelos.js';
+import { iniciarAutomacoes, semearModelosRede, sincronizarModelos } from './servicos/crm/modelos.js';
 import { iniciarVarreduraPix } from './servicos/pagamentos/cobrancas.js';
 import { aplicarRegrasFunil } from './servicos/crm/funis.js';
+import { iniciarLimpezaSite } from './servicos/site/chat.js';
 
 async function criarAdminInicial() {
   if (!config.adminInicial) return;
@@ -28,10 +29,13 @@ async function criarAdminInicial() {
 
 async function iniciar() {
   await migrar();
+  // padrões de mensagem da rede (uma vez) e cópia para as lojas; falha aqui não impede a API de subir
+  await comoSistema(async (c) => { await semearModelosRede(c); await sincronizarModelos(c, null); }).catch((e) => console.error('[inicio] modelos de mensagem:', e.message));
   await criarAdminInicial();
   iniciarVarreduras();
   iniciarAutomacoes();
   iniciarVarreduraPix();
+  if (config.site) iniciarLimpezaSite();
   // regras automáticas do funil (perdido sem resposta / concluído na retirada): a cada 10 min
   const funil = () => comoSistema(aplicarRegrasFunil).then((f) => { if (f.perdidas || f.concluidas) console.log(`[funil] automático: ${f.perdidas} perdida(s), ${f.concluidas} concluída(s)`); }).catch((e) => console.error('[funil] regras:', e.message));
   setTimeout(funil, 20_000); setInterval(funil, 10 * 60_000).unref();

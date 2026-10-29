@@ -55,7 +55,8 @@ async function conectarLoja(req, lojaId) {
   try {
     await p.criar(cn.instancia);
     const r = await p.qr(cn.instancia);
-    if (r.conectado) { await gravarStatus(lojaId, 'conectado'); return { status: 'conectado' }; }
+    if (r.conectado) { qrCache.delete(cn.instancia); await gravarStatus(lojaId, 'conectado'); return { status: 'conectado' }; }
+    guardarQr(cn.instancia, r.qr, r.codigo);
     await gravarStatus(lojaId, 'conectando');
     return { status: 'conectando', qr: r.qr, codigo: r.codigo };
   } catch (e) {
@@ -64,6 +65,12 @@ async function conectarLoja(req, lojaId) {
   }
 }
 
+// QR por instância (vem pelo webhook qrcode.updated ou da última chamada ao /instance/connect).
+// Chamar /instance/connect repetidamente enquanto a Evolution ainda está conectando reinicia o socket dela e
+// provoca a cascata "stream errored out" / 428 / 440 — então a tela só consulta o estado e reaproveita o QR guardado.
+const qrCache = new Map();
+const guardarQr = (instancia, qr, codigo = null) => { if (qr) qrCache.set(instancia, { qr, codigo, em: Date.now() }); };
+const QR_VALIDO_MS = 90_000, INTERVALO_CONNECT_MS = 20_000;
 async function qrDaLoja(req, lojaId) {
   exigirEvolution();
   const cn = await comoSistema((c) => lerCanal(c, lojaId));
@@ -72,9 +79,16 @@ async function qrDaLoja(req, lojaId) {
   try {
     const p = provedores[cn.provedor];
     const estado = await p.estado(cn.instancia);
-    if (estado === 'conectado') { await gravarStatus(lojaId, 'conectado'); return { status: 'conectado' }; }
+    if (estado === 'conectado') { qrCache.delete(cn.instancia); await gravarStatus(lojaId, 'conectado'); return { status: 'conectado' }; }
+    const g = qrCache.get(cn.instancia);
+    const recente = g && Date.now() - g.em < QR_VALIDO_MS;
+    // conectando (QR na tela ou pareamento em andamento): não mexe no socket; devolve o QR que já temos
+    if (estado === 'conectando' && recente) return { status: 'conectando', qr: g.qr, codigo: g.codigo };
+    if (estado === 'conectando' && g && Date.now() - g.em < QR_VALIDO_MS + INTERVALO_CONNECT_MS) return { status: 'conectando', qr: g.qr, codigo: g.codigo };
     const r = await p.qr(cn.instancia);
-    if (r.conectado) { await gravarStatus(lojaId, 'conectado'); return { status: 'conectado' }; }
+    if (r.conectado) { qrCache.delete(cn.instancia); await gravarStatus(lojaId, 'conectado'); return { status: 'conectado' }; }
+    guardarQr(cn.instancia, r.qr, r.codigo);
+    if (!r.qr && g) return { status: 'conectando', qr: g.qr, codigo: g.codigo };
     return { status: 'conectando', qr: r.qr, codigo: r.codigo };
   } catch (e) {
     console.error('[whatsapp] qr:', e.message);
@@ -87,7 +101,9 @@ async function desconectarLoja(req, lojaId) {
   const cn = await comoSistema((c) => lerCanal(c, lojaId));
   if (cn) {
     await provedores[cn.provedor].desconectar(cn.instancia).catch((e) => console.error('[whatsapp] desconectar:', e.message));
+    qrCache.delete(cn.instancia);
     await gravarStatus(lojaId, 'desconectado');
+    await comoSistema((c) => c.query('UPDATE canais SET numero = NULL WHERE loja_id = $1', [lojaId]));   // o próximo QR pode ser de outro número
     await comContexto(ctx(req), (c) => registrar(c, req, 'whatsapp_desconectar', { lojaId }));
   }
   return { status: 'desconectado' };
@@ -170,8 +186,15 @@ webhooks.post('/evolution/:segredo', rota(async (req, res) => {
   try {
     const cn = await comoSistema(async (c) => (await c.query('SELECT * FROM canais WHERE instancia = $1', [instancia])).rows[0]);
     if (!cn) return;
+    if (evento === 'qrcode.updated') {
+      const q = corpo.data?.qrcode || corpo.data || {};
+      const b64 = q.base64 || null;
+      guardarQr(instancia, b64 && (String(b64).startsWith('data:') ? b64 : `data:image/png;base64,${b64}`), q.pairingCode || null);
+      return;
+    }
     if (evento === 'connection.update') {
       const s = corpo.data?.state;
+      if (s === 'open') qrCache.delete(instancia);
       const status = s === 'open' ? 'conectado' : s === 'connecting' ? 'conectando' : 'desconectado';
       const numero = String(corpo.data?.wuid || corpo.sender || '').split('@')[0].replace(/\D/g, '') || null;
       await gravarStatus(cn.loja_id, status, status === 'conectado' ? numero : null);
@@ -194,7 +217,10 @@ export const previaDe = (tipo, texto) => (texto ? String(texto).slice(0, 140) : 
 
 const PALAVRAS_SAIR = /^\s*(parar|sair|stop|cancelar mensagens|não quero mais mensagens|nao quero mais mensagens)\s*[.!]?\s*$/i;
 
-async function registrarRecebida(lojaId, m) {
+// Registra uma mensagem do cliente (WhatsApp ou chat do site) no contato/conversa da loja.
+// opcoes.canal: por onde o cliente falou agora ('whatsapp' | 'site'); opcoes.semAgendar: o chamador agenda o assistente depois.
+export async function registrarRecebida(lojaId, m, opcoes = {}) {
+  const canalNovo = opcoes.canal === 'site' ? 'site' : 'whatsapp';
   const r = await comoSistema(async (c) => {
     if (m.externoId) {
       const ja = (await c.query('SELECT 1 FROM mensagens WHERE loja_id = $1 AND externo_id = $2', [lojaId, m.externoId])).rowCount;
@@ -210,9 +236,10 @@ async function registrarRecebida(lojaId, m) {
     const reabrir = entrada && (!anterior || anterior.estado === 'encerrada');
     const estadoNovo = reabrir ? await estadoInicial(c, lojaId) : null;
     const conversa = (await c.query(
-      `INSERT INTO conversas (loja_id, contato_id, estado, nao_lidas, ultima_previa, ultima_mensagem_em, ultima_do_cliente, humano_respondeu_em)
-       VALUES ($1, $2, coalesce($6::text, 'aguardando'), $3, $4, now(), CASE WHEN $5::boolean THEN now() END, CASE WHEN $5::boolean THEN NULL ELSE now() END)
+      `INSERT INTO conversas (loja_id, contato_id, estado, nao_lidas, ultima_previa, ultima_mensagem_em, ultima_do_cliente, humano_respondeu_em, canal)
+       VALUES ($1, $2, coalesce($6::text, 'aguardando'), $3, $4, now(), CASE WHEN $5::boolean THEN now() END, CASE WHEN $5::boolean THEN NULL ELSE now() END, $7)
        ON CONFLICT (loja_id, contato_id) DO UPDATE SET
+         canal = CASE WHEN $5::boolean THEN $7 ELSE conversas.canal END,
          nao_lidas = conversas.nao_lidas + $3,
          estado = CASE WHEN $6::text IS NOT NULL THEN $6::text
                        WHEN NOT $5::boolean AND conversas.estado = 'assistente' THEN 'humano'
@@ -223,8 +250,8 @@ async function registrarRecebida(lojaId, m) {
          humano_respondeu_em = CASE WHEN $5::boolean THEN conversas.humano_respondeu_em ELSE now() END,
          bot_respondeu_em = CASE WHEN $6::text IS NOT NULL THEN NULL ELSE conversas.bot_respondeu_em END,
          atualizada_em = now()
-       RETURNING id, estado, ausencia_enviada_em`,
-      [lojaId, contato.id, entrada ? 1 : 0, previaDe(m.tipo, m.texto), entrada, estadoNovo])).rows[0];
+       RETURNING id, estado, canal, ausencia_enviada_em`,
+      [lojaId, contato.id, entrada ? 1 : 0, previaDe(m.tipo, m.texto), entrada, estadoNovo, canalNovo])).rows[0];
     await c.query(
       `INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto, midia, externo_id, criada_em)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
@@ -249,11 +276,18 @@ async function registrarRecebida(lojaId, m) {
         ausencia = a.msg_ausencia;
       }
     }
-    return { conversa, ausencia };
+    return { conversa, ausencia, contatoId: contato.id };
   });
-  if (!r) return;
-  if (r.conversa.estado === 'assistente' && !m.deMim) agendar(r.conversa.id);
-  if (r.ausencia) await enviarAusencia(lojaId, r.conversa.id, m.telefone, r.ausencia).catch((e) => console.error('[ausencia]', e.message));
+  if (!r) return null;
+  if (r.conversa.estado === 'assistente' && !m.deMim && !opcoes.semAgendar) agendar(r.conversa.id, canalNovo === 'site' ? 1200 : undefined);
+  if (r.ausencia) {
+    if (canalNovo === 'site') {
+      await comoSistema((c) => c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto) VALUES ($1, $2, 'saida', 'assistente', 'texto', $3)`, [r.conversa.id, lojaId, r.ausencia]));
+    } else {
+      await enviarAusencia(lojaId, r.conversa.id, m.telefone, r.ausencia).catch((e) => console.error('[ausencia]', e.message));
+    }
+  }
+  return { conversaId: r.conversa.id, contatoId: r.contatoId, estado: r.conversa.estado };
 }
 
 async function enviarAusencia(lojaId, conversaId, telefone, texto) {

@@ -255,3 +255,31 @@ export function paginar(lista, pagina, porPagina, { rotulo = 'itens', extra = ''
 export function ligarPaginacao(area, aoMudar) {
   $$('[data-pag]', area).forEach((b) => b.addEventListener('click', () => aoMudar(Number(b.dataset.pag))));
 }
+
+// Lista longa de filiais (a Central tem a rede inteira): acrescenta uma caixa de busca por cidade/nome acima do <select>.
+// Só aparece com mais de `minimo` opções; as demais lojas continuam vendo a lista simples de sempre.
+const semAcentos = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+export function buscavel(select, { minimo = 8, rotulo = 'Buscar cidade ou filial…' } = {}) {
+  if (!select || select.dataset.buscavel || select.options.length <= minimo) return select;
+  select.dataset.buscavel = '1';
+  const todas = [...select.options].map((o) => ({ valor: o.value, texto: o.textContent, busca: semAcentos(o.textContent) }));
+  const caixa = document.createElement('input');
+  caixa.type = 'search'; caixa.className = 'busca-opcoes'; caixa.placeholder = rotulo; caixa.setAttribute('aria-label', rotulo); caixa.autocomplete = 'off';
+  select.before(caixa);
+  const montar = (lista, escolhido) => {
+    select.replaceChildren(...lista.map((o) => { const el = document.createElement('option'); el.value = o.valor; el.textContent = o.texto; el.selected = o.valor === escolhido; return el; }));
+  };
+  caixa.addEventListener('input', () => {
+    const q = semAcentos(caixa.value.trim());
+    const atual = select.value;
+    const achadas = todas.filter((o) => o.valor === '' || !q || o.busca.includes(q));
+    const reais = achadas.filter((o) => o.valor !== '');
+    // uma só opção: já escolhe; várias: mantém a escolha atual se ainda estiver na lista
+    const escolhido = reais.length === 1 ? reais[0].valor : (achadas.some((o) => o.valor === atual) ? atual : '');
+    montar(achadas, escolhido);
+    select.size = q && reais.length > 1 ? Math.min(reais.length + 1, 6) : 0;
+    if (select.value !== atual) select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  select.addEventListener('change', () => { select.size = 0; });
+  return select;
+}

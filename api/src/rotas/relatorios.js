@@ -5,6 +5,7 @@ import { config } from '../config.js';
 import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js';
 import { novoToken, hashToken } from '../servicos/seguranca.js';
 import { emailConvite } from '../servicos/email.js';
+import { nomesDasFiliais } from '../servicos/locarx/filiais.js';
 import { garantirFunil } from '../servicos/crm/funis.js';
 import { rota, erro, validar, zEmail, zNome, zUuid, exigirPerfil, registrar, usuarioPublico } from '../http.js';
 
@@ -75,6 +76,46 @@ relatorioLoja.get('/relatorio', exigirPerfil('dono'), rota(async (req, res) => {
        GROUP BY u.nome ORDER BY 2 DESC LIMIT 20`, [lojaId, dias])).rows,
   }));
   res.json({ dias, filial: filial || null, ...r.ind, porDia: r.porDia.map((d) => ({ dia: d.dia, conversas: Number(d.conversas), reservas: Number(d.reservas) })), perdas: r.perdas, semResposta: r.semResposta, equipe: r.equipe, grupos: r.grupos });
+}));
+
+// ---------- Central de Reservas: produtividade (por loja de destino e por atendente) ----------
+// Só a loja marcada como Central tem estes números. `destino` filtra por uma loja (uuid) ou por 'fora' (filial que não é loja do Conecta).
+relatorioLoja.get('/relatorio/central', exigirPerfil('dono'), rota(async (req, res) => {
+  const q = validar(zDias.extend({ destino: z.union([zUuid, z.literal('fora')]).optional() }), req.query);
+  const lojaId = req.usuario.loja_id;
+  const filtroDestino = q.destino === 'fora' ? 'AND r.loja_destino_id IS NULL' : q.destino ? 'AND r.loja_destino_id = $3::uuid' : '';
+  const params = q.destino && q.destino !== 'fora' ? [lojaId, q.dias, q.destino] : [lojaId, q.dias];
+  const base = `FROM reservas r WHERE r.loja_id = $1 AND r.status <> 'cancelada' AND r.criada_em >= now() - make_interval(days => $2) ${filtroDestino}`;
+  const out = await comContexto(ctx(req), async (c) => {
+    const eh = (await c.query('SELECT central FROM lojas WHERE id = $1', [lojaId])).rows[0]?.central;
+    if (!eh) return null;
+    const tot = (await c.query(`SELECT count(*)::int AS reservas, coalesce(sum(r.valor), 0)::numeric AS valor, count(*) FILTER (WHERE r.origem = 'assistente')::int AS pela_lia ${base}`, params)).rows[0];
+    const destinos = (await c.query(`SELECT r.loja_destino_id AS id, r.branch_id, count(*)::int AS reservas, coalesce(sum(r.valor), 0)::numeric AS valor
+        FROM reservas r WHERE r.loja_id = $1 AND r.status <> 'cancelada' AND r.criada_em >= now() - make_interval(days => $2) GROUP BY 1, 2`, [lojaId, q.dias])).rows;
+    const atendentes = (await c.query(`SELECT coalesce(u.nome, CASE WHEN r.origem = 'assistente' AND cv.atendente_id IS NULL THEN 'Assistente (Lia), sem atendente' ELSE 'Sem atendente registrado' END) AS nome,
+           count(*)::int AS reservas, coalesce(sum(r.valor), 0)::numeric AS valor, count(*) FILTER (WHERE r.origem = 'assistente')::int AS pela_lia
+        FROM reservas r LEFT JOIN conversas cv ON cv.id = r.conversa_id
+        LEFT JOIN usuarios u ON u.id = coalesce(nullif(r.detalhes->>'porUsuarioId', '')::uuid, cv.atendente_id)
+       WHERE r.loja_id = $1 AND r.status <> 'cancelada' AND r.criada_em >= now() - make_interval(days => $2) ${filtroDestino}
+       GROUP BY 1 ORDER BY 2 DESC, 3 DESC LIMIT 30`, params)).rows;
+    const nomesFiliais = await nomesDasFiliais(c, lojaId);
+    return { tot, destinos, atendentes, nomesFiliais };
+  });
+  if (!out) throw erro(404, 'Esta loja não é a Central de Reservas.');
+  const nomes = new Map((await comoSistema((c) => c.query('SELECT id, nome FROM lojas WHERE id = ANY($1::uuid[])', [out.destinos.map((d) => d.id).filter(Boolean)]))).rows.map((l) => [l.id, l.nome]));
+  // por loja de destino: lojas do Conecta agrupadas; filiais que não são loja do Conecta aparecem em um grupo só
+  const porLoja = new Map(); let fora = { reservas: 0, valor: 0 };
+  for (const d of out.destinos) {
+    if (d.id) { const a = porLoja.get(d.id) || { id: d.id, nome: nomes.get(d.id) || 'Loja', reservas: 0, valor: 0 }; a.reservas += d.reservas; a.valor += Number(d.valor); porLoja.set(d.id, a); }
+    else { fora.reservas += d.reservas; fora.valor += Number(d.valor); }
+  }
+  res.json({
+    dias: q.dias, destino: q.destino || null,
+    totais: { reservas: out.tot.reservas, valor: Number(out.tot.valor), pelaLia: out.tot.pela_lia },
+    porDestino: [...porLoja.values()].sort((a, b) => b.reservas - a.reservas || b.valor - a.valor),
+    foraDoConecta: fora,
+    porAtendente: out.atendentes.map((a) => ({ nome: a.nome, reservas: a.reservas, valor: Number(a.valor), pelaLia: a.pela_lia })),
+  });
 }));
 
 // ---------- rede ----------

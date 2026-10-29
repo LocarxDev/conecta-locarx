@@ -64,6 +64,9 @@ Uma chave da **rede** (conta do franqueador, que repassa às lojas). Desligado s
 - **Estorno/cancelamento:** sempre com atendente (API `POST /transparents/refund`, integral); o webhook `transparent.refunded` registra a ocorrência.
 - Sem CPF/telefone/e-mail nos logs; CPF do condutor fica cifrado na cobrança até a reserva ser criada.
 
+### Central de Reservas (uma loja que reserva em qualquer filial da rede)
+Lojas → loja → Dados da loja → **Central de Reservas** (só administração). A Central usa o próprio WhatsApp e a mesma chave da API LocarX, pergunta a cidade de retirada (ferramenta `buscar_filiais`, rede inteira do `GET /locality`, cache de 1 h) e reserva em qualquer filial. A reserva guarda `loja_destino_id`; a loja de retirada (se estiver no Conecta) recebe **tarefa + WhatsApp** e vê a reserva em **Reservas → Vindas da Central** (só leitura, só o nome do cliente). A Central pode transferir conversas para qualquer loja ativa. Com a Central ligada no chat do site, ela atende o site inteiro (cidades e filiais da rede). Guia completo: `claude/central-de-reservas.md` no projeto.
+
 ### Testes
 ```bash
 cd api && npm test
@@ -103,7 +106,7 @@ Tudo fica num projeto só do Railway, com 5 serviços: `Postgres`, `conecta-api`
 | `WEBHOOK_SEGREDO` | gere com `openssl rand -hex 32` |
 | `LOCARX_API_URL` | `https://api.locarx.com.br/api` (homologação: `https://portalhml.locarx.com.br/api`) |
 | `LOCARX_API_TOKEN` | token exclusivo do Conecta no portal LocarX |
-| `MCP_TOKEN` | opcional: gere com `openssl rand -hex 32` para outros sistemas (Lívia I.A., chat do site) consultarem o LocarX Tools |
+| `MCP_TOKEN` | opcional: gere com `openssl rand -hex 32` para outros sistemas (Lia I.A., chat do site) consultarem o LocarX Tools |
 
 No PowerShell, sem openssl: `[Convert]::ToBase64String((1..32 | % {[byte](Get-Random -Max 256)}))`
 
@@ -175,3 +178,6 @@ node --env-file=.env src/servidor.js
 - `IA_SIMULADA=1` usa uma IA de mentira (só fora de produção), para testar sem gastar créditos.
 - O front precisa estar no mesmo endereço da API (como no Netlify): sirva `web/` com um proxy que repasse `/api` para a porta 3000.
 - Demonstração sem servidor: troque `USAR_EXEMPLO` para `true` em `web/js/api.js`.
+
+## Mensagens automáticas da rede (Padrões do CRM)
+A administração/matriz cria e edita os modelos de mensagem (aba **Padrões do CRM → Mensagens automáticas**), com o momento do envio (horas/dias antes ou depois da retirada ou devolução). Cada loja recebe uma cópia, liga/desliga e, se permitido, troca o texto. Rotas: `/api/admin/modelos` (rede) e `/api/crm/modelos` (loja). Tabela `modelos_mensagem` com `loja_id` nulo = padrão da rede; função SQL `sincronizar_modelos`.

@@ -306,11 +306,11 @@ table.tabela { width: 100%; border-collapse: collapse; font-size: 14px; }
 
 /* detalhe da loja */
 .dados-grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 18px 24px; }
-.dado { display: grid; gap: 2px; min-width: 0; }
+.dado { display: grid; gap: 2px; min-width: 0; align-content: start; }
 .dado dt { font-size: 12.5px; color: var(--texto-3); }
 .dado dd { margin: 0; font-weight: 500; overflow-wrap: anywhere; }
 .filial-chip { display: inline-flex; gap: 8px; align-items: center; font-variant-numeric: tabular-nums; }
-.filial-chip code { font: 600 12px ui-monospace, "SFMono-Regular", Menlo, monospace; background: var(--superficie-2); padding: 2px 6px; border-radius: 4px; }
+.filial-chip code { white-space: nowrap; font: 600 12px ui-monospace, "SFMono-Regular", Menlo, monospace; background: var(--superficie-2); padding: 2px 6px; border-radius: 4px; }
 
 /* em breve */
 .em-breve { display: grid; gap: 20px; justify-items: start; padding: 32px; }
@@ -767,3 +767,24 @@ details[open] summary { margin-bottom: 10px; }
 .select-loja { border: 0; background: transparent; color: var(--texto); font: 700 15px var(--fonte-texto); padding: 0; max-width: 260px; cursor: pointer; }
 /* a lista aberta do seletor usa o fundo e o texto do tema (no escuro ficava branca com texto claro) */
 select option, select optgroup { background: var(--superficie); color: var(--texto); }
+
+/* busca dentro de listas longas de filiais (Central de Reservas) */
+.busca-opcoes { display: block; width: 100%; min-height: 36px; margin-bottom: 6px; padding: 0 10px; border-radius: var(--raio); border: 1px solid var(--borda-forte); background: var(--superficie); color: var(--texto); font: 500 13px var(--fonte-texto); }
+.busca-opcoes + .select-filial, .busca-opcoes + select { width: 100%; }
+.filtros .busca-opcoes, .painel-cab .busca-opcoes { width: 220px; margin: 0 6px 0 0; display: inline-block; }
+.campo-filial { min-width: 240px; }
+.campo-filial .busca-opcoes { margin-bottom: 6px; }
+/* lista longa (Central): a filial ocupa a linha inteira, com a busca ao lado do seletor */
+.form-linha .campo-filial { grid-column: 1 / -1; display: grid; grid-template-columns: 260px minmax(240px, 1fr); gap: 6px 8px; align-items: start; }
+.form-linha .campo-filial > label { grid-column: 1 / -1; }
+.form-linha .campo-filial .busca-opcoes { margin: 0; width: 100%; }
+.form-linha .campo-filial select { width: 100%; }
+@media (max-width: 640px) { .form-linha .campo-filial { grid-template-columns: 1fr; } }
+
+/* mensagens automáticas da rede */
+.painel-cab.sem-borda { border: 0; padding-left: 0; padding-right: 0; margin-top: 16px; }
+.texto-modelo { white-space: pre-wrap; margin: 0 0 8px; }
+.modelo-rede.inativo .texto-modelo { opacity: .6; }
+.modelo .bloqueado { margin: 0; }
+.linha-quando { display: grid; grid-template-columns: 5rem 1fr 1fr 1.3fr; gap: 8px; }
+@media (max-width: 520px) { .linha-quando { grid-template-columns: 1fr 1fr; } }

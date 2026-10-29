@@ -76,8 +76,13 @@ export const evolution = {
     return s === 'open' ? 'conectado' : s === 'connecting' ? 'conectando' : 'desconectado';
   },
 
+  // Desconectar = sair do WhatsApp E apagar a instância na Evolution. Só o logout deixa a sessão antiga guardada
+  // (e, se ela estiver corrompida ou em loop de reconexão, o QR para outro número não aparece). Apagando, o próximo
+  // "Conectar" recria a instância do zero e aceita qualquer número.
   async desconectar(instancia) {
-    await chamar('DELETE', `/instance/logout/${enc(instancia)}`).catch((e) => { if (e.status !== 404 && e.status !== 400) throw e; });
+    const ignorar = (e) => { if (![400, 404].includes(e.status)) throw e; };
+    await chamar('DELETE', `/instance/logout/${enc(instancia)}`).catch(ignorar);
+    await chamar('DELETE', `/instance/delete/${enc(instancia)}`).catch(ignorar);
   },
 
   async enviarTexto(instancia, telefone, texto) {

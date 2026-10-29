@@ -1,6 +1,6 @@
 // Personalização do CRM.
 // - Dono (#/personalizar): funis da loja, etiquetas e campos da loja (os da rede aparecem só para consulta).
-// - Administração e matriz (#/padroes): funil padrão, etiquetas e campos que valem para toda a rede.
+// - Administração e matriz (#/padroes): funil padrão, etiquetas, campos e mensagens automáticas que valem para toda a rede.
 import { api } from '../api.js';
 import { html, render, $, $$, icone, avisar, abrirModal, confirmar, comBotao, marcarErros, chipEtiqueta, seletorCor, CORES, preferencia } from '../util.js';
 
@@ -25,7 +25,7 @@ export async function montar(alvo, ctx) {
                   : 'Monte o funil de vendas da loja, as etiquetas dos clientes e as informações que o assistente anota na conversa.'}</p></div>
     </div>
     <div class="abas abas-pagina" role="tablist" aria-label="O que personalizar">
-      ${[['funis', rede ? 'Funil padrão' : 'Funis'], ['etiquetas', 'Etiquetas'], ['campos', 'Informações do cliente']].map(([v, t]) =>
+      ${[['funis', rede ? 'Funil padrão' : 'Funis'], ['etiquetas', 'Etiquetas'], ['campos', 'Informações do cliente'], ...(rede ? [['mensagens', 'Mensagens automáticas']] : [])].map(([v, t]) =>
         html`<button role="tab" data-aba="${v}" class="${aba === v ? 'ativa' : ''}" aria-selected="${aba === v}">${t}</button>`)}
     </div>
     <div id="aba-conteudo"></div>`);
@@ -34,10 +34,10 @@ export async function montar(alvo, ctx) {
   function trocar(nova) {
     aba = nova; preferencia.gravar('aba-personalizar', nova);
     $$('[data-aba]', alvo).forEach((b) => { b.classList.toggle('ativa', b.dataset.aba === nova); b.setAttribute('aria-selected', String(b.dataset.aba === nova)); });
-    ({ funis: rede ? funilPadrao : funisDaLoja, etiquetas, campos })[nova](area, { escopo, ctx });
+    ({ funis: rede ? funilPadrao : funisDaLoja, etiquetas, campos, mensagens })[nova](area, { escopo, ctx });
   }
   $$('[data-aba]', alvo).forEach((b) => b.addEventListener('click', () => trocar(b.dataset.aba)));
-  trocar(['funis', 'etiquetas', 'campos'].includes(aba) ? aba : 'funis');
+  trocar(['funis', 'etiquetas', 'campos', ...(rede ? ['mensagens'] : [])].includes(aba) ? aba : 'funis');
 }
 
 const carregando = (area) => render(area, html`<section class="painel"><div class="painel-corpo"><div class="esqueleto"></div></div></section>`);
@@ -322,6 +322,93 @@ function editarCampo(c, escopo, aoSalvar) {
         await api.salvarCampo(escopo, { id: c.id, nome: f.elements.nome.value.trim(), tipo, opcoes: tipo === 'lista' ? opcoes : [], instrucaoBot: f.elements.instrucaoBot.value.trim() || null, ativo: c.id ? f.elements.ativo.checked : true });
         m.fechar(); avisar('Campo salvo.'); aoSalvar();
       } catch (err) { if (err.campos) marcarErros(f, err.campos); else avisar(err.message, 'erro'); }
+    });
+  });
+}
+
+// =====================================================================
+// MENSAGENS AUTOMÁTICAS (só administração e matriz): modelos da rede, que as lojas herdam
+// =====================================================================
+const CAMPOS_MODELO = ['{nome}', '{loja}', '{codigo}', '{data_retirada}', '{hora_retirada}', '{data_devolucao}', '{hora_devolucao}'];
+
+async function mensagens(area, { ctx }) {
+  carregando(area);
+  let lista;
+  try { lista = await api.modelosRede(); } catch (err) { return falhou(area, err, ctx); }
+  const auto = lista.filter((m) => m.automatico), manuais = lista.filter((m) => !m.automatico);
+  const cartao = (m) => html`<section class="painel modelo-rede ${m.ativo ? '' : 'inativo'}">
+    <div class="painel-cab"><div><h2>${m.nome}${m.ativo ? '' : html` <span class="sub">(desligado)</span>`}</h2>
+      <span class="sub">${m.automatico ? html`${icone('robo')}Enviada ${m.quando.toLowerCase()}` : 'A equipe envia quando precisar'}${m.permiteEditar ? '' : ' · texto bloqueado para as lojas'}</span></div>
+      <div class="acoes-linha"><button class="btn btn-contorno" data-editar="${m.chave}">${icone('editar')}Editar</button>
+        ${m.padrao ? '' : html`<button class="btn btn-texto btn-icone" data-excluir="${m.chave}" aria-label="Excluir ${m.nome}">${icone('lixo')}</button>`}</div></div>
+    <div class="painel-corpo"><p class="texto-modelo">${m.texto}</p>
+      <p class="sub">${m.lojas.total} loja(s) usam este modelo${m.lojas.personalizaram ? ` · ${m.lojas.personalizaram} com texto próprio` : ''}${m.lojas.desligaram ? ` · ${m.lojas.desligaram} desligaram` : ''}</p></div></section>`;
+  render(area, html`
+    <div class="alerta-caixa info">${icone('info')}<span>Estes modelos valem para todas as lojas. Cada dono pode ligar ou desligar e, se você permitir, trocar o texto. Nada é enviado no horário de silêncio da loja nem para quem pediu para não receber.
+      Campos que o sistema preenche: ${CAMPOS_MODELO.join(', ')}.</span></div>
+    <div class="painel-cab sem-borda"><h2>Enviadas automaticamente</h2><button class="btn btn-primario" id="novo-modelo">${icone('mais')}Nova mensagem</button></div>
+    <div class="grade-modelos">${auto.length ? auto.map(cartao) : html`<div class="estado"><h3>Nenhuma mensagem automática</h3></div>`}</div>
+    <div class="painel-cab sem-borda"><h2>Modelos para a equipe</h2></div>
+    <p class="sub">Aparecem para a equipe das lojas enviar na conversa e podem ser usados nas etapas do funil.</p>
+    <div class="grade-modelos">${manuais.map(cartao)}</div>`);
+  const recarregar = () => mensagens(area, { ctx });
+  $('#novo-modelo', area).addEventListener('click', () => editarModeloRede({ automatico: true, gatilho: 'retirada', horas: -24, ativo: true, permiteEditar: true }, recarregar));
+  $$('[data-editar]', area).forEach((b) => b.addEventListener('click', () => editarModeloRede(lista.find((m) => m.chave === b.dataset.editar), recarregar)));
+  $$('[data-excluir]', area).forEach((b) => b.addEventListener('click', async () => {
+    const m = lista.find((x) => x.chave === b.dataset.excluir);
+    if (!(await confirmar({ titulo: `Excluir a mensagem "${m.nome}"?`, texto: 'Ela sai de todas as lojas e das etapas de funil que a usavam.', botao: 'Excluir', perigo: true }))) return;
+    try { await api.excluirModeloRede(m.chave); avisar('Mensagem excluída.'); recarregar(); } catch (err) { avisar(err.message, 'erro'); }
+  }));
+}
+
+function editarModeloRede(m, aoSalvar) {
+  const novo = !m.chave;
+  const h = Math.abs(m.horas || 0);
+  const unidadeInicial = h && h % 24 === 0 ? 'dias' : 'horas';
+  const qtdInicial = unidadeInicial === 'dias' ? h / 24 : h;
+  const sentido = (m.horas || 0) < 0 ? 'antes' : (m.horas || 0) > 0 ? 'depois' : 'antes';
+  const modal = abrirModal({
+    titulo: novo ? 'Nova mensagem' : `Editar · ${m.nome}`,
+    corpo: html`<form class="form" id="form-modelo" novalidate>
+      <div class="campo"><label for="mr-nome">Nome (só a equipe vê)</label><input id="mr-nome" name="nome" maxlength="80" value="${m.nome || ''}" placeholder="Ex.: Boas-vindas na retirada"></div>
+      <div class="campo"><label for="mr-texto">Texto da mensagem</label><textarea id="mr-texto" name="texto" rows="5" maxlength="1000">${m.texto || ''}</textarea>
+        <p class="ajuda">Campos: ${CAMPOS_MODELO.join(', ')}.</p></div>
+      <div class="campo"><label class="checkbox"><input type="checkbox" name="automatico" ${m.automatico ? 'checked' : ''}> Enviar automaticamente para o cliente da reserva</label></div>
+      <div class="campo" id="mr-quando"><span class="rotulo-campo">Quando enviar</span>
+        <div class="linha-quando">
+          <input type="number" name="qtd" min="0" max="30" value="${qtdInicial}" aria-label="Quantidade">
+          <select name="unidade" aria-label="Unidade"><option value="horas" ${unidadeInicial === 'horas' ? 'selected' : ''}>horas</option><option value="dias" ${unidadeInicial === 'dias' ? 'selected' : ''}>dias</option></select>
+          <select name="sentido" aria-label="Antes ou depois"><option value="antes" ${sentido === 'antes' ? 'selected' : ''}>antes</option><option value="depois" ${sentido === 'depois' ? 'selected' : ''}>depois</option></select>
+          <select name="gatilho" aria-label="De quê"><option value="retirada" ${m.gatilho !== 'devolucao' ? 'selected' : ''}>da retirada</option><option value="devolucao" ${m.gatilho === 'devolucao' ? 'selected' : ''}>da devolução</option></select>
+        </div>
+        <p class="ajuda">Vale para reservas com código. Se a hora cair no silêncio da loja, sai quando ele acabar.</p></div>
+      <div class="campo"><label class="checkbox"><input type="checkbox" name="ativo" ${m.ativo ? 'checked' : ''}> Ligado na rede</label></div>
+      <div class="campo"><label class="checkbox"><input type="checkbox" name="permiteEditar" ${m.permiteEditar ? 'checked' : ''}> Os donos podem mudar o texto</label></div>
+      ${m.padrao ? html`<button class="btn btn-texto" type="button" id="mr-restaurar">Restaurar o texto original do sistema</button>` : ''}</form>`,
+    rodape: html`<button class="btn btn-contorno" data-fechar>Cancelar</button><button class="btn btn-primario" type="submit" form="form-modelo">Salvar</button>`,
+  });
+  const f = $('#form-modelo', modal.el);
+  const quando = $('#mr-quando', modal.el);
+  const alternar = () => { quando.hidden = !f.elements.automatico.checked; };
+  f.elements.automatico.addEventListener('change', alternar); alternar();
+  const rest = $('#mr-restaurar', modal.el);
+  if (rest) rest.addEventListener('click', async () => {
+    if (!(await confirmar({ titulo: 'Restaurar o original?', texto: 'O nome, o texto e o horário voltam ao que vem com o sistema, para todas as lojas que não personalizaram.', botao: 'Restaurar' }))) return;
+    try { await api.restaurarModeloRede(m.chave); modal.fechar(); avisar('Modelo restaurado.'); aoSalvar(); } catch (err) { avisar(err.message, 'erro'); }
+  });
+  f.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const nome = f.elements.nome.value.trim(), texto = f.elements.texto.value.trim(), automatico = f.elements.automatico.checked;
+    const erros = {};
+    if (nome.length < 2) erros.nome = 'Dê um nome ao modelo.';
+    if (texto.length < 2) erros.texto = 'Escreva o texto da mensagem.';
+    if (!marcarErros(f, erros)) return;
+    const qtd = Math.max(0, Math.min(30, Math.floor(Number(f.elements.qtd.value) || 0))) * (f.elements.unidade.value === 'dias' ? 24 : 1);
+    const corpo = { nome, texto, automatico, ativo: f.elements.ativo.checked, permiteEditar: f.elements.permiteEditar.checked,
+      ...(automatico ? { gatilho: f.elements.gatilho.value, horas: f.elements.sentido.value === 'antes' ? -qtd : qtd } : {}) };
+    await comBotao($('[type=submit]', modal.el), async () => {
+      try { await (novo ? api.criarModeloRede(corpo) : api.salvarModeloRede(m.chave, corpo)); modal.fechar(); avisar('Mensagem salva. As lojas já recebem a mudança.'); aoSalvar(); }
+      catch (err) { if (err.campos) marcarErros(f, err.campos); else avisar(err.message, 'erro'); }
     });
   });
 }

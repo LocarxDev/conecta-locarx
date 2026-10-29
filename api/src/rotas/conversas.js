@@ -5,6 +5,7 @@ import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js
 import { evolution } from '../servicos/canais/evolution.js';
 import { rota, erro, validar, zUuid, exigirPerfil, registrar } from '../http.js';
 import { previaDe } from './whatsapp.js';
+import { visitanteAtivo } from '../servicos/site/presenca.js';
 
 export const conversas = Router();
 export const respostas = Router();
@@ -17,7 +18,7 @@ const cursor = (col) => CURSOR.replace('%s', col);
 
 function conversaPublica(r) {
   return {
-    id: r.id, estado: r.estado, naoLidas: r.nao_lidas, previa: r.ultima_previa,
+    id: r.id, estado: r.estado, canal: r.canal || 'whatsapp', naoLidas: r.nao_lidas, previa: r.ultima_previa,
     ultimaMensagemEm: r.ultima_mensagem_em, ultimaDoCliente: r.ultima_do_cliente,
     atendente: r.atendente_id ? { id: r.atendente_id, nome: r.atendente_nome } : null, atribuidaEm: r.atribuida_em || null,
     contato: { id: r.contato_id, nome: r.contato_nome, telefone: r.telefone },
@@ -29,7 +30,7 @@ function conversaPublica(r) {
 }
 function mensagemPublica(m) {
   return {
-    id: m.id, direcao: m.direcao, autor: m.autor, autorNome: m.autor_nome || null, tipo: m.tipo, texto: m.texto,
+    id: m.id, direcao: m.direcao, autor: m.autor, autorNome: m.autor_nome || null, tipo: m.tipo, texto: [m.texto, ...(Array.isArray(m.ui) ? m.ui.map((u) => u.fallback).filter(Boolean) : [])].filter(Boolean).join('\n\n') || m.texto,
     midia: m.midia ? { mimetype: m.midia.mimetype || null, nome: m.midia.nome || null, segundos: m.midia.segundos || null, lat: m.midia.lat ?? null, lng: m.midia.lng ?? null } : null,
     temArquivo: !!(m.externo_id && ['imagem', 'audio', 'video', 'documento', 'figurinha'].includes(m.tipo)),
     status: m.status, criadaEm: m.criada_em, cursor: m.cursor,
@@ -118,7 +119,7 @@ async function prepararEnvio(req, id) {
   return comContexto(ctx(req), async (c) => {
     const cv = await obterConversa(c, req, id);
     const canal = await canalDaConversa(c, cv);
-    if (!canal || canal.status !== 'conectado') throw erro(409, `O WhatsApp da loja${cv.loja_atendimento_id ? ' de origem (' + cv.loja_origem_nome + ')' : ''} está desconectado. Conecte em "WhatsApp" antes de responder.`);
+    if (cv.canal !== 'site' && (!canal || canal.status !== 'conectado')) throw erro(409, `O WhatsApp da loja${cv.loja_atendimento_id ? ' de origem (' + cv.loja_origem_nome + ')' : ''} está desconectado. Conecte em "WhatsApp" antes de responder.`);
     // quem responde assume a conversa
     if (cv.estado !== 'humano' || cv.atendente_id !== req.usuario.id) {
       if (cv.estado === 'humano' && cv.atendente_id && cv.atendente_id !== req.usuario.id && req.usuario.perfil !== 'dono') {
@@ -127,7 +128,9 @@ async function prepararEnvio(req, id) {
       await c.query(`UPDATE conversas SET estado = 'humano', atendente_id = $2, atualizada_em = now() WHERE id = $1`, [id, req.usuario.id]);
       await evento(c, cv, req, `${req.usuario.nome} assumiu a conversa`);
     }
-    return { cv, canal };
+    // conversa do chat do site com o visitante na tela: a resposta vai para o chat (sem WhatsApp); fora da tela, vai pelo WhatsApp
+    const soSite = cv.canal === 'site' && (!canal || canal.status !== 'conectado' || await visitanteAtivo(c, cv.id));
+    return { cv, canal, soSite };
   });
 }
 
@@ -154,8 +157,8 @@ export const assinar = (usuario, texto) => { const nome = String(usuario?.nome |
 conversas.post('/:id/mensagens', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
   const id = uuid(req.params.id);
   const { texto } = validar(z.object({ texto: z.string().trim().min(1, 'Escreva a mensagem.').max(4000, 'Mensagem muito longa (máx. 4.000 caracteres).') }), req.body);
-  const { cv, canal } = await prepararEnvio(req, id);
-  res.status(201).json(await finalizarEnvio(req, cv, { tipo: 'texto', texto, midia: null, enviar: () => provedores[canal.provedor].enviarTexto(canal.instancia, cv.telefone, assinar(req.usuario, texto)) }));
+  const { cv, canal, soSite } = await prepararEnvio(req, id);
+  res.status(201).json(await finalizarEnvio(req, cv, { tipo: 'texto', texto, midia: null, enviar: async () => (soSite ? null : provedores[canal.provedor].enviarTexto(canal.instancia, cv.telefone, assinar(req.usuario, texto))) }));
 }));
 
 // mídia: só tipos seguros, conferindo o conteúdo real do arquivo (não só a extensão)
@@ -182,7 +185,8 @@ conversas.post('/:id/midia', exigirPerfil('dono', 'atendente'), rota(async (req,
   const bytes = Buffer.from(d.base64, 'base64');
   if (!bytes.length || bytes.length > MAX_MIDIA) throw erro(422, 'Arquivo vazio ou maior que 8 MB.');
   if (!regra.assinatura.every((b, i) => bytes[i] === b)) throw erro(422, 'O conteúdo do arquivo não corresponde ao tipo informado.');
-  const { cv, canal } = await prepararEnvio(req, id);
+  const { cv, canal, soSite } = await prepararEnvio(req, id);
+  if (soSite && !canal) throw erro(409, 'Esta conversa é do chat do site e o WhatsApp da loja está desconectado: arquivos só podem ser enviados pelo WhatsApp.');
   const midia = { mimetype: d.mimetype, nome: d.nomeArquivo || null };
   res.status(201).json(await finalizarEnvio(req, cv, {
     tipo: regra.tipo, texto: d.legenda || null, midia,
@@ -263,6 +267,10 @@ conversas.post('/:id/devolver', exigirPerfil('dono', 'atendente'), rota(async (r
 // Só vão para lojas "irmãs": as que têm ao menos um dono em comum com a loja de quem transfere (dono principal ou vinculado em
 // "Vincular dono"). Devolver para a loja de origem da conversa é sempre permitido (checado na rota de transferir).
 export async function lojasIrmas(c, lojaId) {
+  // a Central de Reservas pode passar o atendimento para QUALQUER loja ativa da rede (a loja de destino só precisa ser avisada)
+  if ((await c.query('SELECT central FROM lojas WHERE id = $1', [lojaId])).rows[0]?.central) {
+    return (await c.query('SELECT id, nome, cidade, uf FROM lojas WHERE ativa AND id <> $1 AND NOT central ORDER BY cidade, nome', [lojaId])).rows;
+  }
   return (await c.query(
     `WITH donos AS (
        SELECT loja_id, id AS usuario_id FROM usuarios WHERE perfil = 'dono' AND status <> 'inativo' AND loja_id IS NOT NULL

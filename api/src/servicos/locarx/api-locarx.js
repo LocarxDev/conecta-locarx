@@ -206,6 +206,33 @@ export async function politicasDaFilial(branchId) {
   return dados;
 }
 
+// ---------- foto do grupo ----------
+// O portal manda a imagem do grupo (campo "image" no catálogo; aceitamos variações do nome por segurança).
+// Endereço relativo é completado com LOCARX_IMAGENS_BASE (ou o domínio da API). Só https.
+const CHAVES_FOTO = ['image', 'imageUrl', 'image_url', 'urlImage', 'photo', 'photoUrl', 'picture', 'pictureUrl', 'thumbnail', 'thumbnailUrl'];
+export function acharFoto(f) {
+  const candidatos = [f, ...(Array.isArray(f?.vehicleModels) ? f.vehicleModels : [])];
+  for (const o of candidatos) {
+    for (const k of CHAVES_FOTO) {
+      const v = o?.[k];
+      const t = typeof v === 'string' ? v.trim() : typeof v?.url === 'string' ? v.url.trim() : '';
+      if (!t) continue;
+      try {
+        const base = (process.env.LOCARX_IMAGENS_BASE || '').trim() || (config.locarx?.url ? new URL(config.locarx.url).origin : undefined);
+        const u = new URL(t, base);
+        if (u.protocol === 'https:') return u.toString();
+      } catch { /* endereço inválido: tenta o próximo */ }
+    }
+  }
+  return null;
+}
+const fotosVistas = new Map();      // fleetId → endereço (vindo da disponibilidade, quando o catálogo não traz)
+export async function fotoDoGrupo(fleetId) {
+  const id = String(fleetId);
+  const doCatalogo = (await catalogoFrotas().catch(() => [])).find((x) => String(x.fleetId) === id)?.foto;
+  return doCatalogo || fotosVistas.get(id) || null;
+}
+
 // ---------- catálogo de frotas (grupos) ----------
 // GET /fleets/catalog — todos os grupos, sem preço nem estoque. Muda pouco: cache de 1 hora.
 // Atenção às grafias do portal: transmitionType (catálogo) × transmissionType (disponibilidade).
@@ -216,7 +243,7 @@ export async function catalogoFrotas() {
     .filter((f) => !/DESATIVAD/i.test(f.name || ''))
     .map((f) => ({
       fleetId: f.fleetId, grupo: f.name, sipp: f.sippCode || null, portas: f.doors ?? null, passageiros: f.passengers ?? null, malas: f.baggages ?? null,
-      cambio: f.transmitionType || f.transmissionType || null, foto: f.image || null,
+      cambio: f.transmitionType || f.transmissionType || null, foto: acharFoto(f),
       exemplos: (f.vehicleModels || []).map((m) => [m.brand, m.model].filter(Boolean).join(' ')).filter(Boolean).join(', ') || null,
       categorias: [...new Set((f.vehicleModels || []).map((m) => m.category).filter(Boolean))],
       tipos: [...new Set((f.vehicleModels || []).map((m) => m.type).filter(Boolean))],
@@ -234,8 +261,11 @@ const dataHoraApi = (p) => `${p.date}T${p.time}:00`;
 
 function grupoDaApi(f, extras) {
   const pr = f.price || {};
+  const foto = acharFoto(f);
+  if (foto && f.fleetId != null) fotosVistas.set(String(f.fleetId), foto);
   return {
     fleetId: f.fleetId,
+    foto,
     priceFleetId: pr.priceFleetId ?? null,
     grupo: f.name,
     sipp: f.sipCode || f.sippCode || null,

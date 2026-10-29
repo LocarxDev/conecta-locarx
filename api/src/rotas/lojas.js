@@ -17,8 +17,10 @@ const esquemaLoja = z.object({
   nome: z.string().trim().min(2, 'Informe o nome da loja.').max(120),
   cidade: z.string().trim().min(2, 'Informe a cidade.').max(80),
   uf: z.enum(UFS, { errorMap: () => ({ message: 'Escolha o estado.' }) }),
-  branchId: z.coerce.number({ invalid_type_error: 'Use só números, ex.: 5.' }).int('Use só números, ex.: 5.').positive('Use só números, ex.: 5.').max(2_000_000_000),
-  branchCode: z.string().trim().toUpperCase().regex(/^[A-Z0-9]{2,6}$/, 'Use de 2 a 6 letras ou números, ex.: SSA1.'),
+  // a Central de Reservas não tem filial própria no portal (reserva em todas); as demais lojas continuam exigindo
+  central: z.boolean().optional(),
+  branchId: z.preprocess((v) => (v === '' || v == null ? undefined : v), z.coerce.number({ invalid_type_error: 'Use só números, ex.: 5.' }).int('Use só números, ex.: 5.').positive('Use só números, ex.: 5.').max(2_000_000_000).optional()),
+  branchCode: z.preprocess((v) => (v === '' || v == null ? undefined : v), z.string().trim().toUpperCase().regex(/^[A-Z0-9]{2,6}$/, 'Use de 2 a 6 letras ou números, ex.: SSA1.').optional()),
   tipo: z.enum(['Cidade', 'Aeroporto']).default('Cidade'),
 });
 
@@ -68,25 +70,37 @@ admin.get('/lojas/:id', exigirPerfil('admin', 'matriz'), rota(async (req, res) =
 async function salvar(req, res, id) {
   const d = validar(esquemaLoja, req.body);
   const salva = await comContexto(ctx(req), async (c) => {
-    const repetida = (await c.query('SELECT nome FROM lojas WHERE branch_id = $1 AND id IS DISTINCT FROM $2', [d.branchId, id || null])).rows[0];
-    if (repetida) throw erro(422, 'Confira os campos destacados.', { branchId: `Esta filial já está ligada à loja ${repetida.nome}.` });
+    let central = !!d.central;
+    if (id && d.central === undefined) central = !!(await c.query('SELECT central FROM lojas WHERE id = $1', [id])).rows[0]?.central;
+    const temFilial = d.branchId != null;
+    if (!central && (!temFilial || !d.branchCode)) {
+      throw erro(422, 'Confira os campos destacados.', { ...(temFilial ? {} : { branchId: 'Use só números, ex.: 5.' }), ...(d.branchCode ? {} : { branchCode: 'Use de 2 a 6 letras ou números, ex.: SSA1.' }) });
+    }
+    if (temFilial) {
+      const repetida = (await c.query('SELECT nome FROM lojas WHERE branch_id = $1 AND id IS DISTINCT FROM $2', [d.branchId, id || null])).rows[0];
+      if (repetida) throw erro(422, 'Confira os campos destacados.', { branchId: `Esta filial já está ligada à loja ${repetida.nome}.` });
+    }
     let l;
     if (id) {
       l = (await c.query(
         `UPDATE lojas SET nome = $2, cidade = $3, uf = $4, branch_id = $5, branch_code = $6, tipo = $7 WHERE id = $1 RETURNING *`,
-        [id, d.nome, d.cidade, d.uf, d.branchId, d.branchCode, d.tipo])).rows[0];
+        [id, d.nome, d.cidade, d.uf, temFilial ? d.branchId : null, temFilial ? d.branchCode || null : null, d.tipo])).rows[0];
       if (!l) throw erro(404, 'Loja não encontrada.');
     } else {
       l = (await c.query(
-        `INSERT INTO lojas (nome, cidade, uf, branch_id, branch_code, tipo) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-        [d.nome, d.cidade, d.uf, d.branchId, d.branchCode, d.tipo])).rows[0];
+        `INSERT INTO lojas (nome, cidade, uf, branch_id, branch_code, tipo, central) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+        [d.nome, d.cidade, d.uf, temFilial ? d.branchId : null, temFilial ? d.branchCode || null : null, d.tipo, central])).rows[0];
     }
-    // a filial principal acompanha lojas.branch_id
-    const outra = (await c.query('SELECT loja_id FROM filiais WHERE branch_id = $1 AND loja_id <> $2', [d.branchId, l.id])).rows[0];
-    if (outra) throw erro(422, 'Confira os campos destacados.', { branchId: 'Esta filial já pertence a outra loja.' });
-    await c.query('UPDATE filiais SET principal = false WHERE loja_id = $1 AND principal AND branch_id <> $2', [l.id, d.branchId]);
-    await c.query(`INSERT INTO filiais (loja_id, branch_id, nome, principal) VALUES ($1, $2, $3, true)
-                   ON CONFLICT (branch_id) DO UPDATE SET principal = true, ativa = true, nome = CASE WHEN filiais.loja_id = EXCLUDED.loja_id THEN filiais.nome ELSE EXCLUDED.nome END`, [l.id, d.branchId, d.nome.slice(0, 60)]);
+    if (temFilial) {
+      // a filial principal acompanha lojas.branch_id
+      const outra = (await c.query('SELECT loja_id FROM filiais WHERE branch_id = $1 AND loja_id <> $2', [d.branchId, l.id])).rows[0];
+      if (outra) throw erro(422, 'Confira os campos destacados.', { branchId: 'Esta filial já pertence a outra loja.' });
+      await c.query('UPDATE filiais SET principal = false WHERE loja_id = $1 AND principal AND branch_id <> $2', [l.id, d.branchId]);
+      await c.query(`INSERT INTO filiais (loja_id, branch_id, nome, principal) VALUES ($1, $2, $3, true)
+                     ON CONFLICT (branch_id) DO UPDATE SET principal = true, ativa = true, nome = CASE WHEN filiais.loja_id = EXCLUDED.loja_id THEN filiais.nome ELSE EXCLUDED.nome END`, [l.id, d.branchId, d.nome.slice(0, 60)]);
+    } else {
+      await c.query('UPDATE filiais SET principal = false WHERE loja_id = $1 AND principal', [l.id]);   // Central sem filial própria: nenhuma é "principal"
+    }
     await registrar(c, req, id ? 'editou_loja' : 'criou_loja', { alvo: l.id, lojaId: l.id, detalhes: d });
     return l;
   });

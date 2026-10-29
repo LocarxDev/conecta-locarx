@@ -2,7 +2,7 @@
 // Loja (dono): os próprios pagamentos no período, com totais e CSV para pedir o repasse.
 // Rede (administração e matriz): por loja, com totais e CSV. Só números e códigos de reserva — sem CPF.
 import { api } from '../api.js';
-import { html, render, $, $$, icone, avisar, comBotao, marcarErros, paginar, ligarPaginacao } from '../util.js';
+import { html, render, $, $$, icone, avisar, comBotao, marcarErros, paginar, ligarPaginacao, buscavel } from '../util.js';
 
 const reais = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const dataHora = (iso) => (iso ? new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—');
@@ -67,6 +67,7 @@ function tabela(itens, { comLoja }) {
 
 function ligarFiltros(alvo, p, aoMudar) {
   const f = $('#filtro-periodo', alvo);
+  if (f.elements.filial) buscavel(f.elements.filial);
   const filialSel = () => (f.elements.filial ? f.elements.filial.value || undefined : p.filial);
   f.addEventListener('submit', (e) => { e.preventDefault(); aoMudar({ de: f.elements.de.value || p.de, ate: f.elements.ate.value || p.ate, filial: filialSel() }); });
   f.elements.filial?.addEventListener('change', () => aoMudar({ ...p, filial: filialSel() }));
