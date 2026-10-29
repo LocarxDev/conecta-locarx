@@ -41,7 +41,8 @@ async function gravarStatus(lojaId, status, numero) {
     if (!antes || antes.status === status) return null;
     await c.query('INSERT INTO canais_eventos (loja_id, instancia, de, para) VALUES ($1, $2, $3, $4)', [lojaId, antes.instancia, antes.status, status]);
     await c.query("DELETE FROM canais_eventos WHERE criado_em < now() - interval '30 days'");   // retenção
-    const n = (await c.query(`SELECT count(*)::int AS n FROM canais_eventos WHERE loja_id = $1 AND criado_em > now() - make_interval(mins => $2)`, [lojaId, LOOP_JANELA_MIN])).rows[0].n;
+    // conta só a instância atual: "Desconectar"/"Trocar número" passam a loja para uma instância nova e zeram a contagem
+    const n = (await c.query(`SELECT count(*)::int AS n FROM canais_eventos WHERE loja_id = $1 AND instancia = $3 AND criado_em > now() - make_interval(mins => $2)`, [lojaId, LOOP_JANELA_MIN, antes.instancia])).rows[0].n;
     if (n > LOOP_MUDANCAS && !(antes.instavel_ate && new Date(antes.instavel_ate) > new Date())) {
       await c.query(`UPDATE canais SET instavel_ate = now() + make_interval(mins => $2) WHERE loja_id = $1`, [lojaId, INSTAVEL_MIN]);
       const loja = (await c.query('SELECT nome FROM lojas WHERE id = $1', [lojaId])).rows[0];
@@ -168,7 +169,8 @@ async function desconectarLoja(req, lojaId, acao = 'whatsapp_desconectar') {
   qrCache.delete(cn.instancia);
   const nova = `${nomeInstancia(lojaId)}-${Date.now().toString(36)}`;
   await comoSistema((c) => c.query(
-    `UPDATE canais SET instancia = $2, status = 'desconectado', numero = NULL, atualizado_em = now() WHERE loja_id = $1`, [lojaId, nova]));
+    // instância nova = começa estável (a trava era da instância antiga, que agora é ignorada)
+    `UPDATE canais SET instancia = $2, status = 'desconectado', numero = NULL, instavel_ate = NULL, atualizado_em = now() WHERE loja_id = $1`, [lojaId, nova]));
   await gravarStatus(lojaId, 'desconectado');
   await comContexto(ctx(req), (c) => registrar(c, req, acao, {
     lojaId, detalhes: { numeroAnterior: cn.numero || null, instanciaAnterior: cn.instancia, apagadaNaEvolution: r.apagada },
