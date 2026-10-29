@@ -96,22 +96,43 @@ async function qrDaLoja(req, lojaId) {
   }
 }
 
-async function desconectarLoja(req, lojaId) {
+// Desconectar = apagar a instância na Evolution E passar a loja para uma instância nova (nome novo).
+// Por que o nome novo: uma sessão presa (loop de reconexão) às vezes não sai da Evolution e continua mandando
+// "conectado" pelo webhook — o Conecta voltava a mostrar o número antigo e o próximo "Conectar" religava o mesmo
+// número sem QR. Com o nome novo, o webhook da instância antiga é ignorado (não acha canal) e o próximo QR é de
+// uma instância limpa, que aceita qualquer número.
+async function desconectarLoja(req, lojaId, acao = 'whatsapp_desconectar') {
   exigirEvolution();
   const cn = await comoSistema((c) => lerCanal(c, lojaId));
-  if (cn) {
-    await provedores[cn.provedor].desconectar(cn.instancia).catch((e) => console.error('[whatsapp] desconectar:', e.message));
-    qrCache.delete(cn.instancia);
-    await gravarStatus(lojaId, 'desconectado');
-    await comoSistema((c) => c.query('UPDATE canais SET numero = NULL WHERE loja_id = $1', [lojaId]));   // o próximo QR pode ser de outro número
-    await comContexto(ctx(req), (c) => registrar(c, req, 'whatsapp_desconectar', { lojaId }));
-  }
-  return { status: 'desconectado' };
+  if (!cn) return { status: 'desconectado' };
+  const r = await provedores[cn.provedor].desconectar(cn.instancia)
+    .catch((e) => ({ apagada: false, erro: e.message }));
+  if (!r.apagada) console.error('[whatsapp] desconectar: instância antiga não saiu da Evolution:', cn.instancia, r.erro);
+  qrCache.delete(cn.instancia);
+  const nova = `${nomeInstancia(lojaId)}-${Date.now().toString(36)}`;
+  await comoSistema((c) => c.query(
+    `UPDATE canais SET instancia = $2, status = 'desconectado', numero = NULL, atualizado_em = now() WHERE loja_id = $1`, [lojaId, nova]));
+  await gravarStatus(lojaId, 'desconectado');
+  await comContexto(ctx(req), (c) => registrar(c, req, acao, {
+    lojaId, detalhes: { numeroAnterior: cn.numero || null, instanciaAnterior: cn.instancia, apagadaNaEvolution: r.apagada },
+  }));
+  return {
+    status: 'desconectado',
+    ...(r.apagada ? {} : { aviso: 'O número foi desligado do Conecta, mas a sessão antiga não saiu do servidor do WhatsApp. Para garantir, no celular desse número abra WhatsApp → Dispositivos conectados e desconecte o aparelho.' }),
+  };
+}
+
+// Trocar número: desconecta (como acima) e já devolve o QR de uma instância nova, para o celular do número novo ler.
+async function trocarNumero(req, lojaId) {
+  const d = await desconectarLoja(req, lojaId, 'whatsapp_trocar_numero');
+  const r = await conectarLoja(req, lojaId);
+  return { ...r, ...(d.aviso ? { aviso: d.aviso } : {}) };
 }
 
 canal.post('/canal/conectar', exigirPerfil('dono'), rota(async (req, res) => res.json(await conectarLoja(req, req.usuario.loja_id))));
 canal.get('/canal/qr', exigirPerfil('dono'), rota(async (req, res) => res.json(await qrDaLoja(req, req.usuario.loja_id))));
 canal.post('/canal/desconectar', exigirPerfil('dono'), rota(async (req, res) => res.json(await desconectarLoja(req, req.usuario.loja_id))));
+canal.post('/canal/trocar-numero', exigirPerfil('dono'), rota(async (req, res) => res.json(await trocarNumero(req, req.usuario.loja_id))));
 
 // =====================================================================
 // Administração: status do WhatsApp de todas as lojas (Evolution no ar, instância por loja,
@@ -172,6 +193,7 @@ canalAdmin.get('/whatsapp', exigirPerfil('admin', 'matriz'), rota(async (req, re
 canalAdmin.post('/whatsapp/:lojaId/conectar', exigirPerfil('admin'), rota(async (req, res) => res.json(await conectarLoja(req, await lojaValida(req.params.lojaId)))));
 canalAdmin.get('/whatsapp/:lojaId/qr', exigirPerfil('admin'), rota(async (req, res) => res.json(await qrDaLoja(req, await lojaValida(req.params.lojaId)))));
 canalAdmin.post('/whatsapp/:lojaId/desconectar', exigirPerfil('admin'), rota(async (req, res) => res.json(await desconectarLoja(req, await lojaValida(req.params.lojaId)))));
+canalAdmin.post('/whatsapp/:lojaId/trocar-numero', exigirPerfil('admin'), rota(async (req, res) => res.json(await trocarNumero(req, await lojaValida(req.params.lojaId)))));
 
 // =====================================================================
 // Webhook da Evolution — sem login; protegido por segredo longo na URL

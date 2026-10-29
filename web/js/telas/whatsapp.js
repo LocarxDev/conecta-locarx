@@ -33,7 +33,7 @@ export async function montar(alvo, ctx) {
             </div>
             ${!c.configurado ? html`<div class="alerta-caixa info">${icone('info')}<span>O servidor do WhatsApp ainda não foi configurado. Fale com a administração do Conecta.</span></div>` : ''}
             <div>${conectado
-              ? html`<button class="btn btn-perigo" id="desconectar">Desconectar número</button>`
+              ? html`<div class="acoes-linha"><button class="btn btn-contorno" id="trocar">Trocar de número</button><button class="btn btn-perigo" id="desconectar">Desconectar número</button></div>`
               : html`<button class="btn btn-primario" id="conectar" ${c.configurado ? '' : 'disabled'}>${icone('whatsapp')}Conectar WhatsApp</button>`}</div>
           </div>
         </section>
@@ -50,6 +50,7 @@ export async function montar(alvo, ctx) {
       </div>`);
     $('#conectar', area)?.addEventListener('click', (e) => comBotao(e.currentTarget, conectar));
     $('#desconectar', area)?.addEventListener('click', desconectar);
+    $('#trocar', area)?.addEventListener('click', (e) => trocar(e.currentTarget));
   }
 
   function desenharQr(r) {
@@ -85,18 +86,24 @@ export async function montar(alvo, ctx) {
     espera = setTimeout(acompanhar, 3000);
   }
 
-  async function conectar() {
+  async function conectar(iniciar = api.conectarCanal) {
     try {
-      const r = await api.conectarCanal();
+      const r = await iniciar();
+      if (r.aviso) avisar(r.aviso, 'erro');
       if (r.status === 'conectado') { avisar('WhatsApp conectado.'); return carregar(); }
       desenharQr(r);
       espera = setTimeout(acompanhar, 3000);
-    } catch (err) { avisar(err.message, 'erro'); }
+    } catch (err) { avisar(err.message, 'erro'); carregar(); }
+  }
+
+  async function trocar(botao) {
+    if (!(await confirmar({ titulo: 'Trocar o número do WhatsApp', texto: 'O número atual deixa de receber mensagens no Conecta. Em seguida aparece um QR code novo: leia com o celular do número novo. O histórico das conversas continua guardado.', botao: 'Trocar número', perigo: true }))) return;
+    comBotao(botao, () => conectar(api.trocarNumeroCanal));
   }
 
   async function desconectar() {
     if (!(await confirmar({ titulo: 'Desconectar WhatsApp', texto: 'A loja para de receber mensagens no Conecta até conectar de novo. O histórico de conversas continua guardado.', botao: 'Desconectar', perigo: true }))) return;
-    try { await api.desconectarCanal(); avisar('WhatsApp desconectado.'); carregar(); } catch (err) { avisar(err.message, 'erro'); }
+    try { const r = await api.desconectarCanal(); avisar(r.aviso || 'WhatsApp desconectado.', r.aviso ? 'erro' : undefined); carregar(); } catch (err) { avisar(err.message, 'erro'); }
   }
 
   async function carregar() {
