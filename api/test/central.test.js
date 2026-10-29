@@ -47,6 +47,8 @@ test('buscar_filiais só existe na Central e acha por cidade, aeroporto e sem ac
   // estado (sigla ou nome) lista as filiais dele; cidade exata vem antes de qualquer parecida
   assert.equal((await t.executar({ busca: 'PE' })).busca_por, 'estado');
   assert.equal((await t.executar({ busca: 'Pernambuco' })).encontradas, (await t.executar({ busca: 'PE' })).encontradas);
+  const genericas = await t.executar({ busca: 'quais lojas vocês têm' });
+  assert.equal(genericas.total_de_filiais, 4, 'pergunta genérica devolve a lista de cidades, não busca por "loja"');
   const cidades = await t.executar({});
   assert.equal(cidades.total_de_filiais, 4);
   assert.ok(cidades.cidades_por_estado.some((x) => /Recife/.test(x)));

@@ -55,7 +55,8 @@ async function conectarLoja(req, lojaId) {
   try {
     await p.criar(cn.instancia);
     const r = await p.qr(cn.instancia);
-    if (r.conectado) { await gravarStatus(lojaId, 'conectado'); return { status: 'conectado' }; }
+    if (r.conectado) { qrCache.delete(cn.instancia); await gravarStatus(lojaId, 'conectado'); return { status: 'conectado' }; }
+    guardarQr(cn.instancia, r.qr, r.codigo);
     await gravarStatus(lojaId, 'conectando');
     return { status: 'conectando', qr: r.qr, codigo: r.codigo };
   } catch (e) {
@@ -64,6 +65,12 @@ async function conectarLoja(req, lojaId) {
   }
 }
 
+// QR por instância (vem pelo webhook qrcode.updated ou da última chamada ao /instance/connect).
+// Chamar /instance/connect repetidamente enquanto a Evolution ainda está conectando reinicia o socket dela e
+// provoca a cascata "stream errored out" / 428 / 440 — então a tela só consulta o estado e reaproveita o QR guardado.
+const qrCache = new Map();
+const guardarQr = (instancia, qr, codigo = null) => { if (qr) qrCache.set(instancia, { qr, codigo, em: Date.now() }); };
+const QR_VALIDO_MS = 90_000, INTERVALO_CONNECT_MS = 20_000;
 async function qrDaLoja(req, lojaId) {
   exigirEvolution();
   const cn = await comoSistema((c) => lerCanal(c, lojaId));
@@ -72,9 +79,16 @@ async function qrDaLoja(req, lojaId) {
   try {
     const p = provedores[cn.provedor];
     const estado = await p.estado(cn.instancia);
-    if (estado === 'conectado') { await gravarStatus(lojaId, 'conectado'); return { status: 'conectado' }; }
+    if (estado === 'conectado') { qrCache.delete(cn.instancia); await gravarStatus(lojaId, 'conectado'); return { status: 'conectado' }; }
+    const g = qrCache.get(cn.instancia);
+    const recente = g && Date.now() - g.em < QR_VALIDO_MS;
+    // conectando (QR na tela ou pareamento em andamento): não mexe no socket; devolve o QR que já temos
+    if (estado === 'conectando' && recente) return { status: 'conectando', qr: g.qr, codigo: g.codigo };
+    if (estado === 'conectando' && g && Date.now() - g.em < QR_VALIDO_MS + INTERVALO_CONNECT_MS) return { status: 'conectando', qr: g.qr, codigo: g.codigo };
     const r = await p.qr(cn.instancia);
-    if (r.conectado) { await gravarStatus(lojaId, 'conectado'); return { status: 'conectado' }; }
+    if (r.conectado) { qrCache.delete(cn.instancia); await gravarStatus(lojaId, 'conectado'); return { status: 'conectado' }; }
+    guardarQr(cn.instancia, r.qr, r.codigo);
+    if (!r.qr && g) return { status: 'conectando', qr: g.qr, codigo: g.codigo };
     return { status: 'conectando', qr: r.qr, codigo: r.codigo };
   } catch (e) {
     console.error('[whatsapp] qr:', e.message);
@@ -87,7 +101,9 @@ async function desconectarLoja(req, lojaId) {
   const cn = await comoSistema((c) => lerCanal(c, lojaId));
   if (cn) {
     await provedores[cn.provedor].desconectar(cn.instancia).catch((e) => console.error('[whatsapp] desconectar:', e.message));
+    qrCache.delete(cn.instancia);
     await gravarStatus(lojaId, 'desconectado');
+    await comoSistema((c) => c.query('UPDATE canais SET numero = NULL WHERE loja_id = $1', [lojaId]));   // o próximo QR pode ser de outro número
     await comContexto(ctx(req), (c) => registrar(c, req, 'whatsapp_desconectar', { lojaId }));
   }
   return { status: 'desconectado' };
@@ -170,8 +186,15 @@ webhooks.post('/evolution/:segredo', rota(async (req, res) => {
   try {
     const cn = await comoSistema(async (c) => (await c.query('SELECT * FROM canais WHERE instancia = $1', [instancia])).rows[0]);
     if (!cn) return;
+    if (evento === 'qrcode.updated') {
+      const q = corpo.data?.qrcode || corpo.data || {};
+      const b64 = q.base64 || null;
+      guardarQr(instancia, b64 && (String(b64).startsWith('data:') ? b64 : `data:image/png;base64,${b64}`), q.pairingCode || null);
+      return;
+    }
     if (evento === 'connection.update') {
       const s = corpo.data?.state;
+      if (s === 'open') qrCache.delete(instancia);
       const status = s === 'open' ? 'conectado' : s === 'connecting' ? 'conectando' : 'desconectado';
       const numero = String(corpo.data?.wuid || corpo.sender || '').split('@')[0].replace(/\D/g, '') || null;
       await gravarStatus(cn.loja_id, status, status === 'conectado' ? numero : null);

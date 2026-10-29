@@ -87,14 +87,16 @@ export function ferramentasDaLoja(ctx) {
       descricao: 'Central de Reservas: acha as filiais LocarX de qualquer cidade do Brasil (cidade, aeroporto ou nome). Use assim que o cliente disser onde quer retirar. Sem busca, devolve as cidades atendidas. Confirme com o cliente QUAL filial antes de consultar carros.',
       parametros: { type: 'object', properties: { busca: { type: 'string', description: 'cidade, aeroporto ou nome (ex.: "Recife", "aeroporto de Salvador"). Vazio = lista de cidades' } } },
       executar: async ({ busca } = {}) => {
-        const q = semAcentoFilial(busca);
+        // palavras genéricas ("quais lojas vocês têm", "todas as filiais") não são busca: devolvem as cidades atendidas
+        const GENERICAS = /\b(a|as|o|os|de|da|do|das|dos|em|na|no|que|quais|qual|tem|temos|voces|vcs|todas?|todos?|lojas?|filia(l|is)|unidades?|agencias?|locarx|cidades?|lista|listar|disponive(l|is)|atendidas?)\b/g;
+        const q = semAcentoFilial(busca).replace(GENERICAS, ' ').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
         const cidadesPorUf = () => {
           const m = new Map();
           for (const f of ctx.filiais) { const k = f.uf || '??'; if (!m.has(k)) m.set(k, new Set()); m.get(k).add(f.cidade); }
           return [...m.entries()].sort().map(([uf, cs]) => `${ESTADOS[uf] || uf}: ${[...cs].sort().join(', ')}`);
         };
         if (!q) {
-          return { total_de_filiais: ctx.filiais.length, cidades_por_estado: cidadesPorUf().slice(0, 30), instrucao: 'Pergunte a cidade ao cliente e chame buscar_filiais com ela. Se precisar listar, mostre só as cidades do estado dele e dos vizinhos.' };
+          return { total_de_filiais: ctx.filiais.length, cidades_por_estado: cidadesPorUf().slice(0, 30), instrucao: 'Se o cliente perguntou quais lojas/cidades existem, liste as cidades por estado (sem endereço). Depois pergunte em qual cidade ele quer retirar e chame buscar_filiais com ela.' };
         }
         const norm = (f) => ({ cidade: semAcentoFilial(f.cidade), uf: semAcentoFilial(f.uf), estado: semAcentoFilial(ESTADOS[f.uf] || ''), nome: semAcentoFilial(f.nome), tipo: semAcentoFilial(f.tipo || '') });
         // 1) cidade exata; 2) estado (sigla ou nome); 3) qualquer parte (nome da filial, aeroporto…)
@@ -186,6 +188,7 @@ export function ferramentasDaLoja(ctx) {
         if (ctx.consultas > 3) return 'Limite de consultas atingido. Não consulte mais: avise o cliente e use chamar_atendente com o motivo "sem disponibilidade".';
         try { await usarFilial(a.filial); } catch (e) { if (e.paraIa) return e.message; throw e; }
         const p = validarPeriodo(a);
+        if (p.corrigido) a = { ...a, data_retirada: p.retirada.date, data_devolucao: p.devolucao.date };   // ano corrigido pela ferramenta
         const periodo = periodoTexto(a);
         let grupos;
         try { grupos = await locarx.disponibilidade({ branchId: ctx.branchId, ...p }); }
@@ -232,6 +235,7 @@ export function ferramentasDaLoja(ctx) {
         }
         return {
           texto_para_cliente: texto,
+          ...(p.corrigido ? { aviso_data: `O ano veio errado (${p.corrigido.de}); a consulta foi feita para ${p.corrigido.para}. Não diga ao cliente que a data passou: confirme com ele as datas ${periodo}.` } : {}),
           grupos: mostrar.map((g, i) => ({ letra: rotuloGrupo(g, i + (a.mais_opcoes ? 4 : 1)).letra, fleet_id: g.fleetId, grupo: g.grupo, cambio: g.cambio, total: reais(g.total) })),
           protecoes_disponiveis: (mostrar[0].protecoes || []).map((x) => ({ codigo: x.codigo, nome: x.nome, diaria: reais(x.diaria), basica: x.base, caucao: x.caucao != null ? reais(x.caucao) : null })),
           caucao: mostrar[0].protecoes?.find((x) => x.base && x.padrao)?.caucao != null ? `Caução (pré-autorização no cartão de crédito, liberada após a devolução): ${reais(mostrar[0].protecoes.find((x) => x.base && x.padrao).caucao)} com a Proteção X. Informe se o cliente perguntar.` : null,
@@ -246,6 +250,7 @@ export function ferramentasDaLoja(ctx) {
       executar: async (a) => {
         try { await usarFilial(a.filial); } catch (e) { if (e.paraIa) return e.message; throw e; }
         const p = validarPeriodo(a);
+        if (p.corrigido) a = { ...a, data_retirada: p.retirada.date, data_devolucao: p.devolucao.date };
         const protecoes = normalizarProtecoes(a.protecoes);
         let r;
         try { r = await locarx.calcularPreco({ branchId: ctx.branchId, fleetId: a.fleet_id, ...p, protecoes }); }
@@ -258,7 +263,18 @@ export function ferramentasDaLoja(ctx) {
         }
         await marcarEtapa(ctx, 'cotacao', r.total);
         const saida = { grupo: r.grupo, fleet_id: r.fleetId, total: reais(r.total), diaria: reais(r.diaria), diarias: r.diarias, protecoes: r.protecoes.length ? r.protecoes.map((x) => x.nome) : protecoes, caucao: r.caucao != null ? `${reais(r.caucao)} (pré-autorização no cartão, liberada após a devolução; não entra no total)` : null, pagamento: ctx.pixDisponivel && !ctx.simulacao ? 'na loja, na retirada, ou agora via Pix pelo WhatsApp — pergunte qual o cliente prefere (Passo 4b)' : 'na loja, na retirada', proximo_passo: ctx.pixDisponivel && !ctx.simulacao ? 'Informe o total ao cliente e pergunte a forma de pagamento (loja ou Pix). Depois peça nome completo, CPF e e-mail (se ainda não tiver) e chame criar_reserva com forma_pagamento.' : 'Informe o total ao cliente. Para fechar, peça nome completo, CPF e e-mail (se ainda não tiver) e chame criar_reserva.' };
-        if (ctx.preVerificacao) saida.proximo_passo = 'Informe o total ao cliente. Para reservar, ele precisa confirmar o WhatsApp: pergunte se quer reservar e, se sim, chame mostrar_na_tela com tipo "cadastro".';
+        // texto pronto: evita a IA mandar "o total fica assim: Proteção X" sem valor
+        const nomesProt = (r.protecoes.length ? r.protecoes.map((x) => x.nome) : nomesDasProtecoes(protecoes)) || [];
+        saida.texto_para_cliente = [
+          `*${r.grupo}* · ${periodoTexto(a)}${r.diarias && r.diaria != null ? ` (${r.diarias} ${r.diarias === 1 ? 'diária' : 'diárias'} de ${reais(r.diaria)})` : ''}`,
+          `🛡️ Proteção: ${nomesProt.join(' + ') || 'Proteção X'}`,
+          `*Total: ${reais(r.total)}* (já com proteção e taxas)`,
+          r.caucao != null ? `Caução: ${reais(r.caucao)} (pré-autorização no cartão, liberada após a devolução; não entra no total)` : null,
+        ].filter(Boolean).join('\n');
+        saida.proximo_passo = 'Envie texto_para_cliente EXATAMENTE como veio (com o Total). ' + (!protecoes.includes('PROTECAO_SUPER_X')
+          ? 'Se ainda não perguntou se o cliente prefere a Super X ou opcionais, pergunte na mesma mensagem (Passo 4) e só depois siga. '
+          : '') + (ctx.pixDisponivel && !ctx.simulacao ? 'Depois pergunte a forma de pagamento (Passo 4b) e só então os dados do condutor.' : 'Depois peça os dados do condutor (Passo 5).');
+        if (ctx.preVerificacao) saida.proximo_passo = 'Envie texto_para_cliente como veio. Para reservar, ele precisa confirmar o WhatsApp: pergunte se quer reservar e, se sim, chame mostrar_na_tela com tipo "cadastro".';
         return saida;
       },
     },

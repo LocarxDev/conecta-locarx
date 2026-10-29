@@ -34,6 +34,19 @@ export function validarPeriodo(a, { antecedenciaHoras = 24 } = {}) {
   for (const d of [a.data_retirada, a.data_devolucao]) {
     if (!dataExiste(d)) throw new Error(`A data ${d.split('-').reverse().join('/')} não existe no calendário. Não consulte nem chame atendente: diga ao cliente que essa data não existe e pergunte a data certa.`);
   }
+  // Ano no passado: o cliente só falou dia e mês e a IA montou a data com o ano errado. Em vez de devolver erro
+  // (e a IA dizer ao cliente que "a data já passou"), corrige para a próxima ocorrência e avisa na resposta.
+  const anoAtual = Number(new Date(Date.now() - 3 * 3_600_000).toISOString().slice(0, 4));
+  let corrigido = null;
+  if (Number(a.data_retirada.slice(0, 4)) < anoAtual) {
+    const comAno = (d, ano) => `${ano}${d.slice(4)}`;
+    let r = comAno(a.data_retirada, anoAtual);
+    if (dataExiste(r) && instante({ date: r, time: a.hora_retirada }) < new Date()) r = comAno(a.data_retirada, anoAtual + 1);
+    const anos = Number(r.slice(0, 4)) - Number(a.data_retirada.slice(0, 4));
+    let d = comAno(a.data_devolucao, Number(a.data_devolucao.slice(0, 4)) + anos);
+    if (dataExiste(d) && instante({ date: d, time: a.hora_devolucao }) <= instante({ date: r, time: a.hora_retirada })) d = comAno(d, Number(d.slice(0, 4)) + 1);
+    if (dataExiste(r) && dataExiste(d)) { corrigido = { de: a.data_retirada, para: r }; a = { ...a, data_retirada: r, data_devolucao: d }; }
+  }
   const retirada = { date: a.data_retirada, time: a.hora_retirada }, devolucao = { date: a.data_devolucao, time: a.hora_devolucao };
   const ini = instante(retirada), fim = instante(devolucao);
   if (Number.isNaN(ini.getTime()) || Number.isNaN(fim.getTime())) throw new Error('Data inválida.');
@@ -53,7 +66,7 @@ export function validarPeriodo(a, { antecedenciaHoras = 24 } = {}) {
   }
   if (fim <= ini) throw new Error('A devolução precisa ser depois da retirada.');
   if (fim - ini > 90 * 86_400_000) throw new Error('Períodos acima de 90 dias precisam ser tratados com um atendente.');
-  return { retirada, devolucao, ini, fim };
+  return { retirada, devolucao, ini, fim, corrigido };
 }
 
 export function normalizarProtecoes(lista) {
