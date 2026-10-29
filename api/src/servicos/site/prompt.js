@@ -8,6 +8,7 @@ CANAL: CHAT NO SITE DA LOCARX (estas regras prevalecem sobre qualquer menção a
 - Datas: peça sempre com mostrar_na_tela tipo "datas" (o cliente escolhe no calendário). Se ele digitar as datas, aceite e siga.
 - Escolha de proteção e confirmações de sim/não: pode usar mostrar_na_tela tipo "botoes" (ex.: "Proteção X", "Super X"; "Confirmar reserva", "Alterar").
 - O cliente vê os cartões dos carros na tela (consultar_disponibilidade já os mostra): não escreva a lista.
+- Trechos entre colchetes que começam com "[na tela: …]" no histórico são ANOTAÇÕES DO SISTEMA sobre o que o cliente está vendo. NUNCA escreva "[na tela: …]" nem descreva componentes assim nas suas respostas; só escreva a frase para o cliente.
 - Nunca mande o cliente "para o WhatsApp" para reservar: a reserva se faz aqui no chat.`;
   if (antes) {
     return `${comum}

@@ -7,7 +7,7 @@ const UFS = 'AC AL AP AM BA CE DF ES GO MA MT MS MG PA PB PR PE PI RJ RN RS RO R
 
 const seloWhats = (s) => (s === 'conectado' ? html`<span class="selo ok">Conectado</span>` : html`<span class="selo neutro">Não conectado</span>`);
 const seloAtiva = (a) => (a ? html`<span class="selo ok">Ativa</span>` : html`<span class="selo neutro">Desativada</span>`);
-const filial = (f) => html`<span class="filial-chip"><code>${f.branchCode}</code><span class="sub">filial ${f.branchId} · ${f.tipo}</span></span>`;
+const filial = (f) => (f.branchId == null ? html`<span class="filial-chip"><code>CENTRAL</code><span class="sub">todas as filiais da rede</span></span>` : html`<span class="filial-chip"><code>${f.branchCode}</code><span class="sub">filial ${f.branchId} · ${f.tipo}</span></span>`);
 
 function formLoja(loja = {}) {
   const f = loja.filial || {};
@@ -19,11 +19,12 @@ function formLoja(loja = {}) {
         <option value="">Escolha</option>${UFS.map((uf) => html`<option ${uf === loja.uf ? 'selected' : ''}>${uf}</option>`)}
       </select></div>
     </div>
-    <div class="filtros"><button type="button" class="btn btn-contorno" id="buscar-filiais">Buscar filiais no portal LocarX</button><span class="sub" id="filiais-info"></span></div>
+    ${loja.id ? '' : html`<label class="checkbox"><input type="checkbox" name="central" id="l-central"> <strong>Esta é a Central de Reservas</strong> (não tem filial própria: consulta e reserva em todas as filiais da rede)</label>`}
+    <div class="filtros" id="bloco-busca"><button type="button" class="btn btn-contorno" id="buscar-filiais">Buscar filiais no portal LocarX</button><span class="sub" id="filiais-info"></span></div>
     <div class="campo" id="campo-filiais" hidden><label for="l-filial">Filial do portal</label><select id="l-filial"></select></div>
-    <div class="form-linha">
-      <div class="campo"><label for="l-branch">Filial no portal (branchId)</label><input id="l-branch" name="branchId" inputmode="numeric" value="${f.branchId ?? ''}" placeholder="Ex.: 5" required></div>
-      <div class="campo"><label for="l-code">Código da filial</label><input id="l-code" name="branchCode" value="${f.branchCode || ''}" placeholder="Ex.: SSA1" required></div>
+    <div class="form-linha" id="bloco-filial">
+      <div class="campo"><label for="l-branch">Filial no portal (branchId)</label><input id="l-branch" name="branchId" inputmode="numeric" value="${f.branchId ?? ''}" placeholder="Ex.: 5"${loja.central ? '' : ' required'}></div>
+      <div class="campo"><label for="l-code">Código da filial</label><input id="l-code" name="branchCode" value="${f.branchCode || ''}" placeholder="Ex.: SSA1"${loja.central ? '' : ' required'}></div>
     </div>
     <div class="campo"><label for="l-tipo">Tipo de loja</label><select id="l-tipo" name="tipo">
       <option ${f.tipo !== 'Aeroporto' ? 'selected' : ''}>Cidade</option><option ${f.tipo === 'Aeroporto' ? 'selected' : ''}>Aeroporto</option>
@@ -39,6 +40,13 @@ function abrirFormLoja(loja, aoSalvar) {
   });
   const form = $('#form-loja', modal.el);
   form.elements.branchCode.addEventListener('input', (e) => { e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
+  // Central de Reservas: sem filial própria, os campos da filial somem
+  const alternarCentral = () => {
+    const c = !!form.elements.central?.checked;
+    ['bloco-busca', 'campo-filiais', 'bloco-filial'].forEach((id) => { const el = $('#' + id, form); if (el) el.hidden = c || (id === 'campo-filiais' && !filiais.length); });
+    form.elements.branchId.required = !c; form.elements.branchCode.required = !c;
+  };
+  form.elements.central?.addEventListener('change', alternarCentral);
   let filiais = [];
   $('#buscar-filiais', form).addEventListener('click', (e) => comBotao(e.currentTarget, async () => {
     try {
@@ -65,12 +73,13 @@ function abrirFormLoja(loja, aoSalvar) {
     if (!d.nome.trim()) erros.nome = 'Informe o nome da loja.';
     if (!d.cidade.trim()) erros.cidade = 'Informe a cidade.';
     if (!d.uf) erros.uf = 'Escolha o estado.';
-    if (!/^\d+$/.test(d.branchId)) erros.branchId = 'Use só números, ex.: 5.';
-    if (!/^[A-Z0-9]{2,6}$/.test(d.branchCode)) erros.branchCode = 'Use de 2 a 6 letras ou números.';
+    const central = !!d.central || !!loja?.central;
+    if (!central || d.branchId) { if (!/^\d+$/.test(d.branchId)) erros.branchId = 'Use só números, ex.: 5.'; }
+    if (!central || d.branchCode) { if (!/^[A-Z0-9]{2,6}$/.test(d.branchCode)) erros.branchCode = 'Use de 2 a 6 letras ou números.'; }
     if (!marcarErros(form, erros)) return;
     await comBotao($('[type=submit]', modal.el), async () => {
       try {
-        const salva = await api.salvarLoja({ ...d, id: loja?.id });
+        const salva = await api.salvarLoja({ ...d, central: d.central ? true : undefined, id: loja?.id });
         modal.fechar();
         avisar(loja ? 'Loja atualizada.' : 'Loja cadastrada. Agora convide o dono da loja.');
         aoSalvar(salva);
@@ -103,7 +112,7 @@ export async function lista(alvo, ctx) {
   const area = $('#tabela-lojas', alvo);
   const desenhar = () => {
     const t = busca.trim().toLowerCase();
-    const vis = lojas.filter((l) => !t || [l.nome, l.cidade, l.uf, l.filial.branchCode].join(' ').toLowerCase().includes(t));
+    const vis = lojas.filter((l) => !t || [l.nome, l.cidade, l.uf, l.filial.branchCode || 'central'].join(' ').toLowerCase().includes(t));
     $('#contagem', alvo).textContent = `${vis.length} de ${lojas.length} lojas`;
     if (!lojas.length) {
       render(area, html`<div class="estado">${icone('lojas')}<h3>Nenhuma loja cadastrada</h3><p>Cadastre a primeira loja para liberar o acesso do franqueado.</p></div>`);
@@ -166,7 +175,7 @@ export async function detalhe(alvo, ctx) {
     <div class="cabecalho-pagina">
       <div class="titulos"><h1>${loja.nome}</h1><p>${loja.cidade} · ${loja.uf} · cadastrada em ${data(loja.criadaEm)}</p></div>
       ${ehAdmin ? html`<div class="filtros">
-        <button class="btn btn-contorno" id="testar-api">Testar API LocarX</button>
+        ${loja.filial.branchId == null ? '' : html`<button class="btn btn-contorno" id="testar-api">Testar API LocarX</button>`}
         <button class="btn btn-contorno" id="editar-loja">${icone('editar')}Editar</button>
         <button class="btn ${loja.ativa ? 'btn-perigo' : 'btn-primario'}" id="situacao-loja">${loja.ativa ? 'Desativar loja' : 'Reativar loja'}</button>
         ${!loja.ativa ? html`<button class="btn btn-texto" id="excluir-loja" title="Apaga a loja e tudo o que é dela (para lojas de teste)">Excluir loja</button>` : ''}
@@ -181,6 +190,7 @@ export async function detalhe(alvo, ctx) {
         <div class="dado"><dt>Filial no portal LocarX</dt><dd>${filial(loja.filial)}${loja.filialPortal?.encontrada ? html`<div class="sub">${loja.filialPortal.nome} · ${loja.filialPortal.ambiente}${loja.filialPortal.horarios ? ' · ' + loja.filialPortal.horarios : ''}</div>` : ''}</dd></div>
         <div class="dado"><dt>WhatsApp da loja</dt><dd>${seloWhats(loja.whatsapp)}</dd></div>
         <div class="dado"><dt>Assistente virtual</dt><dd><span class="selo neutro">Desligado</span></dd></div>
+        ${ehAdmin ? html`<div class="dado"><dt>Central de Reservas</dt><dd id="central-dd"><span class="sub">Carregando…</span></dd></div>` : ''}
         ${ehAdmin ? html`<div class="dado"><dt>Chat do site</dt><dd id="site-chat-dd"><span class="sub">Carregando…</span></dd></div>` : ''}
         <div class="dado"><dt>Pessoas com acesso</dt><dd class="num">${loja.usuarios.filter((u) => u.status === 'ativo').length} ativas</dd></div>
         <div class="dado"><dt>Recebimento do Pix</dt><dd>${loja.pix?.proprio
@@ -350,6 +360,7 @@ export async function detalhe(alvo, ctx) {
         const eu = r.lojas.find((l) => l.id === lojaId);
         render(caixaSite, html`${eu?.ativo ? html`<span class="selo ok">Ligado</span>` : html`<span class="selo neutro">Desligado</span>`}
           ${!r.ligado ? html` <span class="sub">o servidor ainda não tem o site autorizado (variável SITE_ORIGENS)</span>` : r.protegido ? html` <span class="sub">acesso restrito por chave de teste</span>` : ''}
+          ${eu?.ultimos30dias ? html`<div class="sub">Últimos 30 dias: <strong>${eu.ultimos30dias.conversas}</strong> ${eu.ultimos30dias.conversas === 1 ? 'conversa' : 'conversas'} · <strong>${eu.ultimos30dias.confirmaram}</strong> confirmaram o WhatsApp · <strong>${eu.ultimos30dias.reservas}</strong> ${eu.ultimos30dias.reservas === 1 ? 'reserva' : 'reservas'}</div>` : ''}
           <div><button class="btn btn-texto" id="alternar-site-chat">${eu?.ativo ? 'Desligar chat do site' : 'Ligar chat do site'}</button></div>`);
         $('#alternar-site-chat', caixaSite).addEventListener('click', async () => {
           try { await api.siteChatLoja(lojaId, !eu?.ativo); avisar(eu?.ativo ? 'Chat do site desligado para esta loja.' : 'Chat do site ligado para esta loja.'); desenharSite(); } catch (err) { avisar(err.message, 'erro'); }
@@ -357,6 +368,28 @@ export async function detalhe(alvo, ctx) {
       } catch (err) { render(caixaSite, html`<span class="sub">${err.message}</span>`); }
     };
     desenharSite();
+  }
+
+  // Central de Reservas: esta loja reserva em qualquer filial da rede
+  const caixaCentral = $('#central-dd', alvo);
+  if (caixaCentral) {
+    api.siteChat().then((r) => {
+      const eu = r.lojas.find((l) => l.id === lojaId);
+      const outra = r.lojas.find((l) => l.central && l.id !== lojaId);
+      render(caixaCentral, html`${eu?.central ? html`<span class="selo ok">Ligada</span>` : html`<span class="selo neutro">Desligada</span>`}
+        <div class="sub">${eu?.central
+          ? 'Esta loja consulta preços e disponibilidade e reserva em qualquer filial LocarX. A loja de retirada recebe um aviso (tarefa no CRM e WhatsApp). O chat do site, se ligado nesta loja, passa a atender o site inteiro.'
+          : 'Ligue só na loja que será a Central: o WhatsApp dela passa a perguntar a cidade de retirada e reservar em qualquer filial da rede.'}</div>
+        ${!eu?.central && outra ? html`<div class="sub">Atenção: <strong>${outra.nome}</strong> já é Central.</div>` : ''}
+        <div><button class="btn btn-texto" id="alternar-central">${eu?.central ? 'Desligar Central de Reservas' : 'Ligar Central de Reservas'}</button></div>`);
+      $('#alternar-central', caixaCentral).addEventListener('click', async () => {
+        const ligar = !eu?.central;
+        if (!(await confirmar({ titulo: ligar ? 'Ligar Central de Reservas' : 'Desligar Central de Reservas', texto: ligar
+          ? 'O assistente desta loja passará a atender a rede inteira: pergunta a cidade, mostra qualquer filial e reserva nela. Confira se o WhatsApp e o assistente desta loja são os da Central.'
+          : 'A loja volta a atender só as próprias filiais.', botao: ligar ? 'Ligar' : 'Desligar' }))) return;
+        try { await api.centralLoja(lojaId, ligar); avisar(ligar ? 'Central de Reservas ligada.' : 'Central de Reservas desligada.'); detalhe(alvo, ctx); } catch (err) { avisar(err.message, 'erro'); }
+      });
+    }).catch((err) => render(caixaCentral, html`<span class="sub">${err.message}</span>`));
   }
 
   $('#pix-proprio', alvo)?.addEventListener('click', async () => {

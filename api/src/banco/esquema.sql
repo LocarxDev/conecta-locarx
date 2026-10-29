@@ -843,7 +843,8 @@ CREATE POLICY filiais_alterar ON filiais FOR ALL USING (ctx_perfil() IN ('admin'
 -- toda loja existente vira uma filial principal (migração idempotente)
 INSERT INTO filiais (loja_id, branch_id, nome, principal)
   SELECT l.id, l.branch_id, left(l.nome, 60), true FROM lojas l
-   WHERE NOT EXISTS (SELECT 1 FROM filiais f WHERE f.loja_id = l.id) AND NOT EXISTS (SELECT 1 FROM filiais f WHERE f.branch_id = l.branch_id);
+   WHERE l.branch_id IS NOT NULL   -- a Central de Reservas não tem filial própria
+     AND NOT EXISTS (SELECT 1 FROM filiais f WHERE f.loja_id = l.id) AND NOT EXISTS (SELECT 1 FROM filiais f WHERE f.branch_id = l.branch_id);
 -- reservas e cobranças guardam em qual filial foram feitas
 ALTER TABLE reservas ADD COLUMN IF NOT EXISTS branch_id integer;
 UPDATE reservas r SET branch_id = l.branch_id FROM lojas l WHERE l.id = r.loja_id AND r.branch_id IS NULL;
@@ -984,3 +985,21 @@ BEGIN
     EXECUTE format('CREATE POLICY %I ON %I FOR ALL USING (ctx_perfil() = ''sistema'') WITH CHECK (ctx_perfil() = ''sistema'')', t || '_sistema', t);
   END LOOP;
 END $$;
+
+-- =====================================================================
+-- CENTRAL DE RESERVAS: uma loja marcada como "central" atende pelo próprio WhatsApp/chat e reserva em QUALQUER filial do portal LocarX.
+-- As filiais da central são as da rede inteira (lidas do portal sob demanda, nada copiado para `filiais`).
+-- =====================================================================
+ALTER TABLE lojas ADD COLUMN IF NOT EXISTS central boolean NOT NULL DEFAULT false;
+-- a Central não tem filial própria no portal (reserva em todas); as demais lojas continuam obrigadas a ter filial
+ALTER TABLE lojas ALTER COLUMN branch_id DROP NOT NULL;
+ALTER TABLE lojas ALTER COLUMN branch_code DROP NOT NULL;
+DO $$ BEGIN
+  ALTER TABLE lojas ADD CONSTRAINT lojas_filial_ou_central CHECK (central OR (branch_id IS NOT NULL AND branch_code IS NOT NULL));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+-- reserva feita pela central: de qual loja do Conecta é a filial de retirada (para avisar a loja e para os relatórios)
+ALTER TABLE reservas ADD COLUMN IF NOT EXISTS loja_destino_id uuid REFERENCES lojas(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS reservas_destino ON reservas (loja_destino_id, retirada) WHERE loja_destino_id IS NOT NULL;
+-- a loja de destino enxerga (só leitura) as reservas que a central fez para ela
+DROP POLICY IF EXISTS reservas_destino_ver ON reservas;
+CREATE POLICY reservas_destino_ver ON reservas FOR SELECT USING (loja_destino_id IS NOT NULL AND loja_destino_id = ctx_loja());

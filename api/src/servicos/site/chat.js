@@ -13,7 +13,7 @@ import { evolution } from '../canais/evolution.js';
 import { registrarRecebida } from '../../rotas/whatsapp.js';
 import { agendar } from '../ia/assistente.js';
 import { registrarEvento } from '../crm/funis.js';
-import { filiaisComPortal } from '../locarx/filiais.js';
+import { filiaisComPortal, redeDeFiliais } from '../locarx/filiais.js';
 import { telefoneBr, telefoneMascarado, primeiroNome, mascarar } from './texto.js';
 
 const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
@@ -31,8 +31,35 @@ const MAX_MSG_CLIENTE_HORA = 80;
 export const siteLigado = () => !!config.site;
 
 // ---------- lojas que atendem pelo chat ----------
+// Se uma loja marcada como Central de Reservas está com o chat ligado, ELA atende todo o chat do site
+// (as cidades e filiais vêm da rede inteira do portal LocarX); senão, cada loja com chat ligado atende por si.
+export async function centralDoSite(c) {
+  return (await c.query(`SELECT id, nome, cidade, uf, tipo, branch_id, central FROM lojas WHERE ativa AND site_chat AND central ORDER BY criada_em LIMIT 1`)).rows[0] || null;
+}
 export async function lojasDoSite(c) {
+  const cen = await centralDoSite(c);
+  if (cen) return [cen];
   return (await c.query(`SELECT id, nome, cidade, uf, tipo, branch_id FROM lojas WHERE ativa AND site_chat ORDER BY cidade, tipo DESC, nome`)).rows;
+}
+const idDeFilial = (branchId) => `b${branchId}`;
+export const ehIdDeFilial = (x) => /^b\d{1,9}$/.test(String(x || ''));
+
+// Central: cidades e filiais da rede inteira
+async function redeParaOSite() { try { return await redeDeFiliais(); } catch { return []; } }
+export async function cidadesParaOSite(c) {
+  if (await centralDoSite(c)) {
+    const m = new Map();
+    for (const f of await redeParaOSite()) { const k = `${f.cidade}|${f.uf}`; m.set(k, { cidade: f.cidade, uf: f.uf, lojas: (m.get(k)?.lojas || 0) + 1 }); }
+    const lista = [...m.values()].sort((a, b) => semAcento(a.cidade).localeCompare(semAcento(b.cidade)));
+    if (lista.length) return lista;
+  }
+  return cidadesDoSite(await lojasDoSite(c));
+}
+function cartaoDeFilial(f) {
+  return { id: idDeFilial(f.branchId), nome: f.nome, cidade: f.cidade, uf: f.uf, tipo: /aeroporto/i.test(`${f.tipo} ${f.nome}`) ? 'Aeroporto' : 'Cidade', endereco: f.endereco || null, horario: f.horariosTexto ? String(f.horariosTexto).split('\n')[0] : null };
+}
+export async function filialDaRede(branchId) {
+  return (await redeParaOSite()).find((f) => Number(f.branchId) === Number(branchId)) || null;
 }
 export async function lojaPadrao(c) { return (await lojasDoSite(c))[0] || null; }
 
@@ -46,8 +73,12 @@ async function lojaPublica(c, l) {
   return { id: l.id, nome: l.nome, cidade: l.cidade, uf: l.uf, tipo: l.tipo, endereco, horario };
 }
 export async function cartoesDeLojas(c, cidade) {
-  const todas = await lojasDoSite(c);
   const q = semAcento(cidade);
+  if (await centralDoSite(c)) {
+    const rede = await redeParaOSite();
+    if (rede.length) return rede.filter((f) => !q || semAcento(f.cidade).includes(q) || q.includes(semAcento(f.cidade))).slice(0, 12).map(cartaoDeFilial);
+  }
+  const todas = await lojasDoSite(c);
   const doRamo = q ? todas.filter((l) => semAcento(l.cidade).includes(q) || q.includes(semAcento(l.cidade))) : todas;
   return Promise.all(doRamo.slice(0, 12).map((l) => lojaPublica(c, l)));
 }
@@ -80,7 +111,7 @@ async function mensagemDeBoasVindas(c) {
   const loja = await lojaPadrao(c);
   const a = loja ? (await c.query('SELECT nome, ativo FROM assistentes WHERE loja_id = $1', [loja.id])).rows[0] : null;
   const nome = a?.nome && a.nome !== 'Assistente LocarX' ? a.nome : 'Lia';
-  const cidades = cidadesDoSite(await lojasDoSite(c));
+  const cidades = await cidadesParaOSite(c);
   return { texto: `Oi! Eu sou a ${nome}, assistente virtual da LocarX 🚗\nEm qual cidade você quer retirar o carro?`, ui: [{ tipo: 'cidades', cidades }] };
 }
 
@@ -170,6 +201,10 @@ function textoDaAcao(acao, s, opcoesDaConversa) {
     const r = acao.retirada || {}, d = acao.devolucao || {};
     const okData = (x) => /^\d{4}-\d{2}-\d{2}$/.test(x?.data || '') && /^([01]\d|2[0-3]):[0-5]\d$/.test(x?.hora || '') && !Number.isNaN(Date.parse(x.data));
     if (!okData(r) || !okData(d)) throw erro(422, 'Escolha as datas e os horários.');
+    // horário de Brasília (sem horário de verão): o portal só aceita retirada com 24 h de antecedência
+    const quando = (x) => Date.parse(`${x.data}T${x.hora}:00-03:00`);
+    if (quando(r) < Date.now() + 24 * 3_600_000 - 60_000) throw erro(422, 'A retirada precisa ser com pelo menos 24 horas de antecedência. Escolha outro dia ou horário.');
+    if (quando(d) <= quando(r)) throw erro(422, 'A devolução precisa ser depois da retirada.');
     return `[Datas escolhidas: retirada ${dataBr(r.data)} às ${r.hora}; devolução ${dataBr(d.data)} às ${d.hora}] (data_retirada ${r.data} ${r.hora}; data_devolucao ${d.data} ${d.hora})`;
   }
   if (acao.tipo === 'carro') {
@@ -220,12 +255,24 @@ export async function receberMensagem(s, { texto, acao }) {
       const lojas = await cartoesDeLojas(c, cidade);
       await inserir('cliente', `Quero retirar em ${cidade}.`);
       if (!lojas.length) {
-        const cidades = cidadesDoSite(await lojasDoSite(c));
+        const cidades = await cidadesParaOSite(c);
         await inserir('assistente', `Ainda não atendemos ${cidade} por este chat. ${cidades.length ? 'Estas são as cidades disponíveis:' : ''}`.trim(), cidades.length ? [{ tipo: 'cidades', cidades }] : null);
       } else {
         await inserir('assistente', lojas.length > 1 ? `Em ${lojas[0].cidade} temos ${lojas.length} lojas. Em qual você prefere retirar?` : `Em ${lojas[0].cidade} temos esta loja. Posso seguir com ela?`, [{ tipo: 'lojas', cidade, lojas }]);
       }
       await c.query(`UPDATE site_sessoes SET respondida_em = now(), pendente_desde = NULL, ultimo_uso = now() WHERE id = $1`, [s.id]);
+      return { ok: true };
+    }
+    if (acao?.tipo === 'loja' && ehIdDeFilial(acao.lojaId)) {
+      // Central: o visitante escolheu uma filial da rede; a sessão fica com a Central e guarda a filial de retirada
+      const cen = await centralDoSite(c);
+      const f = cen ? await filialDaRede(String(acao.lojaId).slice(1)) : null;
+      if (!f) throw erro(422, 'Essa loja não está disponível no chat.');
+      const nome = f.nome;
+      await c.query(`UPDATE site_sessoes SET loja_id = $2, opcoes = $3::jsonb, cotacao = NULL, respondida_em = now(), pendente_desde = NULL, ultimo_uso = now() WHERE id = $1`,
+        [s.id, cen.id, JSON.stringify({ branchId: Number(f.branchId), filialNome: nome })]);
+      await inserir('cliente', `Quero retirar na ${nome}.`);
+      await inserir('assistente', `Ótimo, retirada na ${nome}! Quais as datas e horários de retirada e devolução?`, [{ tipo: 'datas' }]);
       return { ok: true };
     }
     if (acao?.tipo === 'loja') {
@@ -349,6 +396,15 @@ export async function verificarCodigo(s, codigoDigitado) {
   return { ok: true };
 }
 
+// etiqueta "CHAT SITE LOCARX": criada na loja na primeira vez que alguém confirma o WhatsApp pelo chat (se a rede ou a loja já tiver uma com esse nome, usa a existente)
+const ETIQUETA_SITE = 'CHAT SITE LOCARX';
+async function marcarVeioDoSite(c, lojaId, contatoId) {
+  let e = (await c.query('SELECT id FROM etiquetas WHERE lower(nome) = lower($1) AND (loja_id = $2 OR loja_id IS NULL) ORDER BY loja_id NULLS LAST LIMIT 1', [ETIQUETA_SITE, lojaId])).rows[0];
+  if (!e) e = (await c.query(`INSERT INTO etiquetas (loja_id, nome, cor) VALUES ($1, $2, '#2563eb') ON CONFLICT DO NOTHING RETURNING id`, [lojaId, ETIQUETA_SITE])).rows[0]
+    || (await c.query('SELECT id FROM etiquetas WHERE loja_id = $1 AND lower(nome) = lower($2)', [lojaId, ETIQUETA_SITE])).rows[0];
+  if (e) await c.query('INSERT INTO contato_etiquetas (contato_id, etiqueta_id, loja_id, pelo_assistente) VALUES ($1, $2, $3, true) ON CONFLICT DO NOTHING', [contatoId, e.id, lojaId]);
+}
+
 // Confirmado: cria (ou reaproveita) contato + conversa, importa o que foi dito até aqui e entrega ao motor normal.
 async function transformarEmConversa(s) {
   const lojaId = s.loja_id;
@@ -368,6 +424,7 @@ async function transformarEmConversa(s) {
               opcoes = coalesce($3::jsonb, opcoes), cotacao = coalesce($4::jsonb, cotacao), atualizada_em = now() WHERE id = $1`,
       [reg.conversaId, s.id, s.opcoes, s.cotacao]);
     await c.query(`UPDATE site_sessoes SET contato_id = $2, conversa_id = $3 WHERE id = $1`, [s.id, reg.contatoId, reg.conversaId]);
+    await marcarVeioDoSite(c, lojaId, reg.contatoId);
     await c.query('DELETE FROM site_mensagens WHERE sessao_id = $1', [s.id]);
     if (s.cotacao?.total != null || s.opcoes?.grupos?.length) {
       await registrarEvento(c, { lojaId, contatoId: reg.contatoId, conversaId: reg.conversaId, evento: 'cotacao', valor: s.cotacao?.total ?? null });

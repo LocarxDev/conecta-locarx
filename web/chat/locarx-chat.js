@@ -242,8 +242,12 @@
   }
 
   function compDatas() {
-    const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
-    const min = new Date(hoje); min.setDate(min.getDate() + 1);
+    // o portal só aceita retirada com 24 h de antecedência: primeiro horário possível = agora + 24 h (horários de 30 em 30 min até 22:00)
+    const limite = new Date(Date.now() + 24 * 3_600_000);
+    const minutosLimite = limite.getHours() * 60 + limite.getMinutes();
+    const min = new Date(limite.getFullYear(), limite.getMonth(), limite.getDate());
+    if (minutosLimite > 22 * 60) min.setDate(min.getDate() + 1);
+    const horaMinima = () => (ini && +ini === +min && minutosLimite <= 22 * 60 ? Math.ceil(minutosLimite / 30) * 30 : 0);
     let mes = new Date(min.getFullYear(), min.getMonth(), 1);
     let ini = null, fim = null;
     const horas = []; for (let hh = 6; hh <= 22; hh++) for (const mm of ['00', '30']) { if (hh === 22 && mm === '30') continue; horas.push(`${pad(hh)}:${mm}`); }
@@ -263,7 +267,18 @@
       else fim = d;
       montar();
     };
+    const ajustarHoras = () => {
+      const a = horaMinima();
+      let primeira = null;
+      for (const o of selHoraIni.options) {
+        const [hh, mm] = o.value.split(':').map(Number);
+        o.disabled = hh * 60 + mm < a;
+        if (!o.disabled && !primeira) primeira = o;
+      }
+      if (selHoraIni.selectedOptions[0]?.disabled && primeira) selHoraIni.value = primeira.value;
+    };
     const atualizarResumo = () => {
+      ajustarHoras();
       if (!ini) { periodo.textContent = 'Toque na data de retirada.'; confirmar.disabled = true; return; }
       if (!fim) { periodo.replaceChildren('Retirada ', h('b', {}, `${DIAS[ini.getDay()]}, ${dm(ini)}`), ' — agora toque na data de devolução.'); confirmar.disabled = true; return; }
       const a = new Date(`${isoLocal(ini)}T${selHoraIni.value}:00`), b = new Date(`${isoLocal(fim)}T${selHoraFim.value}:00`);
@@ -290,6 +305,7 @@
     montar();
     return h('div', { class: 'lc-comp' }, h('div', { class: 'lc-cal' },
       h('div', { class: 'lc-cal-topo' }, btnAnt, tituloMes, btnProx), grade,
+      h('p', { class: 'lc-legenda' }, h('i', {}, '✕'), ` indisponível: a retirada precisa de 24 h de antecedência (a partir de ${dm(min)}${+min === new Date(limite.getFullYear(), limite.getMonth(), limite.getDate()).getTime() && minutosLimite <= 22 * 60 ? ` às ${pad(Math.floor(Math.ceil(minutosLimite / 30) * 30 / 60))}:${pad(Math.ceil(minutosLimite / 30) * 30 % 60)}` : ''}).`),
       h('div', { class: 'lc-horas' }, h('label', {}, h('span', { class: 'lc-rotulo' }, 'Hora da retirada'), selHoraIni), h('label', {}, h('span', { class: 'lc-rotulo' }, 'Hora da devolução'), selHoraFim)),
       periodo, confirmar));
   }

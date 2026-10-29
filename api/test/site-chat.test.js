@@ -103,3 +103,10 @@ test('rota de foto: fleetId inválido não vai ao portal', async () => {
   assert.equal((await fetch(`${base}/api/site/foto/abc`)).status, 404);
   assert.equal((await fetch(`${base}/api/site/foto/1%20or%201`)).status, 404);
 });
+
+test('paraWhatsApp remove anotações "[na tela: …]" que a IA copia do histórico', async () => {
+  const { paraWhatsApp } = await import('../src/servicos/ia/assistente.js');
+  assert.equal(paraWhatsApp('Quer manter a Proteção X? [na tela: botões — Proteção X | Super X]'), 'Quer manter a Proteção X?');
+  assert.equal(paraWhatsApp('[na tela: cartões dos carros — A Econômico (fleet_id 1)] Escolha um carro'), 'Escolha um carro');
+  assert.equal(paraWhatsApp('Veja [o link](https://x.com)'), 'Veja o link https://x.com');
+});

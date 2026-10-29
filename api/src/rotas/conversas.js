@@ -267,6 +267,10 @@ conversas.post('/:id/devolver', exigirPerfil('dono', 'atendente'), rota(async (r
 // Só vão para lojas "irmãs": as que têm ao menos um dono em comum com a loja de quem transfere (dono principal ou vinculado em
 // "Vincular dono"). Devolver para a loja de origem da conversa é sempre permitido (checado na rota de transferir).
 export async function lojasIrmas(c, lojaId) {
+  // a Central de Reservas pode passar o atendimento para QUALQUER loja ativa da rede (a loja de destino só precisa ser avisada)
+  if ((await c.query('SELECT central FROM lojas WHERE id = $1', [lojaId])).rows[0]?.central) {
+    return (await c.query('SELECT id, nome, cidade, uf FROM lojas WHERE ativa AND id <> $1 AND NOT central ORDER BY cidade, nome', [lojaId])).rows;
+  }
   return (await c.query(
     `WITH donos AS (
        SELECT loja_id, id AS usuario_id FROM usuarios WHERE perfil = 'dono' AND status <> 'inativo' AND loja_id IS NOT NULL

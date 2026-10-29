@@ -8,7 +8,7 @@ import { config } from '../config.js';
 import { rota, erro, validar, ipDe, navegadorDe, zUuid } from '../http.js';
 import { iguais } from '../servicos/seguranca.js';
 import { comoSistema, comContexto, contextoDoUsuario } from '../banco/conexao.js';
-import { exigirPerfil } from '../http.js';
+import { exigirPerfil, registrar } from '../http.js';
 import * as chat from '../servicos/site/chat.js';
 import { fotoDoGrupo } from '../servicos/locarx/api-locarx.js';
 
@@ -122,7 +122,7 @@ const zMensagem = z.object({
   texto: z.string().max(2000).optional(),
   acao: z.object({
     tipo: z.enum(['cidade', 'loja', 'datas', 'carro', 'mais_opcoes', 'atendente']),
-    cidade: z.string().max(80).optional(), lojaId: z.string().uuid().optional(), fleetId: z.union([z.number(), z.string().max(20)]).optional(),
+    cidade: z.string().max(80).optional(), lojaId: z.union([z.string().uuid(), z.string().regex(/^b\d{1,9}$/)]).optional(), fleetId: z.union([z.number(), z.string().max(20)]).optional(),
     retirada: z.object({ data: z.string().max(10), hora: z.string().max(5) }).optional(), devolucao: z.object({ data: z.string().max(10), hora: z.string().max(5) }).optional(),
   }).optional(),
 });
@@ -151,8 +151,17 @@ site.post('/encerrar', limiteLeitura, exigirSessao, rota(async (req, res) => {
 
 // ---------- administração: quais lojas atendem pelo chat do site ----------
 siteAdmin.get('/site-chat', exigirPerfil('admin', 'matriz'), rota(async (req, res) => {
-  const r = await comContexto(contextoDoUsuario(req.usuario), async (c) => (await c.query('SELECT id, nome, cidade, uf, tipo, site_chat FROM lojas ORDER BY cidade, nome')).rows);
-  res.json({ ligado: !!config.site, protegido: !!process.env.SITE_CHAVE_TESTE?.trim(), lojas: r.map((l) => ({ id: l.id, nome: l.nome, cidade: l.cidade, uf: l.uf, tipo: l.tipo, ativo: !!l.site_chat })) });
+  const r = await comContexto(contextoDoUsuario(req.usuario), async (c) => (await c.query('SELECT id, nome, cidade, uf, tipo, site_chat, central FROM lojas ORDER BY cidade, nome')).rows);
+  // números dos últimos 30 dias por loja (as tabelas do chat só abrem para o sistema; a lista de lojas acima já respeita quem pediu)
+  const ids = r.map((l) => l.id);
+  const uso = new Map((await comoSistema(async (c) => (await c.query(
+    `SELECT l.id,
+            (SELECT count(*)::int FROM site_sessoes s WHERE s.loja_id = l.id AND s.criada_em > now() - interval '30 days') AS conversas,
+            (SELECT count(*)::int FROM site_sessoes s WHERE s.loja_id = l.id AND s.verificada_em IS NOT NULL AND s.criada_em > now() - interval '30 days') AS confirmaram,
+            (SELECT count(*)::int FROM reservas rv JOIN conversas cv ON cv.id = rv.conversa_id WHERE rv.loja_id = l.id AND cv.canal = 'site' AND rv.criada_em > now() - interval '30 days') AS reservas
+       FROM lojas l WHERE l.id = ANY($1::uuid[])`, [ids]))).rows).map((x) => [x.id, x]));
+  res.json({ ligado: !!config.site, protegido: !!process.env.SITE_CHAVE_TESTE?.trim(),
+    lojas: r.map((l) => ({ id: l.id, nome: l.nome, cidade: l.cidade, uf: l.uf, tipo: l.tipo, ativo: !!l.site_chat, central: !!l.central, ultimos30dias: { conversas: uso.get(l.id)?.conversas || 0, confirmaram: uso.get(l.id)?.confirmaram || 0, reservas: uso.get(l.id)?.reservas || 0 } })) });
 }));
 siteAdmin.put('/lojas/:id/site-chat', exigirPerfil('admin'), rota(async (req, res) => {
   if (!zUuid.safeParse(req.params.id).success) throw erro(404, 'Loja não encontrada.');
@@ -160,4 +169,21 @@ siteAdmin.put('/lojas/:id/site-chat', exigirPerfil('admin'), rota(async (req, re
   const n = await comContexto(contextoDoUsuario(req.usuario), async (c) => (await c.query('UPDATE lojas SET site_chat = $2 WHERE id = $1', [req.params.id, ativo])).rowCount);
   if (!n) throw erro(404, 'Loja não encontrada.');
   res.json({ ok: true, ativo });
+}));
+
+// Central de Reservas: a loja marcada reserva em QUALQUER filial da rede LocarX (as demais lojas só são avisadas das reservas feitas para elas).
+siteAdmin.put('/lojas/:id/central', exigirPerfil('admin'), rota(async (req, res) => {
+  if (!zUuid.safeParse(req.params.id).success) throw erro(404, 'Loja não encontrada.');
+  const { central } = validar(z.object({ central: z.boolean() }), req.body);
+  const n = await comContexto(contextoDoUsuario(req.usuario), async (c) => {
+    if (!central) {
+      const l = (await c.query('SELECT branch_id FROM lojas WHERE id = $1', [req.params.id])).rows[0];
+      if (l && l.branch_id == null) throw erro(422, 'Esta loja não tem filial própria. Edite a loja e informe a filial do portal antes de desligar a Central.');
+    }
+    const k = (await c.query('UPDATE lojas SET central = $2 WHERE id = $1', [req.params.id, central])).rowCount;
+    if (k) await registrar(c, req, central ? 'ligou_central' : 'desligou_central', { alvo: req.params.id, lojaId: req.params.id });
+    return k;
+  });
+  if (!n) throw erro(404, 'Loja não encontrada.');
+  res.json({ ok: true, central });
 }));

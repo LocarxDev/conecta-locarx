@@ -64,6 +64,9 @@ Uma chave da **rede** (conta do franqueador, que repassa às lojas). Desligado s
 - **Estorno/cancelamento:** sempre com atendente (API `POST /transparents/refund`, integral); o webhook `transparent.refunded` registra a ocorrência.
 - Sem CPF/telefone/e-mail nos logs; CPF do condutor fica cifrado na cobrança até a reserva ser criada.
 
+### Central de Reservas (uma loja que reserva em qualquer filial da rede)
+Lojas → loja → Dados da loja → **Central de Reservas** (só administração). A Central usa o próprio WhatsApp e a mesma chave da API LocarX, pergunta a cidade de retirada (ferramenta `buscar_filiais`, rede inteira do `GET /locality`, cache de 1 h) e reserva em qualquer filial. A reserva guarda `loja_destino_id`; a loja de retirada (se estiver no Conecta) recebe **tarefa + WhatsApp** e vê a reserva em **Reservas → Vindas da Central** (só leitura, só o nome do cliente). A Central pode transferir conversas para qualquer loja ativa. Com a Central ligada no chat do site, ela atende o site inteiro (cidades e filiais da rede). Guia completo: `claude/central-de-reservas.md` no projeto.
+
 ### Testes
 ```bash
 cd api && npm test

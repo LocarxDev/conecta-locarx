@@ -767,3 +767,10 @@ details[open] summary { margin-bottom: 10px; }
 .select-loja { border: 0; background: transparent; color: var(--texto); font: 700 15px var(--fonte-texto); padding: 0; max-width: 260px; cursor: pointer; }
 /* a lista aberta do seletor usa o fundo e o texto do tema (no escuro ficava branca com texto claro) */
 select option, select optgroup { background: var(--superficie); color: var(--texto); }
+
+/* busca dentro de listas longas de filiais (Central de Reservas) */
+.busca-opcoes { display: block; width: 100%; min-height: 36px; margin-bottom: 6px; padding: 0 10px; border-radius: var(--raio); border: 1px solid var(--borda-forte); background: var(--superficie); color: var(--texto); font: 500 13px var(--fonte-texto); }
+.busca-opcoes + .select-filial, .busca-opcoes + select { width: 100%; }
+.filtros .busca-opcoes, .painel-cab .busca-opcoes { width: 220px; margin: 0 6px 0 0; display: inline-block; }
+.campo-filial { min-width: 240px; }
+.campo-filial .busca-opcoes { margin-bottom: 6px; }

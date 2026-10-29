@@ -3,6 +3,8 @@
 import { comoSistema } from '../../banco/conexao.js';
 import { buscarConhecimento } from '../ia/conhecimento.js';
 import * as locarx from './api-locarx.js';
+import { filialDaCentral, semAcento as semAcentoFilial } from './filiais.js';
+import { lojaDaFilial, ehCentral, avisarLojaDestino } from '../central.js';
 import { cifrar, decifrar } from '../seguranca.js';
 import { registrarEvento, regrasDaLoja, fecharOportunidade } from '../crm/funis.js';
 import { normalizarValor } from '../crm/personalizacao.js';
@@ -37,15 +39,29 @@ export function ferramentasDaLoja(ctx) {
   // Várias filiais (ctx.filiais = [{ id, branchId, nome, principal }]): a IA escolhe pelo nome; a escolha fica na conversa
   // (conversas.opcoes.branchId) e vale para cotação, preço e reserva. Com uma filial só, nada muda.
   const variasFiliais = Array.isArray(ctx.filiais) && ctx.filiais.length > 1;
-  const PARAM_FILIAL = variasFiliais ? { filial: { type: 'string', description: `qual filial: ${ctx.filiais.map((f) => f.nome).join(' | ')}` } } : {};
+  // Central de Reservas: as "filiais" são a rede inteira (dezenas). Nada de listar tudo: a IA acha a filial pela cidade (buscar_filiais).
+  const central = !!ctx.central && variasFiliais;
+  const PARAM_FILIAL = variasFiliais
+    ? { filial: { type: 'string', description: central ? 'filial de retirada: nome exato retornado por buscar_filiais (ou o branchId). Retirada e devolução na mesma filial' : `qual filial: ${ctx.filiais.map((f) => f.nome).join(' | ')}` } }
+    : {};
   async function usarFilial(pedido) {
-    if (!variasFiliais) return ctx.branchId;
+    if (!variasFiliais) {
+      if (ctx.central && !ctx.branchId) throw Object.assign(new Error('Não consegui carregar a lista de filiais agora. Peça desculpas ao cliente e use chamar_atendente.'), { paraIa: true });
+      return ctx.branchId;
+    }
     if (pedido == null || pedido === '') {
       if (ctx.branchEscolhido) return ctx.branchId;
+      if (central) throw Object.assign(new Error('Pergunte ao cliente em qual cidade (ou aeroporto) ele quer retirar. Use buscar_filiais com a cidade para ver as filiais e confirme qual com o cliente. Depois chame de novo informando filial.'), { paraIa: true });
       throw Object.assign(new Error(`Pergunte ao cliente em qual filial ele quer retirar: ${ctx.filiais.map((f) => f.nome).join(' ou ')}. Depois chame de novo informando filial.`), { paraIa: true });
     }
     const p = String(pedido).trim().toLowerCase();
-    const f = ctx.filiais.find((x) => String(x.branchId) === p || x.id === p) || ctx.filiais.find((x) => x.nome.toLowerCase() === p) || ctx.filiais.find((x) => x.nome.toLowerCase().includes(p) || p.includes(x.nome.toLowerCase()));
+    let f;
+    if (central) {
+      try { const r = filialDaCentral(ctx.filiais.map((x) => ({ ...x, branch_id: x.branchId })), p); f = ctx.filiais.find((x) => Number(x.branchId) === Number(r.branchId)); }
+      catch (e) { throw Object.assign(new Error(e.message), { paraIa: true }); }
+    } else {
+      f = ctx.filiais.find((x) => String(x.branchId) === p || x.id === p) || ctx.filiais.find((x) => x.nome.toLowerCase() === p) || ctx.filiais.find((x) => x.nome.toLowerCase().includes(p) || p.includes(x.nome.toLowerCase()));
+    }
     if (!f) throw Object.assign(new Error(`Filial "${pedido}" não existe. As filiais desta loja são: ${ctx.filiais.map((x) => x.nome).join(', ')}. Confirme com o cliente.`), { paraIa: true });
     if (f.branchId !== ctx.branchId || !ctx.branchEscolhido) {
       ctx.branchId = f.branchId; ctx.branchEscolhido = true; ctx.filialNome = f.nome;
@@ -65,12 +81,40 @@ export function ferramentasDaLoja(ctx) {
         return achados.map((a) => `### ${a.titulo}\n${a.conteudo}`).join('\n\n');
       },
     },
+    ...(central ? [{
+      nome: 'buscar_filiais',
+      descricao: 'Central de Reservas: acha as filiais LocarX de qualquer cidade do Brasil (cidade, aeroporto ou nome). Use assim que o cliente disser onde quer retirar. Sem busca, devolve as cidades atendidas. Confirme com o cliente QUAL filial antes de consultar carros.',
+      parametros: { type: 'object', properties: { busca: { type: 'string', description: 'cidade, aeroporto ou nome (ex.: "Recife", "aeroporto de Salvador"). Vazio = lista de cidades' } } },
+      executar: async ({ busca } = {}) => {
+        const q = semAcentoFilial(busca);
+        if (!q) {
+          const cidades = [...new Set(ctx.filiais.map((f) => `${f.cidade}/${f.uf}`))];
+          return { total_de_filiais: ctx.filiais.length, cidades: cidades.slice(0, 80), instrucao: 'Pergunte a cidade ao cliente e chame buscar_filiais com ela.' };
+        }
+        const achadas = ctx.filiais.filter((f) => semAcentoFilial(`${f.cidade} ${f.uf} ${f.nome} ${f.tipo || ''}`).includes(q) || (q.includes('aeroporto') && /aeroporto/i.test(`${f.nome} ${f.tipo}`) && semAcentoFilial(f.cidade).split(' ').some((w) => w.length > 3 && q.includes(w))));
+        if (!achadas.length) return `Nenhuma filial encontrada para "${busca}". Confirme o nome da cidade com o cliente ou chame buscar_filiais sem busca para ver as cidades atendidas. Se a cidade não aparecer, avise que não há loja LocarX lá e use chamar_atendente se ele insistir.`;
+        return {
+          encontradas: achadas.length,
+          filiais: achadas.slice(0, 8).map((f) => ({ filial: f.nome, cidade: `${f.cidade}/${f.uf}`, tipo: f.portal?.tipo || f.tipo || null, endereco: f.portal?.endereco || null, horario_de_atendimento: f.portal?.horarios || null })),
+          instrucao: achadas.length > 1 ? 'Há mais de uma opção: mostre ao cliente e pergunte em qual retira. Depois use o nome exato em filial.' : 'Confirme com o cliente que é essa filial e use o nome exato em filial.',
+        };
+      },
+    }] : []),
     {
       nome: 'dados_da_loja',
       descricao: 'Nome, endereço, horário de atendimento (por dia da semana) e janelas de atendimento especial (fora do horário, com taxa) desta loja LocarX, direto do portal. Use para responder horário/endereço e quando a consulta recusar um horário (OUTSIDE_BUSINESS_HOURS).',
       parametros: { type: 'object', properties: { ...PARAM_FILIAL } },
       executar: async (a = {}) => {
         const loja = await comoSistema(async (c) => (await c.query('SELECT nome, cidade, uf FROM lojas WHERE id = $1', [ctx.lojaId])).rows[0]);
+        if (central) {
+          // a rede tem dezenas de filiais: devolve só a que foi pedida/escolhida (com endereço e horário do portal)
+          let pedida = null;
+          if (a.filial) { try { await usarFilial(a.filial); pedida = ctx.filialNome; } catch (e) { if (e.paraIa) return e.message; throw e; } }
+          const f = ctx.filiais.find((x) => Number(x.branchId) === Number(ctx.branchId));
+          if (!ctx.branchEscolhido && !pedida) return 'Nenhuma filial escolhida ainda. Pergunte a cidade ao cliente e use buscar_filiais.';
+          const d = f?.portal || {};
+          return { filial: f?.nome, cidade: f?.cidade ? `${f.cidade}/${f.uf}` : null, tipo: d.tipo || f?.tipo || null, endereco: d.endereco || 'consultar buscar_informacoes', horario_de_atendimento: d.horarios || 'consultar buscar_informacoes', atendimento_especial: d.especiais || 'nenhum (fora do horário a filial não atende)', observacao: 'Retirada e devolução precisam cair no horário de atendimento da filial ou numa janela de atendimento especial (que tem taxa, já incluída no total da consulta).' };
+        }
         if (variasFiliais) {
           // com várias filiais, SEMPRE devolve todas (nome oficial, endereço, horário); se uma foi pedida, marca qual é
           let pedida = null;
@@ -486,12 +530,16 @@ async function marcarEtapa(ctx, evento, valor) {
 
 // Grava a reserva no Conecta (histórico, ficha do cliente e funil). Usada pelo assistente e pela equipe (rota de reservas).
 export async function registrarReserva(ctx, reserva, p, cliente, extra) {
-  return comoSistema(async (c) => {
+  let aviso = null;
+  const id = await comoSistema(async (c) => {
+    // reserva feita pela Central: guarda qual loja do Conecta é a dona da filial de retirada (ela será avisada)
+    const destinoId = ctx.branchId && (await ehCentral(c, ctx.lojaId)) ? await lojaDaFilial(c, ctx.branchId, ctx.lojaId) : null;
     const r = (await c.query(
-      `INSERT INTO reservas (loja_id, contato_id, conversa_id, codigo, status, retirada, devolucao, grupo, valor, origem, detalhes, pagamento, cobranca_id, branch_id)
-       VALUES ($1, $2, $3, $4, 'confirmada', $5, $6, $7, $8, $10, $9, $11, $12, $13)
-       ON CONFLICT (loja_id, codigo) WHERE codigo IS NOT NULL DO UPDATE SET atualizada_em = now() RETURNING id`,
-      [ctx.lojaId, ctx.contatoId, ctx.conversaId, reserva.codigo, p.ini, p.fim, reserva.grupo, reserva.valor, { ...extra, cliente: { nome: cliente.nome, email: cliente.email } }, ctx.origem || 'assistente', ctx.pagamento || 'loja', ctx.cobrancaId || null, ctx.branchId || null])).rows[0];
+      `INSERT INTO reservas (loja_id, contato_id, conversa_id, codigo, status, retirada, devolucao, grupo, valor, origem, detalhes, pagamento, cobranca_id, branch_id, loja_destino_id)
+       VALUES ($1, $2, $3, $4, 'confirmada', $5, $6, $7, $8, $10, $9, $11, $12, $13, $14)
+       ON CONFLICT (loja_id, codigo) WHERE codigo IS NOT NULL DO UPDATE SET atualizada_em = now() RETURNING id, (xmax = 0) AS nova`,
+      [ctx.lojaId, ctx.contatoId, ctx.conversaId, reserva.codigo, p.ini, p.fim, reserva.grupo, reserva.valor, { ...extra, cliente: { nome: cliente.nome, email: cliente.email } }, ctx.origem || 'assistente', ctx.pagamento || 'loja', ctx.cobrancaId || null, ctx.branchId || null, destinoId])).rows[0];
+    if (destinoId && r.nova) aviso = { centralId: ctx.lojaId, destinoId, reservaId: r.id, codigo: reserva.codigo, grupo: reserva.grupo, retirada: p.ini, devolucao: p.fim, clienteNome: cliente.nome, filialNome: ctx.filialNome || null };
     if (ctx.contatoId) {
       await c.query(
         `UPDATE contatos SET nome = coalesce(nome, $2), email = coalesce(email, $3), cpf_cifrado = coalesce(cpf_cifrado, $4), cpf_final = coalesce(cpf_final, $5), atualizado_em = now() WHERE id = $1`,
@@ -501,4 +549,6 @@ export async function registrarReserva(ctx, reserva, p, cliente, extra) {
     }
     return r.id;
   });
+  if (aviso) avisarLojaDestino(aviso);   // sem await: o aviso nunca atrasa nem derruba a reserva
+  return id;
 }

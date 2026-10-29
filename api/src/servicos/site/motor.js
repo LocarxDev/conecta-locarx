@@ -11,7 +11,7 @@ import { filiaisComPortal, filialPublica } from '../locarx/filiais.js';
 import { registrarOcorrencia } from '../ocorrencias.js';
 import { ferramentasDoSite, PERMITIDAS_ANTES } from './ferramentas-site.js';
 import { descreverUi } from './ui.js';
-import { lojasDoSite, cartoesDeLojas, cidadesDoSite, iaDoDiaEsgotada, registrarUsoIa } from './chat.js';
+import { lojasDoSite, cartoesDeLojas, cidadesDoSite, cidadesParaOSite, iaDoDiaEsgotada, registrarUsoIa } from './chat.js';
 
 const semAcento = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
 const rodando = new Set();
@@ -58,14 +58,14 @@ async function rodar(sessaoId) {
   if (prep.aviso) { await responder(sessaoId, prep.aviso, null); return; }
 
   const { s, loja, a, rede, filiais, msgs, lojasSite } = prep;
-  const estado = { opcoes: s.opcoes || null, cotacao: s.cotacao || null, lojaId: s.loja_id || null, mudouOpcoes: false, mudouCotacao: false };
+  const estado = { opcoes: s.opcoes || null, cotacao: s.cotacao || null, lojaId: s.loja_id || (loja.central ? loja.id : null), mudouOpcoes: false, mudouCotacao: false };
   let lojaAtual = loja;
 
   const ctx = {
     lojaId: loja.id, branchId: s.opcoes?.branchId || loja.branch_id, branchEscolhido: !!s.opcoes?.branchId, filialNome: s.opcoes?.filialNome || null, filiais,
     conversaId: null, contatoId: null, telefone: null, locarxDisponivel: !!config.locarx, pixDisponivel: false, simulacao: true,
     campos: [], etiquetas: [], opcoesAnteriores: s.opcoes?.grupos || [], cotacao: s.cotacao || undefined, enviarDepois: [],
-    canalSite: true, preVerificacao: true, ui: [],
+    canalSite: true, preVerificacao: true, ui: [], central: !!loja.central,
     aoMostrar: (u) => ctx.ui.push(u),
     aoGuardar: (tipo, valor) => {
       if (tipo === 'opcoes') { estado.opcoes = valor; estado.mudouOpcoes = true; }
@@ -74,7 +74,7 @@ async function rodar(sessaoId) {
     },
     aoChamarAtendente: async () => { if (!ctx.ui.some((u) => u.tipo === 'cadastro')) ctx.ui.push({ tipo: 'cadastro' }); },
     listarLojas: (cidade) => comoSistema((c) => cartoesDeLojas(c, cidade)),
-    listarCidades: async () => cidadesDoSite(lojasSite).map((x) => x.cidade),
+    listarCidades: async () => (await comoSistema((c) => cidadesParaOSite(c))).map((x) => x.cidade),
     escolherLoja: async (nome) => {
       const q = semAcento(nome);
       const l = lojasSite.find((x) => semAcento(x.nome) === q) || lojasSite.find((x) => semAcento(x.nome).includes(q) || q.includes(semAcento(x.nome)));
@@ -101,6 +101,7 @@ async function rodar(sessaoId) {
     executar: async () => { await ctx.aoChamarAtendente(); return 'O formulário de nome e WhatsApp foi mostrado na tela. Diga em uma frase que, depois de confirmar o número com o código, um atendente continua com ele.'; },
   });
 
+  const cidadesSite = loja.central ? [] : cidadesDoSite(lojasSite).map((x) => x.cidade);   // Central: a lista é a da rede inteira (a Lia usa buscar_filiais)
   const historico = msgs.map((m) => ({ papel: m.papel === 'cliente' ? 'cliente' : 'assistente', texto: [m.texto, descreverUi(m.ui)].filter(Boolean).join(' ') })).filter((h) => h.texto);
   const inicio = Date.now();
   let resposta, erroIa = null;
@@ -108,7 +109,7 @@ async function rodar(sessaoId) {
     const sistema = montarSistema({
       loja: lojaAtual, a, rede, contato: { nome: null }, historicoReservas: [], crm: null,
       conversa: { opcoes: estado.opcoes, cotacao: estado.cotacao }, pix: false, filiais: ctx.filiais,
-      site: { antes: true, lojaEscolhida: estado.lojaId ? lojaAtual.nome : null, cidadesDisponiveis: cidadesDoSite(lojasSite).map((x) => x.cidade) },
+      site: { antes: true, lojaEscolhida: loja.central ? (estado.opcoes?.filialNome || null) : (estado.lojaId ? lojaAtual.nome : null), cidadesDisponiveis: cidadesSite },
     });
     const opcoes = { provedor: a.provedor, modelo: a.modelo, chave: a.chave_cifrada ? decifrar(a.chave_cifrada) : null, sistema, historico, ferramentas };
     resposta = config.iaSimulada ? await simularIa(opcoes) : await conversarComIa(opcoes);

@@ -28,20 +28,42 @@ function reservaPublica(r) {
     id: r.id, codigo: r.codigo, status: r.status, retirada: r.retirada, devolucao: r.devolucao, grupo: r.grupo, branchId: r.branch_id ?? null, filial: r.filial_nome || null, pagamento: r.pagamento || 'loja',
     valor: r.valor != null ? Number(r.valor) : null, origem: r.origem, criadaEm: r.criada_em,
     contato: r.contato_id ? { id: r.contato_id, nome: r.contato_nome, telefone: r.telefone } : null, conversaId: r.conversa_id,
+    ...(r.destino_nome ? { destino: r.destino_nome } : {}), ...(r.central_nome ? { central: r.central_nome, clienteNome: r.cliente_nome || null } : {}),
   };
 }
 
+// a loja é a Central de Reservas? Devolve as lojas que podem receber reservas dela (para o filtro "loja de destino").
+reservas.get('/central', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
+  const eh = await comContexto(ctx(req), async (c) => !!(await c.query('SELECT central FROM lojas WHERE id = $1', [req.usuario.loja_id])).rows[0]?.central);
+  if (!eh) return res.json({ central: false, destinos: [] });
+  const destinos = await comoSistema((c) => c.query('SELECT id, nome, cidade, uf FROM lojas WHERE ativa AND NOT central ORDER BY cidade, nome').then((r) => r.rows));
+  res.json({ central: true, destinos });
+}));
+
 reservas.get('/reservas', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
-  const q = validar(z.object({ periodo: z.enum(['proximas', 'passadas', 'todas']).default('proximas'), busca: z.string().trim().max(60).optional(), filial: z.coerce.number().int().positive().optional() }), req.query);
+  const q = validar(z.object({ destino: z.union([zUuid, z.literal('fora')]).optional(), periodo: z.enum(['proximas', 'passadas', 'todas']).default('proximas'), busca: z.string().trim().max(60).optional(), filial: z.coerce.number().int().positive().optional(), escopo: z.enum(['minhas', 'central']).default('minhas') }), req.query);
   const params = [req.usuario.loja_id];
+  const daCentral = q.escopo === 'central';   // reservas que a Central de Reservas fez para ESTA loja retirar (só leitura; sem dados do cliente além do nome)
   let filtro = '';
   if (q.filial) { params.push(q.filial); filtro += ` AND r.branch_id = $${params.length}`; }
+  if (q.destino && !daCentral) { if (q.destino === 'fora') filtro += ' AND r.loja_destino_id IS NULL'; else { params.push(q.destino); filtro += ` AND r.loja_destino_id = $${params.length}`; } }
   if (q.periodo === 'proximas') filtro += ` AND r.devolucao >= now() - interval '1 day'`;
   if (q.periodo === 'passadas') filtro += ` AND r.devolucao < now() - interval '1 day'`;
-  if (q.busca) { params.push('%' + q.busca.replace(/[%_\\]/g, '\\$&') + '%'); filtro += ` AND (r.codigo ILIKE $${params.length} OR ct.nome ILIKE $${params.length} OR ct.telefone LIKE $${params.length})`; }
-  const rows = await comContexto(ctx(req), async (c) => (await c.query(
-    `SELECT r.*, ct.nome AS contato_nome, ct.telefone, f.nome AS filial_nome FROM reservas r LEFT JOIN contatos ct ON ct.id = r.contato_id LEFT JOIN filiais f ON f.branch_id = r.branch_id
-      WHERE r.loja_id = $1 ${filtro} ORDER BY r.retirada ${q.periodo === 'passadas' ? 'DESC' : 'ASC'} LIMIT 300`, params)).rows);
+  if (q.busca) {
+    params.push('%' + q.busca.replace(/[%_\\]/g, '\\$&') + '%');
+    filtro += daCentral ? ` AND (r.codigo ILIKE $${params.length} OR (r.detalhes->'cliente'->>'nome') ILIKE $${params.length})`
+      : ` AND (r.codigo ILIKE $${params.length} OR ct.nome ILIKE $${params.length} OR ct.telefone LIKE $${params.length})`;
+  }
+  let rows = await comContexto(ctx(req), async (c) => (await c.query(
+    `SELECT r.*, ct.nome AS contato_nome, ct.telefone, f.nome AS filial_nome, (r.detalhes->'cliente'->>'nome') AS cliente_nome
+       FROM reservas r LEFT JOIN contatos ct ON ct.id = r.contato_id LEFT JOIN filiais f ON f.branch_id = r.branch_id
+      WHERE ${daCentral ? 'r.loja_destino_id = $1' : 'r.loja_id = $1'} ${filtro} ORDER BY r.retirada ${q.periodo === 'passadas' ? 'DESC' : 'ASC'} LIMIT 300`, params)).rows);
+  // nomes das lojas envolvidas (a leitura de lojas é restrita; aqui só o nome entra)
+  const ids = [...new Set(rows.flatMap((r) => [r.loja_destino_id, daCentral ? r.loja_id : null]).filter(Boolean))];
+  const nomes = ids.length ? new Map((await comoSistema((c) => c.query('SELECT id, nome FROM lojas WHERE id = ANY($1::uuid[])', [ids]))).rows.map((l) => [l.id, l.nome])) : new Map();
+  rows = rows.map((r) => (daCentral
+    ? { ...r, contato_id: null, conversa_id: null, central_nome: nomes.get(r.loja_id) || 'Central de Reservas' }
+    : { ...r, destino_nome: r.loja_destino_id ? nomes.get(r.loja_destino_id) || null : null }));
   res.json(rows.map(reservaPublica));
 }));
 

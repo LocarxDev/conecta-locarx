@@ -142,7 +142,8 @@ export function usuarioPublico(u) {
 export function lojaPublica(l) {
   return {
     id: l.id, nome: l.nome, cidade: l.cidade, uf: l.uf,
-    filial: { branchId: l.branch_id, branchCode: l.branch_code, tipo: l.tipo },
+    filial: { branchId: l.branch_id ?? null, branchCode: l.branch_code ?? null, tipo: l.tipo },
+    central: !!l.central,
     ativa: l.ativa, whatsapp: l.whatsapp, assistente: l.assistente, criadaEm: l.criada_em,
     modulos: normalizarModulos(l.modulos),
     pix: { proprio: !!l.pix_proprio, temChave: !!l.abacatepay_chave_cifrada, chaveFinal: l.abacatepay_chave_final || null, devMode: l.abacatepay_dev ?? null },

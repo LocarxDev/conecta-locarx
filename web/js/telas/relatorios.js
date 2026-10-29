@@ -1,6 +1,6 @@
 // Relatórios: da loja (dono) e da rede (administração e matriz). Só números, sem conteúdo de conversas.
 import { api } from '../api.js';
-import { html, render, $, $$, icone, seguro, paginar, ligarPaginacao } from '../util.js';
+import { html, render, $, $$, icone, seguro, paginar, ligarPaginacao, buscavel } from '../util.js';
 
 const reais = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
 const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
@@ -42,15 +42,37 @@ function funil(etapas) {
 }
 function aplicarLarguras(raiz) { $$('[style-h-w]', raiz).forEach((b) => { b.style.width = b.getAttribute('style-h-w') + '%'; b.removeAttribute('style-h-w'); }); }
 
+
+// Central de Reservas: reservas por loja de retirada e por atendente
+function painelCentral(rc, info, destino) {
+  const opc = (v, t) => html`<option value="${v}" ${String(destino) === String(v) ? 'selected' : ''}>${t}</option>`;
+  return html`<section class="painel"><div class="painel-cab"><h2>Central de Reservas</h2>
+      <select class="select-filial" id="destino-rel" aria-label="Loja de retirada">${opc('', 'Todas as lojas de retirada')}${opc('fora', 'Filiais fora do Conecta')}${info.destinos.map((d) => opc(d.id, `${d.cidade}/${d.uf} — ${d.nome}`))}</select></div>
+    <div class="resumo">
+      <div class="resumo-item"><span class="rotulo">Reservas da Central</span><span class="valor">${rc.totais.reservas}</span><span class="detalhe">${rc.totais.pelaLia} fechadas pela Lia</span></div>
+      <div class="resumo-item"><span class="rotulo">Valor reservado</span><span class="valor">${reais(rc.totais.valor)}</span><span class="detalhe">${rc.destino ? 'na loja filtrada' : 'em todas as lojas'}</span></div>
+    </div>
+    <div class="duas-colunas">
+      <div class="painel-corpo"><h3>Por loja de retirada</h3>
+        ${rc.porDestino.length || rc.foraDoConecta.reservas ? html`<div class="tabela-caixa"><table class="tabela"><thead><tr><th>Loja</th><th>Reservas</th><th>Valor</th></tr></thead>
+          <tbody>${rc.porDestino.map((d) => html`<tr><td>${d.nome}</td><td class="num">${d.reservas}</td><td class="num">${reais(d.valor)}</td></tr>`)}${rc.foraDoConecta.reservas ? html`<tr><td>Filiais fora do Conecta</td><td class="num">${rc.foraDoConecta.reservas}</td><td class="num">${reais(rc.foraDoConecta.valor)}</td></tr>` : ''}</tbody></table></div>` : html`<div class="estado"><p>Nenhuma reserva da Central no período.</p></div>`}</div>
+      <div class="painel-corpo"><h3>Por atendente</h3>
+        ${rc.porAtendente.length ? html`<div class="tabela-caixa"><table class="tabela"><thead><tr><th>Pessoa</th><th>Reservas</th><th>Valor</th></tr></thead>
+          <tbody>${rc.porAtendente.map((a) => html`<tr><td>${a.nome}${a.pelaLia ? html`<div class="sub">${a.pelaLia} pela Lia</div>` : ''}</td><td class="num">${a.reservas}</td><td class="num">${reais(a.valor)}</td></tr>`)}</tbody></table></div>` : html`<div class="estado"><p>Sem reservas no período.</p></div>`}</div>
+    </div></section>`;
+}
+
 // ---------------- loja ----------------
 export async function loja(alvo, ctx) {
-  let dias = 30, filial = '', filiais = [];
+  let dias = 30, filial = '', filiais = [], destino = '', central = null;
   try { filiais = await api.filiais(); } catch { filiais = []; }
+  try { const i = await api.centralInfo(); if (i.central) central = i; } catch { central = null; }
   const seletorFilial = () => (filiais.length > 1 ? html`<select class="select-filial" id="filial-rel" aria-label="Filial"><option value="">Todas as filiais</option>${filiais.map((f) => html`<option value="${f.branchId}" ${String(filial) === String(f.branchId) ? 'selected' : ''}>${f.nome}</option>`)}</select>` : '');
   async function carregar() {
     render(alvo, html`<div class="cabecalho-pagina"><div class="titulos"><h1>Relatórios</h1><p>Carregando…</p></div>${seletorPeriodo(dias)}</div>`);
     let r;
-    try { r = await api.relatorioLoja(dias, filial || undefined); } catch (err) {
+    let rc = null;
+    try { r = await api.relatorioLoja(dias, filial || undefined); if (central) rc = await api.relatorioCentral(dias, destino || undefined).catch(() => null); } catch (err) {
       if (err.status === 401) return ctx.sessaoExpirou();
       return render(alvo, html`<div class="painel"><div class="estado">${icone('alerta')}<h3>Não foi possível carregar</h3><p>${err.message}</p></div></div>`);
     }
@@ -73,6 +95,7 @@ export async function loja(alvo, ctx) {
           ${r.perdas.length ? html`<div class="lista-simples">${r.perdas.map((p) => html`<div><span>${p.motivo || 'Sem motivo'}</span><strong class="num">${p.n}</strong></div>`)}</div>` : html`<div class="estado"><p>Nenhuma perda registrada no período.</p></div>`}</section>
       </div>
       ${painelGrupos(r.grupos || [], { sub: 'reservas feitas nos últimos ' + dias + ' dias (sem as canceladas)' })}
+      ${rc ? painelCentral(rc, central, destino) : ''}
       <div class="duas-colunas">
         <section class="painel"><div class="painel-cab"><h2>Equipe</h2></div>
           ${r.equipe.length ? html`<div class="tabela-caixa"><table class="tabela"><thead><tr><th>Pessoa</th><th>Conversas atendidas</th><th>Mensagens</th></tr></thead>
@@ -90,6 +113,9 @@ export async function loja(alvo, ctx) {
     aplicarAlturas(alvo); aplicarLarguras(alvo);
     $$('[data-dias]', alvo).forEach((b) => b.addEventListener('click', () => { dias = Number(b.dataset.dias); carregar(); }));
     $('#filial-rel', alvo)?.addEventListener('change', (e) => { filial = e.target.value; carregar(); });
+    buscavel($('#filial-rel', alvo));
+    const selDestino = $('#destino-rel', alvo);
+    if (selDestino) { buscavel(selDestino); selDestino.addEventListener('change', (e) => { destino = e.target.value; carregar(); }); }
   }
   carregar();
 }
