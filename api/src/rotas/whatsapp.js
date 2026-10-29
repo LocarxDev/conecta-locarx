@@ -53,7 +53,19 @@ async function conectarLoja(req, lojaId) {
   }
   const p = provedores[cn.provedor];
   try {
-    await p.criar(cn.instancia);
+    const criada = await p.criar(cn.instancia);
+    if (criada) {
+      // instância nova: o QR vem na própria criação (ou chega pelo webhook em instantes) — não chama connect agora
+      ultimoConnect.set(cn.instancia, Date.now());
+      guardarQr(cn.instancia, criada.qr, criada.codigo);
+      await gravarStatus(lojaId, 'conectando');
+      return { status: 'conectando', qr: criada.qr, codigo: criada.codigo };
+    }
+    if (!podeChamarConnect(cn.instancia)) {
+      const g = qrCache.get(cn.instancia);
+      return { status: 'conectando', qr: g?.qr || null, codigo: g?.codigo || null };
+    }
+    ultimoConnect.set(cn.instancia, Date.now());
     const r = await p.qr(cn.instancia);
     if (r.conectado) { qrCache.delete(cn.instancia); await gravarStatus(lojaId, 'conectado'); return { status: 'conectado' }; }
     guardarQr(cn.instancia, r.qr, r.codigo);
@@ -71,6 +83,9 @@ async function conectarLoja(req, lojaId) {
 const qrCache = new Map();
 const guardarQr = (instancia, qr, codigo = null) => { if (qr) qrCache.set(instancia, { qr, codigo, em: Date.now() }); };
 const QR_VALIDO_MS = 90_000, INTERVALO_CONNECT_MS = 20_000;
+// trava geral: no máximo um /instance/connect a cada 20 s por instância, venha de onde vier (várias abas, admin e dono juntos)
+const ultimoConnect = new Map();
+const podeChamarConnect = (instancia) => Date.now() - (ultimoConnect.get(instancia) || 0) >= INTERVALO_CONNECT_MS;
 async function qrDaLoja(req, lojaId) {
   exigirEvolution();
   const cn = await comoSistema((c) => lerCanal(c, lojaId));
@@ -85,6 +100,9 @@ async function qrDaLoja(req, lojaId) {
     // conectando (QR na tela ou pareamento em andamento): não mexe no socket; devolve o QR que já temos
     if (estado === 'conectando' && recente) return { status: 'conectando', qr: g.qr, codigo: g.codigo };
     if (estado === 'conectando' && g && Date.now() - g.em < QR_VALIDO_MS + INTERVALO_CONNECT_MS) return { status: 'conectando', qr: g.qr, codigo: g.codigo };
+    // sem QR guardado: espera o webhook em vez de martelar o connect (cada connect reinicia o socket da Evolution)
+    if (!podeChamarConnect(cn.instancia)) return { status: 'conectando', qr: g?.qr || null, codigo: g?.codigo || null };
+    ultimoConnect.set(cn.instancia, Date.now());
     const r = await p.qr(cn.instancia);
     if (r.conectado) { qrCache.delete(cn.instancia); await gravarStatus(lojaId, 'conectado'); return { status: 'conectado' }; }
     guardarQr(cn.instancia, r.qr, r.codigo);

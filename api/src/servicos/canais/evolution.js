@@ -49,17 +49,25 @@ export const evolution = {
     catch (e) { return { noAr: false, versao: null, erro: e.message }; }
   },
 
+  // Cria a instância (ou reaproveita a que já existe). Instância nova: a Evolution já devolve o QR na resposta —
+  // devolvemos { qr, codigo } para a tela mostrar na hora, sem chamar /instance/connect logo em seguida
+  // (chamar connect com o socket recém-aberto o reinicia e o QR não aparece). Instância que já existia: null.
   async criar(instancia) {
+    let d = null;
     try {
-      await chamar('POST', '/instance/create', {
+      d = await chamar('POST', '/instance/create', {
         instanceName: instancia, integration: 'WHATSAPP-BAILEYS', qrcode: true,
         groupsIgnore: true, readMessages: false, alwaysOnline: false, rejectCall: false, syncFullHistory: false,
+        // webhook já na criação: o primeiro "qrcode.updated" não se perde antes do /webhook/set
+        webhook: { enabled: true, url: urlWebhook(), byEvents: false, base64: true, events: EVENTOS },
       });
     } catch (e) {
       // já existe: segue (reaproveita a instância)
       if (![403, 409].includes(e.status) && !JSON.stringify(e.resposta || '').toLowerCase().includes('already')) throw e;
     }
     await configurarWebhook(instancia);
+    const base64 = d?.qrcode?.base64 || null;
+    return d ? { qr: base64 && (base64.startsWith('data:') ? base64 : `data:image/png;base64,${base64}`), codigo: d?.qrcode?.pairingCode || null } : null;
   },
 
   // devolve { qr: 'data:image/png;base64,…' } ou { conectado: true }
