@@ -50,13 +50,14 @@ export async function montar(alvo, ctx) {
           <thead><tr><th>Loja</th><th>WhatsApp</th><th class="col-opcional">Número</th><th class="col-opcional">Assistente</th><th class="col-opcional">Equipe</th><th class="col-opcional">Mensagens</th><th><span class="sr-only">Ações</span></th></tr></thead>
           <tbody>${dados.lojas.map((l) => html`<tr class="${l.ativa ? '' : 'inativo'}">
             <td><strong>${l.nome}</strong><div class="sub">${l.cidade}/${l.uf} · filial ${l.filial ?? '—'}${l.ativa ? '' : ' · desativada'}</div></td>
-            <td>${SELO[l.status] || SELO.nunca}${l.estadoVivo && l.estadoVivo !== 'erro' ? html`<div class="sub">ao vivo: ${l.estadoVivo}</div>` : ''}${l.atualizadoEm ? html`<div class="sub">${quando(l.atualizadoEm)}</div>` : ''}</td>
+            <td>${l.instavelAte ? html`<span class="selo erro">Instável</span>` : (SELO[l.status] || SELO.nunca)}${l.estadoVivo && l.estadoVivo !== 'erro' ? html`<div class="sub">ao vivo: ${l.estadoVivo}</div>` : ''}${l.atualizadoEm ? html`<div class="sub">${quando(l.atualizadoEm)}</div>` : ''}
+              ${l.quedas24h || l.quedas7d ? html`<div class="sub" title="Vezes em que saiu de conectado">quedas: ${l.quedas24h} em 24 h · ${l.quedas7d} em 7 dias</div>` : ''}</td>
             <td class="col-opcional num nowrap">${formatarNumero(l.numero)}</td>
             <td class="col-opcional">${ASSISTENTE[l.assistente]}</td>
             <td class="col-opcional num">${l.online} <span class="sub">de ${l.equipe}</span>${l.aguardando ? html`<div class="sub">${l.aguardando} aguardando</div>` : ''}</td>
             <td class="col-opcional num">${l.recebidas24h} <span class="sub">↓ ${l.enviadas24h} ↑ em 24 h</span><div class="sub">${l.ultimaMensagemEm ? 'última ' + quando(l.ultimaMensagemEm).toLowerCase() : 'nenhuma ainda'}</div></td>
             <td class="nowrap"><div class="acoes-linha">
-              ${admin && l.ativa && l.status !== 'conectado' ? html`<button class="btn btn-texto" data-conectar="${l.id}" title="Gera o QR code para o celular da loja ler">Reconectar</button>` : ''}
+              ${admin && l.ativa && l.status !== 'conectado' && !l.instavelAte ? html`<button class="btn btn-texto" data-conectar="${l.id}" title="Gera o QR code para o celular da loja ler">Reconectar</button>` : ''}
               ${admin && l.ativa && l.instancia ? html`<button class="btn btn-texto" data-trocar="${l.id}" title="Desliga o número atual e gera um QR novo para outro número">Trocar número</button>` : ''}
               ${admin && l.instancia && l.status !== 'desconectado' ? html`<button class="btn btn-texto" data-desconectar="${l.id}">Desconectar</button>` : ''}
               <a class="btn btn-texto" href="#/lojas/${l.id}" title="Abrir a loja">${icone('seta')}</a>

@@ -54,3 +54,12 @@ export function emailRedefinicao({ para, nome, link }) {
     texto: `${texto}\n\nCrie a nova senha: ${link}\n\nO link vale por 1 hora.`,
   });
 }
+
+// Aviso operacional para a administração (ex.: WhatsApp de uma loja em loop). Sem dados de cliente.
+export function emailAviso({ para, nome, assunto, texto }) {
+  return enviar({
+    para, assunto: `[Conecta LocarX] ${assunto}`,
+    html: modelo({ titulo: assunto, texto: `${(nome || '').split(' ')[0] ? (nome || '').split(' ')[0] + ', ' : ''}${texto}`, botao: 'Abrir o Conecta', link: `${config.appUrl}/#/whatsapp-rede`, rodape: 'Aviso automático do Conecta LocarX.' }),
+    texto: `${assunto}\n\n${texto}\n\n${config.appUrl}/#/whatsapp-rede`,
+  });
+}

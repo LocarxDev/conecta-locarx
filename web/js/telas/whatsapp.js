@@ -32,18 +32,23 @@ export async function montar(alvo, ctx) {
                 : html`<strong>Nenhum número conectado</strong><div class="sub">Os clientes ainda não conseguem falar com a loja por aqui.</div>`}</div>
             </div>
             ${!c.configurado ? html`<div class="alerta-caixa info">${icone('info')}<span>O servidor do WhatsApp ainda não foi configurado. Fale com a administração do Conecta.</span></div>` : ''}
+            ${c.instavelAte ? html`<div class="alerta-caixa aviso">${icone('alerta')}<span><strong>Conexão instável.</strong> O WhatsApp conectou e caiu várias vezes seguidas; para não piorar, Conectar fica bloqueado até ${new Date(c.instavelAte).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}. Confira se este número está aberto em outro aparelho ou sistema (WhatsApp → Dispositivos conectados) e, se continuar, use "Trocar de número".</span></div>` : ''}
+            ${c.ultimaQuedaEm && !conectado ? html`<p class="sub">Última queda: ${new Date(c.ultimaQuedaEm).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</p>` : ''}
             <div>${conectado
               ? html`<div class="acoes-linha"><button class="btn btn-contorno" id="trocar">Trocar de número</button><button class="btn btn-perigo" id="desconectar">Desconectar número</button></div>`
-              : html`<button class="btn btn-primario" id="conectar" ${c.configurado ? '' : 'disabled'}>${icone('whatsapp')}Conectar WhatsApp</button>`}</div>
+              : html`<button class="btn btn-primario" id="conectar" ${c.configurado && !c.instavelAte ? '' : 'disabled'}>${icone('whatsapp')}Conectar WhatsApp</button>`}</div>
           </div>
         </section>
         <section class="painel">
           <div class="painel-cab"><h2>Antes de conectar</h2></div>
           <div class="painel-corpo">
             <ol class="passos">
-              <li><div>Use um chip só da loja<span class="sub">O número fica ligado ao Conecta. Evite o celular pessoal de alguém.</span></div></li>
-              <li><div>Deixe o celular ligado e com internet<span class="sub">O WhatsApp do celular precisa ficar ativo para as mensagens chegarem.</span></div></li>
-              <li><div>Não mande mensagens em massa<span class="sub">Disparos para muita gente de uma vez podem bloquear o número.</span></div></li>
+              <li><div>Use um chip só da loja<span class="sub">Em um celular que fica na loja, carregando e no Wi-Fi. Evite o celular pessoal de alguém.</span></div></li>
+              <li><div>Saia dos outros aparelhos antes de ler o QR<span class="sub">No celular: WhatsApp → Dispositivos conectados → encerrar todas as sessões (WhatsApp Web, computador, outra ferramenta). Um número só pode estar em <strong>um</strong> sistema de atendimento.</span></div></li>
+              <li><div>Uma tela, uma pessoa, uma leitura<span class="sub">Leia o QR e espere aparecer "Conectado". Não fique clicando em Conectar; se o QR não vier em 30 s, use "Trocar de número".</span></div></li>
+              <li><div>Depois de conectado, atenda pelo Conecta<span class="sub">Respostas pelo celular ou pelo WhatsApp Web não entram no CRM e a Lia pode responder por cima. Para falar pelo celular, assuma a conversa antes.</span></div></li>
+              <li><div>Celular sempre ligado e com internet<span class="sub">Não troque de chip ou de aparelho nem reinstale o WhatsApp sem antes desconectar aqui. Evite grupos com este número.</span></div></li>
+              <li><div>Não mande mensagens em massa<span class="sub">Disparos para muita gente de uma vez podem bloquear o número. Número novo: use normalmente alguns dias antes de ligar o assistente.</span></div></li>
             </ol>
           </div>
         </section>

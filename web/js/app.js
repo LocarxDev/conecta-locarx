@@ -15,6 +15,7 @@ import * as conversas from './telas/conversas.js';
 import * as assistenteTela from './telas/assistente.js';
 import * as baseTela from './telas/base.js';
 import * as redeTela from './telas/rede.js';
+import * as promptTela from './telas/prompt.js';
 import * as reservasTela from './telas/reservas.js';
 import * as clientesTela from './telas/clientes.js';
 import * as funilTela from './telas/funil.js';
@@ -59,6 +60,7 @@ function menuDoPerfil(perfilUsuario) {
       { rota: 'lojas', rotulo: 'Lojas', icone: 'lojas' },
       { rota: 'whatsapp-rede', rotulo: 'Status do WhatsApp', icone: 'whatsapp' },
       ...(perfilUsuario === 'admin' ? [{ rota: 'monitor-assistente', rotulo: 'Monitor do assistente', icone: 'robo' }] : []),
+      { rota: 'prompt', rotulo: 'Prompt da Lia', icone: 'robo' },
       { rota: 'rede', rotulo: 'Base da rede', icone: 'assistente' },
       { rota: 'padroes', rotulo: 'Padrões do CRM', icone: 'ajustes' },
       { rota: 'relatorios-rede', rotulo: 'Relatórios', icone: 'relatorios' },
@@ -109,6 +111,7 @@ const ROTAS = [
   { padrao: /^assistente$/, tela: assistenteTela.montar, perfis: ['dono'] },
   { padrao: /^base$/, tela: baseTela.montar, perfis: ['dono', 'atendente'] },
   { padrao: /^rede$/, tela: redeTela.montar, perfis: ['admin', 'matriz'] },
+  { padrao: /^prompt$/, tela: promptTela.montar, perfis: ['admin', 'matriz'] },
   { padrao: /^reservas$/, tela: reservasTela.montar, perfis: ['dono', 'atendente'] },
   { padrao: /^cotacao$/, tela: cotacaoTela.montar, perfis: ['dono', 'atendente'] },
   { padrao: /^whatsapp-rede$/, tela: whatsappRedeTela.montar, perfis: ['admin', 'matriz'] },

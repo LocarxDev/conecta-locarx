@@ -15,9 +15,9 @@ export async function montar(alvo, ctx) {
     <div class="cabecalho-pagina"><div class="titulos"><h1>Base da rede</h1><p>O que vale para os assistentes de todas as lojas LocarX.</p></div></div>
     <form class="form" id="form-rede" novalidate>
       <div class="perfil-grade">
-        <section class="painel"><div class="painel-cab"><h2>Orientações gerais da rede</h2></div>
-          <div class="painel-corpo form"><div class="campo"><label for="r-orient">Regras que todo assistente da LocarX segue</label>
-            <textarea id="r-orient" name="orientacoes" rows="10" maxlength="8000" placeholder="Ex.: Nunca ofereça desconto. Sempre informe que o pagamento é feito na loja.">${r.orientacoes}</textarea></div></div></section>
+        <section class="painel"><div class="painel-cab"><h2>Regras da rede para a Lia</h2></div>
+          <div class="painel-corpo"><p>As regras que valem para todas as lojas agora ficam em <a href="#/prompt"><strong>Prompt da Lia</strong></a>, com histórico de versões e prévia do prompt completo.</p>
+            <p class="sub">${r.orientacoes ? `${r.orientacoes.length} caracteres em vigor.` : 'Nenhuma regra cadastrada ainda.'}</p></div></section>
         <section class="painel"><div class="painel-cab"><h2>Modelo padrão para lojas novas</h2></div>
           <div class="painel-corpo form">
             <div class="campo"><label for="r-nome">Nome do assistente</label><input id="r-nome" name="nome" value="${m.nome || ''}" maxlength="60" placeholder="Assistente LocarX"></div>
@@ -44,7 +44,6 @@ export async function montar(alvo, ctx) {
   f.addEventListener('submit', async (e) => {
     e.preventDefault();
     const d = {
-      orientacoes: f.elements.orientacoes.value,
       modeloAssistente: { nome: f.elements.nome.value.trim() || undefined, boasVindas: f.elements.boasVindas.value, instrucoes: f.elements.instrucoes.value, msgRepasse: f.elements.msgRepasse.value },
     };
     await comBotao($('.barra-salvar [type=submit]', f), async () => { try { await api.salvarRede(d); avisar('Orientações da rede salvas.'); } catch (err) { avisar(err.message, 'erro'); } });

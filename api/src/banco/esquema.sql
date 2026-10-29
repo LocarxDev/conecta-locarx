@@ -1055,3 +1055,50 @@ BEGIN
                            CASE WHEN m.personalizado AND r.permite_editar THEN m.texto ELSE r.texto END,
                            m.personalizado AND r.permite_editar, r.ativo AND NOT m.desligado_loja);
 END $$;
+
+-- =====================================================================
+-- Prompt da Lia (regras da rede): histórico de versões do texto que entra no prompt de todas as lojas
+-- (o texto vigente continua em rede_config.orientacoes_rede). Só administração e matriz.
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS rede_prompt_versoes (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  texto       text NOT NULL,
+  autor_id    uuid REFERENCES usuarios(id) ON DELETE SET NULL,
+  autor_nome  text,
+  motivo      text CHECK (length(motivo) <= 200),
+  criada_em   timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS rede_prompt_versoes_data ON rede_prompt_versoes (criada_em DESC);
+GRANT SELECT, INSERT ON rede_prompt_versoes TO conecta_app;
+ALTER TABLE rede_prompt_versoes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rede_prompt_versoes FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS rede_prompt_versoes_rede ON rede_prompt_versoes;
+CREATE POLICY rede_prompt_versoes_rede ON rede_prompt_versoes FOR ALL
+  USING (ctx_perfil() IN ('admin', 'matriz', 'sistema')) WITH CHECK (ctx_perfil() IN ('admin', 'matriz', 'sistema'));
+-- o texto da rede pode ser maior que o de uma loja
+ALTER TABLE rede_config ALTER COLUMN orientacoes_rede TYPE text;
+
+-- =====================================================================
+-- Estabilidade do WhatsApp: histórico de mudanças de estado por instância e trava anti-loop.
+-- Só grava quando o estado MUDA. Se mudar mais de 5 vezes em 1 minuto, a instância fica "instável" por 2 min:
+-- Conectar/Reconectar/QR ficam bloqueados para ninguém alimentar o loop, e a administração é avisada.
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS canais_eventos (
+  id         bigserial PRIMARY KEY,
+  loja_id    uuid NOT NULL REFERENCES lojas(id) ON DELETE CASCADE,
+  instancia  text NOT NULL,
+  de         text,
+  para       text NOT NULL,
+  criado_em  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS canais_eventos_loja ON canais_eventos (loja_id, criado_em DESC);
+GRANT SELECT, INSERT, DELETE ON canais_eventos TO conecta_app;
+GRANT USAGE ON SEQUENCE canais_eventos_id_seq TO conecta_app;
+ALTER TABLE canais_eventos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canais_eventos FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS canais_eventos_ver ON canais_eventos;
+CREATE POLICY canais_eventos_ver ON canais_eventos FOR ALL
+  USING (ctx_perfil() IN ('admin', 'matriz', 'sistema') OR loja_id = ctx_loja())
+  WITH CHECK (ctx_perfil() = 'sistema');
+ALTER TABLE canais ADD COLUMN IF NOT EXISTS instavel_ate timestamptz;
+ALTER TABLE canais ADD COLUMN IF NOT EXISTS ultima_queda_em timestamptz;

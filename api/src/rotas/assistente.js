@@ -2,14 +2,14 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { config } from '../config.js';
-import { comContexto, contextoDoUsuario } from '../banco/conexao.js';
+import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js';
 import { cifrar } from '../servicos/seguranca.js';
-import { testarChave } from '../servicos/ia/provedores.js';
-import { testarAssistente } from '../servicos/ia/assistente.js';
+import { testarChave, conversarComIa } from '../servicos/ia/provedores.js';
+import { testarAssistente, montarSistema } from '../servicos/ia/assistente.js';
 import { dividirEmBlocos } from '../servicos/ia/conhecimento.js';
 import { extrairTexto } from '../servicos/arquivos/extrair-texto.js';
 import * as locarx from '../servicos/locarx/api-locarx.js';
-import { resolverFilial, filiaisDaLoja } from '../servicos/locarx/filiais.js';
+import { resolverFilial, filiaisDaLoja, filiaisComPortal, filialPublica } from '../servicos/locarx/filiais.js';
 import { rota, erro, validar, zUuid, exigirPerfil, registrar } from '../http.js';
 import { moduloLigado } from '../servicos/modulos.js';
 
@@ -278,6 +278,86 @@ conhecimento.post('/importar', rota(async (req, res) => {
 }));
 
 // =====================================================================
+// Prompt da Lia: regras da rede (entram no prompt de TODAS as lojas, inclusive a Central), com histórico de versões
+// e prévia do prompt completo. Só administração e matriz. O roteiro fixo (reserva, proteções, ferramentas, datas,
+// segurança) continua no código: aqui vai o que é regra de negócio e muda com o tempo.
+// =====================================================================
+const zPromptRede = z.object({ texto: z.string().max(20000, 'Máximo de 20.000 caracteres.'), motivo: z.string().trim().max(200).optional() });
+const versaoPublica = (v) => ({ id: v.id, texto: v.texto, autor: v.autor_nome || null, motivo: v.motivo || null, criadaEm: v.criada_em });
+
+rede.get('/prompt', exigirPerfil('admin', 'matriz'), rota(async (req, res) => {
+  const r = await comContexto(ctx(req), async (c) => ({
+    cfg: (await c.query('SELECT orientacoes_rede, atualizado_em FROM rede_config LIMIT 1')).rows[0],
+    versoes: (await c.query('SELECT * FROM rede_prompt_versoes ORDER BY criada_em DESC LIMIT 30')).rows,
+    lojas: (await c.query('SELECT id, nome, central FROM lojas WHERE ativa ORDER BY central DESC, nome')).rows,
+  }));
+  res.json({ texto: r.cfg?.orientacoes_rede || '', atualizadoEm: r.cfg?.atualizado_em || null, versoes: r.versoes.map(versaoPublica), lojas: r.lojas.map((l) => ({ id: l.id, nome: l.nome, central: !!l.central })) });
+}));
+
+rede.put('/prompt', exigirPerfil('admin', 'matriz'), rota(async (req, res) => {
+  const d = validar(zPromptRede, req.body);
+  await comContexto(ctx(req), async (c) => {
+    const atual = (await c.query('SELECT orientacoes_rede FROM rede_config LIMIT 1')).rows[0]?.orientacoes_rede || '';
+    if (atual === d.texto) return;
+    await c.query('UPDATE rede_config SET orientacoes_rede = $1, atualizado_em = now()', [d.texto]);
+    await c.query('INSERT INTO rede_prompt_versoes (texto, autor_id, autor_nome, motivo) VALUES ($1, $2, $3, $4)', [d.texto, req.usuario.id, req.usuario.nome, d.motivo || null]);
+    await registrar(c, req, 'editou_prompt_rede', { detalhes: { tamanho: d.texto.length, motivo: d.motivo || null } });
+  });
+  res.json({ ok: true });
+}));
+
+rede.post('/prompt/restaurar/:id', exigirPerfil('admin', 'matriz'), rota(async (req, res) => {
+  if (!zUuid.safeParse(req.params.id).success) throw erro(404, 'Versão não encontrada.');
+  await comContexto(ctx(req), async (c) => {
+    const v = (await c.query('SELECT * FROM rede_prompt_versoes WHERE id = $1', [req.params.id])).rows[0];
+    if (!v) throw erro(404, 'Versão não encontrada.');
+    await c.query('UPDATE rede_config SET orientacoes_rede = $1, atualizado_em = now()', [v.texto]);
+    await c.query('INSERT INTO rede_prompt_versoes (texto, autor_id, autor_nome, motivo) VALUES ($1, $2, $3, $4)', [v.texto, req.usuario.id, req.usuario.nome, `Restaurada a versão de ${new Date(v.criada_em).toLocaleString('pt-BR', { timeZone: 'America/Bahia' })}`]);
+    await registrar(c, req, 'restaurou_prompt_rede', { detalhes: { versao: v.id } });
+  });
+  res.json({ ok: true });
+}));
+
+// prévia do prompt completo como uma loja recebe (texto do sistema, sem dados de cliente real)
+rede.get('/prompt/previa', exigirPerfil('admin', 'matriz'), rota(async (req, res) => {
+  const lojaId = zUuid.safeParse(req.query.loja).success ? req.query.loja : null;
+  const texto = await comoSistema(async (c) => {
+    const loja = (await c.query(lojaId ? 'SELECT * FROM lojas WHERE id = $1' : 'SELECT * FROM lojas WHERE ativa ORDER BY central DESC, criada_em LIMIT 1', lojaId ? [lojaId] : [])).rows[0];
+    if (!loja) throw erro(404, 'Loja não encontrada.');
+    const a = (await c.query('SELECT * FROM assistentes WHERE loja_id = $1', [loja.id])).rows[0] || { nome: 'Lia', instrucoes: '', boas_vindas: '' };
+    const redeCfg = (await c.query('SELECT * FROM rede_config LIMIT 1')).rows[0] || {};
+    let filiais = [];
+    try { filiais = (await filiaisComPortal(c, loja.id)).map(filialPublica); } catch { filiais = []; }
+    return montarSistema({ loja, a, rede: redeCfg, contato: { nome: 'Cliente de exemplo' }, historicoReservas: [], crm: null, pix: !!config.abacatepay, filiais });
+  });
+  res.json({ texto });
+}));
+
+// Conferir conflitos: a IA compara as regras da rede (texto que o admin está escrevendo) com a parte FIXA do prompt
+// e aponta contradições. Usa a chave de IA de uma loja ativa (a rede não tem chave própria). Só no clique.
+rede.post('/prompt/conflitos', exigirPerfil('admin', 'matriz'), rota(async (req, res) => {
+  const d = validar(z.object({ texto: z.string().max(20000) }), req.body);
+  if (!d.texto.trim()) return res.json({ conflitos: [], resumo: 'Nenhuma regra escrita ainda.' });
+  const r = await comoSistema(async (c) => {
+    const a = (await c.query(`SELECT a.provedor, a.modelo, a.chave_cifrada, l.nome FROM assistentes a JOIN lojas l ON l.id = a.loja_id
+                               WHERE a.chave_cifrada IS NOT NULL AND l.ativa ORDER BY l.central DESC, l.criada_em LIMIT 1`)).rows[0];
+    if (!a) throw erro(409, 'Nenhuma loja ativa tem chave de IA cadastrada; a conferência usa a chave de uma loja.');
+    const loja = (await c.query('SELECT * FROM lojas WHERE ativa ORDER BY central DESC, criada_em LIMIT 1')).rows[0];
+    const fixo = montarSistema({ loja, a: { nome: 'Lia', instrucoes: '', boas_vindas: '' }, rede: { orientacoes_rede: '' }, contato: { nome: 'Cliente' }, historicoReservas: [], crm: null, pix: !!config.abacatepay, filiais: [] });
+    return { a, fixo };
+  });
+  const sistema = `Você revisa regras de negócio escritas pela administração de uma rede de locadoras para um assistente virtual. Receberá (1) o PROMPT FIXO do assistente, que não pode ser alterado, e (2) as REGRAS DA REDE escritas pela administração. Aponte SOMENTE contradições reais entre as regras e o prompt fixo (ex.: a regra diz "pode reservar com 12 h" e o fixo exige 24 h; a regra manda cancelar pelo assistente e o fixo proíbe). Ignore complementos, detalhes e estilo. Responda em JSON puro, sem markdown: {"conflitos":[{"regra":"trecho da regra","fixo":"o que o prompt fixo diz","efeito":"o que a Lia vai fazer na prática (o fixo prevalece)","sugestao":"como reescrever ou o que pedir ao desenvolvedor"}],"resumo":"uma frase"}. Se não houver contradição, "conflitos" vazio e o resumo diz isso.`;
+  const pergunta = `PROMPT FIXO:\n"""\n${r.fixo}\n"""\n\nREGRAS DA REDE:\n"""\n${d.texto}\n"""`;
+  const { decifrar } = await import('../servicos/seguranca.js');
+  if (config.iaSimulada) return res.json({ conflitos: [], resumo: 'IA simulada: sem análise real.', usandoChaveDe: r.a.nome });
+  const resp = await conversarComIa({ provedor: r.a.provedor, modelo: r.a.modelo, chave: decifrar(r.a.chave_cifrada), sistema, historico: [{ papel: 'cliente', texto: pergunta }], maxTokens: 1500 });
+  let saida = { conflitos: [], resumo: '' };
+  try { saida = JSON.parse(String(resp.texto || '').replace(/^```(?:json)?\s*|\s*```$/g, '')); } catch { saida = { conflitos: [], resumo: String(resp.texto || '').slice(0, 600) || 'A IA não devolveu uma análise legível. Tente de novo.' }; }
+  saida.conflitos = Array.isArray(saida.conflitos) ? saida.conflitos.slice(0, 20).map((x) => ({ regra: String(x.regra || '').slice(0, 400), fixo: String(x.fixo || '').slice(0, 400), efeito: String(x.efeito || '').slice(0, 400), sugestao: String(x.sugestao || '').slice(0, 400) })) : [];
+  res.json({ ...saida, usandoChaveDe: r.a.nome });
+}));
+
+// =====================================================================
 // Rede: orientações gerais, modelo padrão do assistente e sinônimos
 // =====================================================================
 rede.get('/rede', exigirPerfil('admin', 'matriz'), rota(async (req, res) => {
@@ -290,14 +370,15 @@ rede.get('/rede', exigirPerfil('admin', 'matriz'), rota(async (req, res) => {
 
 rede.put('/rede', exigirPerfil('admin', 'matriz'), rota(async (req, res) => {
   const d = validar(z.object({
-    orientacoes: z.string().max(8000, 'Máximo de 8.000 caracteres.'),
+    orientacoes: z.string().max(20000, 'Máximo de 20.000 caracteres.').optional(),
     modeloAssistente: z.object({
       nome: z.string().trim().max(60).optional(), instrucoes: z.string().max(8000).optional(), boasVindas: z.string().max(1000).optional(),
       msgAusencia: z.string().max(1000).optional(), msgRepasse: z.string().max(1000).optional(), horario: zHorario.optional(),
     }),
   }), req.body);
   await comContexto(ctx(req), async (c) => {
-    await c.query('UPDATE rede_config SET orientacoes_rede = $1, modelo_assistente = $2, atualizado_em = now()', [d.orientacoes, JSON.stringify(d.modeloAssistente)]);
+    if (d.orientacoes !== undefined) await c.query('UPDATE rede_config SET orientacoes_rede = $1, atualizado_em = now()', [d.orientacoes]);
+    await c.query('UPDATE rede_config SET modelo_assistente = $1, atualizado_em = now()', [JSON.stringify(d.modeloAssistente)]);
     await registrar(c, req, 'editou_orientacoes_rede');
   });
   res.json({ ok: true });

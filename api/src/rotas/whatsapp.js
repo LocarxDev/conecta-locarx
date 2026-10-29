@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js';
 import { evolution, lerMensagemEvolution } from '../servicos/canais/evolution.js';
 import { iguais } from '../servicos/seguranca.js';
+import { emailAviso } from '../servicos/email.js';
 import { rota, erro, exigirPerfil, registrar, zUuid } from '../http.js';
 import { estadoInicial, agendar, dentroDoHorario } from '../servicos/ia/assistente.js';
 import { registrarEvento } from '../servicos/crm/funis.js';
@@ -25,14 +26,50 @@ async function lerCanal(c, lojaId) {
   return (await c.query('SELECT * FROM canais WHERE loja_id = $1', [lojaId])).rows[0] || null;
 }
 
+// Limites da trava anti-loop (mudanças de estado por minuto → instável por N minutos)
+const LOOP_MUDANCAS = 5, LOOP_JANELA_MIN = 1, INSTAVEL_MIN = 2;
+
+/** Grava o estado da instância. Só registra evento quando o estado muda; detecta loop e marca a instância como instável. */
 async function gravarStatus(lojaId, status, numero) {
-  await comoSistema(async (c) => {
-    await c.query(`UPDATE canais SET status = $2, numero = coalesce($3, numero), atualizado_em = now() WHERE loja_id = $1`, [lojaId, status, numero || null]);
+  const r = await comoSistema(async (c) => {
+    // FOR UPDATE: avisos da Evolution chegam em paralelo; serializa para cada mudança de estado ser contada uma vez só
+    const antes = (await c.query('SELECT status, instancia, instavel_ate FROM canais WHERE loja_id = $1 FOR UPDATE', [lojaId])).rows[0];
+    await c.query(`UPDATE canais SET status = $2, numero = coalesce($3, numero), atualizado_em = now(),
+                     ultima_queda_em = CASE WHEN $2 = 'desconectado' AND status = 'conectado' THEN now() ELSE ultima_queda_em END
+                   WHERE loja_id = $1`, [lojaId, status, numero || null]);
     await c.query(`UPDATE lojas SET whatsapp = $2 WHERE id = $1`, [lojaId, status === 'conectado' ? 'conectado' : 'desconectado']);
+    if (!antes || antes.status === status) return null;
+    await c.query('INSERT INTO canais_eventos (loja_id, instancia, de, para) VALUES ($1, $2, $3, $4)', [lojaId, antes.instancia, antes.status, status]);
+    await c.query("DELETE FROM canais_eventos WHERE criado_em < now() - interval '30 days'");   // retenção
+    const n = (await c.query(`SELECT count(*)::int AS n FROM canais_eventos WHERE loja_id = $1 AND criado_em > now() - make_interval(mins => $2)`, [lojaId, LOOP_JANELA_MIN])).rows[0].n;
+    if (n > LOOP_MUDANCAS && !(antes.instavel_ate && new Date(antes.instavel_ate) > new Date())) {
+      await c.query(`UPDATE canais SET instavel_ate = now() + make_interval(mins => $2) WHERE loja_id = $1`, [lojaId, INSTAVEL_MIN]);
+      const loja = (await c.query('SELECT nome FROM lojas WHERE id = $1', [lojaId])).rows[0];
+      const admins = (await c.query(`SELECT email, nome FROM usuarios WHERE perfil = 'admin' AND status = 'ativo'`)).rows;
+      return { loop: true, loja: loja?.nome || lojaId, admins, mudancas: n };
+    }
+    return null;
   });
+  if (r?.loop) {
+    console.error(`[whatsapp] instância da loja ${r.loja} instável: ${r.mudancas} mudanças de estado em ${LOOP_JANELA_MIN} min; conexão bloqueada por ${INSTAVEL_MIN} min`);
+    for (const a of r.admins) {
+      emailAviso({ para: a.email, nome: a.nome, assunto: `WhatsApp instável: ${r.loja}`,
+        texto: `O WhatsApp da loja ${r.loja} mudou de estado ${r.mudancas} vezes em ${LOOP_JANELA_MIN} minuto (loop de reconexão). O Conecta bloqueou Conectar/Reconectar por ${INSTAVEL_MIN} minutos. Confira em Status do WhatsApp; se continuar, use "Trocar número" e confira se o número está aberto em outro aparelho ou sistema.` })
+        .catch((e) => console.error('[whatsapp] aviso:', e.message));
+    }
+  }
 }
 
-const publico = (cn) => ({ status: cn?.status || 'desconectado', numero: cn?.numero || null, provedor: cn?.provedor || 'evolution', atualizadoEm: cn?.atualizado_em || null });
+/** Instância marcada como instável: Conectar/Reconectar/QR ficam bloqueados até passar a janela. */
+async function exigirEstavel(lojaId) {
+  const cn = await comoSistema((c) => lerCanal(c, lojaId));
+  if (cn?.instavel_ate && new Date(cn.instavel_ate) > new Date()) {
+    const seg = Math.ceil((new Date(cn.instavel_ate) - Date.now()) / 1000);
+    throw erro(409, `O WhatsApp desta loja está instável (ficou conectando e caindo várias vezes seguidas). Aguarde ${seg} s antes de tentar de novo. Se continuar, confira se o número está aberto em outro aparelho ou sistema e use "Trocar número".`);
+  }
+}
+
+const publico = (cn) => ({ status: cn?.status || 'desconectado', numero: cn?.numero || null, provedor: cn?.provedor || 'evolution', atualizadoEm: cn?.atualizado_em || null, instavelAte: cn?.instavel_ate && new Date(cn.instavel_ate) > new Date() ? cn.instavel_ate : null, ultimaQuedaEm: cn?.ultima_queda_em || null });
 
 // ---------- situação ----------
 canal.get('/canal', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
@@ -44,6 +81,7 @@ canal.get('/canal', exigirPerfil('dono', 'atendente'), rota(async (req, res) => 
 // (as mesmas funções servem o dono da loja e a administração — por isso recebem o lojaId)
 async function conectarLoja(req, lojaId) {
   exigirEvolution();
+  await exigirEstavel(lojaId);
   let cn = await comoSistema((c) => lerCanal(c, lojaId));
   if (!cn) {
     cn = await comoSistema(async (c) => (await c.query(
@@ -88,6 +126,7 @@ const ultimoConnect = new Map();
 const podeChamarConnect = (instancia) => Date.now() - (ultimoConnect.get(instancia) || 0) >= INTERVALO_CONNECT_MS;
 async function qrDaLoja(req, lojaId) {
   exigirEvolution();
+  await exigirEstavel(lojaId);
   const cn = await comoSistema((c) => lerCanal(c, lojaId));
   if (!cn) throw erro(404, 'Clique em "Conectar WhatsApp" para começar.');
   if (cn.status === 'conectado') return { status: 'conectado', numero: cn.numero };
@@ -168,7 +207,9 @@ canalAdmin.get('/whatsapp', exigirPerfil('admin', 'matriz'), rota(async (req, re
   const aoVivo = req.query.aoVivo === '1' && !!config.evolution;
   const linhas = await comoSistema(async (c) => (await c.query(`
     SELECT l.id, l.nome, l.cidade, l.uf, l.ativa, l.branch_id,
-           cn.status AS canal_status, cn.numero, cn.instancia, cn.provedor, cn.atualizado_em,
+           cn.status AS canal_status, cn.numero, cn.instancia, cn.provedor, cn.atualizado_em, cn.instavel_ate, cn.ultima_queda_em,
+           (SELECT count(*) FROM canais_eventos e WHERE e.loja_id = l.id AND e.de = 'conectado' AND e.para <> 'conectado' AND e.criado_em > now() - interval '24 hours')::int AS quedas_24h,
+           (SELECT count(*) FROM canais_eventos e WHERE e.loja_id = l.id AND e.de = 'conectado' AND e.para <> 'conectado' AND e.criado_em > now() - interval '7 days')::int AS quedas_7d,
            coalesce(a.ativo, false) AS assistente_ativo, (a.chave_cifrada IS NOT NULL) AS assistente_com_chave,
            (SELECT count(*) FROM usuarios u WHERE u.loja_id = l.id AND u.status = 'ativo' AND u.visto_em > now() - interval '5 minutes')::int AS online,
            (SELECT count(*) FROM usuarios u WHERE u.loja_id = l.id AND u.status = 'ativo' AND u.perfil IN ('dono', 'atendente'))::int AS equipe,
@@ -189,13 +230,16 @@ canalAdmin.get('/whatsapp', exigirPerfil('admin', 'matriz'), rota(async (req, re
     }
     const status = l.canal_status || 'nunca';
     const alertas = [];
+    const instavel = l.instavel_ate && new Date(l.instavel_ate) > new Date();
+    if (instavel) alertas.push(`Instável: conectou e caiu várias vezes seguidas — conexão bloqueada até ${new Date(l.instavel_ate).toLocaleTimeString('pt-BR', { timeZone: 'America/Bahia', hour: '2-digit', minute: '2-digit' })}`);
+    if (l.ativa && (l.quedas_24h || 0) >= 3) alertas.push(`${l.quedas_24h} quedas nas últimas 24 h`);
     if (l.ativa && status !== 'conectado') alertas.push(status === 'nunca' ? 'WhatsApp nunca foi conectado' : 'WhatsApp desconectado');
     if (l.ativa && status === 'conectado' && l.assistente_ativo && !l.assistente_com_chave) alertas.push('Assistente ligado sem chave de IA');
     if (l.ativa && status === 'conectado' && !l.assistente_ativo && l.online === 0 && l.aguardando > 0) alertas.push(`${l.aguardando} conversa(s) aguardando e ninguém da equipe online`);
     if (estadoVivo === 'erro') alertas.push('A Evolution não respondeu sobre esta instância');
     lojas.push({
       id: l.id, nome: l.nome, cidade: l.cidade, uf: l.uf, ativa: l.ativa, filial: l.branch_id,
-      status, numero: l.numero, instancia: l.instancia, atualizadoEm: l.atualizado_em, estadoVivo,
+      status, numero: l.numero, instancia: l.instancia, atualizadoEm: l.atualizado_em, estadoVivo, instavelAte: instavel ? l.instavel_ate : null, quedas24h: l.quedas_24h || 0, quedas7d: l.quedas_7d || 0, ultimaQuedaEm: l.ultima_queda_em || null,
       assistente: l.assistente_ativo ? (l.assistente_com_chave ? 'ligado' : 'sem chave') : 'desligado',
       equipe: l.equipe, online: l.online, recebidas24h: l.recebidas_24h, enviadas24h: l.enviadas_24h, ultimaMensagemEm: l.ultima_mensagem_em, aguardando: l.aguardando,
       alertas,

@@ -145,6 +145,7 @@ img { max-width: 100%; }
 .alerta-caixa.erro { background: var(--erro-fundo); color: var(--erro); }
 .alerta-caixa.ok { background: var(--ok-fundo); color: var(--ok); }
 .alerta-caixa.info { background: var(--superficie-2); color: var(--texto-2); }
+.alerta-caixa.aviso { background: var(--alerta-fundo); color: var(--alerta); }
 
 /* ---------- telas de acesso (login, 2FA, senha) ---------- */
 .acesso {
@@ -788,3 +789,10 @@ select option, select optgroup { background: var(--superficie); color: var(--tex
 .modelo .bloqueado { margin: 0; }
 .linha-quando { display: grid; grid-template-columns: 5rem 1fr 1fr 1.3fr; gap: 8px; }
 @media (max-width: 520px) { .linha-quando { grid-template-columns: 1fr 1fr; } }
+
+/* prompt da Lia */
+.texto-prompt { white-space: pre-wrap; font: 13px/1.5 ui-monospace, "SFMono-Regular", Menlo, monospace; background: var(--superficie-2); border-radius: var(--raio); padding: 12px; max-height: 60vh; overflow: auto; margin: 0; }
+.lista-fixa { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.lista-fixa li { line-height: 1.45; }
+.conflito { border: 1px solid var(--borda); border-radius: var(--raio); padding: 10px 12px; margin-top: 10px; }
+.conflito p { margin: 0 0 4px; }
