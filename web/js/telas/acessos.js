@@ -65,7 +65,7 @@ export async function montar(alvo, ctx) {
           render($('.modal-corpo', m.el), html`<div class="alerta-caixa ${r.emailEnviado === false ? 'erro' : 'ok'}">${icone('email')}<span>${r.emailEnviado === false ? 'O acesso foi criado, mas o e-mail não saiu. Copie o link abaixo.' : `Convite enviado para ${r.email}.`}</span></div>
             <div class="campo"><label for="rc-link">Link do convite (vale 72 horas)</label><input id="rc-link" readonly value="${r.linkConvite}"></div>`);
           render($('.modal-rodape', m.el), html`<button class="btn btn-primario" data-fechar>Concluir</button>`);
-          $('[data-fechar]', m.el).addEventListener('click', m.fechar);
+          $('.modal-rodape [data-fechar]', m.el).addEventListener('click', m.fechar);
           carregar();
         } catch (err) { if (err.campos) marcarErros(f, err.campos); else avisar(err.message, 'erro'); }
       });

@@ -12,7 +12,9 @@ const OBRIGATORIO_2FA = ['admin', 'matriz', 'dono'];
 
 async function euComLoja(c, id) {
   return (await c.query(
-    `SELECT u.*, l.nome AS loja_nome, l.cidade AS loja_cidade, l.uf AS loja_uf FROM usuarios u LEFT JOIN lojas l ON l.id = u.loja_id WHERE u.id = $1`, [id])).rows[0];
+    `SELECT u.*, l.nome AS loja_nome, l.cidade AS loja_cidade, l.uf AS loja_uf, l.modulos AS loja_modulos,
+            (SELECT count(*)::int FROM usuario_lojas ul JOIN lojas lx ON lx.id = ul.loja_id AND lx.ativa WHERE ul.usuario_id = u.id) AS qtd_lojas
+       FROM usuarios u LEFT JOIN lojas l ON l.id = u.loja_id WHERE u.id = $1`, [id])).rows[0];
 }
 
 // Disponível / Em pausa (roleta de atendimento). Ao ficar disponível, recebe as conversas que estavam esperando.
