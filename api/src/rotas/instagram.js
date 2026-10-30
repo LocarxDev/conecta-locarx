@@ -63,15 +63,16 @@ instagramLoja.put('/instagram/assistente', dono, rota(async (req, res) => {
 
 // ---------- retorno do login da Meta (público; sem cookies: a loja vem no state assinado) ----------
 instagramPublico.get('/retorno', rota(async (req, res) => {
-  const voltar = (origem, q) => res.redirect(`${origem || config.appUrl}/#/whatsapp?${new URLSearchParams(q)}`);
+  const voltar = (origem, q) => { console.log(`[instagram] retorno: ${q.instagram}${q.motivo ? ' — ' + q.motivo : ''}${q.usuario ? ' @' + q.usuario : ''}`); return res.redirect(`${origem || config.appUrl}/#/whatsapp?${new URLSearchParams(q)}`); };
   if (!ig.instagramConfigurado()) return voltar(null, { instagram: 'erro', motivo: 'Integração não configurada no servidor.' });
   const st = ig.lerState(req.query.state);
-  if (!st) return voltar(null, { instagram: 'erro', motivo: 'Pedido de conexão inválido ou vencido. Tente de novo a partir do Conecta.' });
+  if (!st) { console.warn('[instagram] retorno com state inválido/vencido (o login precisa começar pelo botão Conectar Instagram do Conecta)'); return voltar(null, { instagram: 'erro', motivo: 'Pedido de conexão inválido ou vencido. Comece pelo botão "Conectar Instagram" dentro do Conecta.' }); }
   if (req.query.error) return voltar(st.origem, { instagram: 'erro', motivo: String(req.query.error_description || req.query.error_reason || 'A autorização foi cancelada.').slice(0, 200) });
   if (!req.query.code) return voltar(st.origem, { instagram: 'erro', motivo: 'A Meta não devolveu o código de autorização.' });
   let troca;
   try { troca = await ig.trocarCodigo({ code: String(req.query.code), origem: st.origem }); }
   catch (e) { console.error('[instagram] troca de código:', e.message); return voltar(st.origem, { instagram: 'erro', motivo: ig.explicarErro(e) }); }
+  console.log(`[instagram] autorização recebida: ${troca.paginas.length} página(s) com Instagram`);
   if (!troca.paginas.length) return voltar(st.origem, { instagram: 'erro', motivo: 'Nenhuma conta profissional do Instagram vinculada a uma Página do Facebook foi encontrada nesta autorização. Confira no Instagram: Configurações → Conta → Mudar para conta profissional, e vincule a Página.' });
   // com mais de uma Página/conta, usa a primeira (o dono pode desconectar e autorizar só a certa)
   const p = troca.paginas[0];

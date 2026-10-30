@@ -4,6 +4,7 @@ import { comoSistema } from '../../banco/conexao.js';
 import { buscarConhecimento } from '../ia/conhecimento.js';
 import * as locarx from './api-locarx.js';
 import { filialDaCentral, semAcento as semAcentoFilial } from './filiais.js';
+const brData = (d) => new Date(d).toLocaleString('pt-BR', { timeZone: 'America/Bahia', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 const ESTADOS = { AC: 'Acre', AL: 'Alagoas', AP: 'Amapá', AM: 'Amazonas', BA: 'Bahia', CE: 'Ceará', DF: 'Distrito Federal', ES: 'Espírito Santo', GO: 'Goiás', MA: 'Maranhão', MT: 'Mato Grosso', MS: 'Mato Grosso do Sul', MG: 'Minas Gerais', PA: 'Pará', PB: 'Paraíba', PR: 'Paraná', PE: 'Pernambuco', PI: 'Piauí', RJ: 'Rio de Janeiro', RN: 'Rio Grande do Norte', RS: 'Rio Grande do Sul', RO: 'Rondônia', RR: 'Roraima', SC: 'Santa Catarina', SP: 'São Paulo', SE: 'Sergipe', TO: 'Tocantins' };
 import { lojaDaFilial, ehCentral, avisarLojaDestino } from '../central.js';
 import { cifrar, decifrar } from '../seguranca.js';
@@ -287,6 +288,7 @@ export function ferramentasDaLoja(ctx) {
           nome: { type: 'string' }, cpf: { type: 'string' }, email: { type: 'string' },
           cnh: { type: 'string', description: 'opcional' }, telefone: { type: 'string', description: 'opcional; só se o cliente pedir outro número' },
           cliente_confirmou: { type: 'boolean', description: 'true somente se o cliente respondeu ao RESUMO confirmando' },
+          segunda_reserva_confirmada: { type: 'boolean', description: 'true somente se o cliente já tem reserva nas mesmas datas e confirmou que quer OUTRA além dela' },
           forma_pagamento: { type: 'string', enum: ['loja', 'pix'], description: 'como o cliente escolheu pagar (pergunte antes dos dados do condutor quando o Pix estiver disponível)' },
           fleet_id: { type: ['integer', 'string'], description: 'só se ainda não calculou o preço: grupo escolhido (número ou letra)' },
           ...PERIODO, protecoes: { type: 'array', items: { type: 'string' }, description: 'só se ainda não calculou o preço' },
@@ -350,6 +352,18 @@ export function ferramentasDaLoja(ctx) {
           return `RESERVA AINDA NÃO CRIADA. Envie ao cliente exatamente este resumo e pergunte: "Posso confirmar a reserva?". Só chame criar_reserva de novo depois que o cliente responder que sim.\n\n${resumo}`;
         }
         if (a.cliente_confirmou !== true) return 'O cliente ainda não confirmou o resumo. Pergunte se pode confirmar a reserva.';
+
+        // trava de duplicidade: o cliente já tem reserva ativa nas mesmas datas (ou cruzando)? Então não cria outra sem o cliente pedir de propósito.
+        if (!ctx.simulacao && ctx.contatoId && a.segunda_reserva_confirmada !== true) {
+          const ini = new Date(`${cotacao.retirada.date}T${cotacao.retirada.time}:00-03:00`), fim = new Date(`${cotacao.devolucao.date}T${cotacao.devolucao.time}:00-03:00`);
+          const dup = await comoSistema(async (c) => (await c.query(
+            `SELECT codigo, grupo, retirada, devolucao FROM reservas
+              WHERE contato_id = $1 AND status <> 'cancelada' AND codigo IS NOT NULL AND tstzrange(retirada, devolucao) && tstzrange($2::timestamptz, $3::timestamptz)
+              ORDER BY criada_em DESC LIMIT 1`, [ctx.contatoId, ini, fim])).rows[0]);
+          if (dup) {
+            return `RESERVA NÃO CRIADA: este cliente JÁ TEM a reserva ${dup.codigo} (${dup.grupo || 'grupo não informado'}, ${brData(dup.retirada)} → ${brData(dup.devolucao)}) nas mesmas datas. Diga isso ao cliente e pergunte se ele quer tirar dúvida sobre essa reserva, alterá-la (nesse caso chame chamar_atendente) ou se realmente quer uma SEGUNDA reserva além dessa (ex.: outro carro para outra pessoa). Só se ele confirmar explicitamente a segunda reserva, chame criar_reserva de novo com segunda_reserva_confirmada = true.`;
+          }
+        }
 
         // passo 2 (Pix): gera a cobrança; a reserva no portal é criada quando o pagamento for confirmado (webhook)
         if (forma === 'pix') {

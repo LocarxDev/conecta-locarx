@@ -69,6 +69,12 @@ export function montarPainelCliente(el, contatoId, { comLinkFicha = true, aoMuda
     render(el, html`<div class="pc" data-salva-sozinho>
       ${comLinkFicha ? html`<div class="pc-cab"><h3>Dados do cliente</h3><a class="btn btn-texto" href="#/clientes/${d.contato.id}">Ficha completa</a></div>` : ''}
 
+      ${(() => {
+        // reserva ativa em destaque: a equipe vê de cara que o cliente já reservou (evita reserva duplicada)
+        const ativa = (d.reservas || []).find((r) => r.codigo && r.status !== 'cancelada' && new Date(r.devolucao || r.retirada) >= new Date());
+        return ativa ? html`<section class="pc-bloco pc-reserva-ativa" aria-label="Reserva ativa"><h4>${icone('reservas')}Reserva ativa</h4>
+          <div><strong class="num">${ativa.codigo}</strong>${ativa.grupo ? html` · ${ativa.grupo}` : ''}<div class="sub">${data(ativa.retirada)} → ${data(ativa.devolucao)} · ${reais(ativa.valor)} · ${ativa.status}</div></div></section>` : '';
+      })()}
       <section class="pc-bloco" aria-label="Funil">
         <h4>${icone('funil')}Funil</h4>
         ${d.oportunidades.map((o) => {

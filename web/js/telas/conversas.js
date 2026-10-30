@@ -121,7 +121,7 @@ export async function montar(alvo, ctx) {
   let respostasRapidas = null;
   let anexo = null;            // { nome, mimetype, base64 }
   let modoNota = false;
-  let canalOk = true;
+  let canalOk = true, instagramOk = true;
 
   render(alvo, html`
     <div class="caixa" id="caixa">
@@ -397,7 +397,9 @@ export async function montar(alvo, ctx) {
       store.mapa.set(aberta.id, { ...store.mapa.get(aberta.id), ...aberta });
       render(chatEl, html`
         <div class="chat-cab" id="chat-cab"></div>
-        ${canalOk ? '' : html`<div class="aviso-desconectado">${icone('alerta')}<span>O WhatsApp da loja está desconectado. Dá para ler, mas não para responder.${eu.perfil === 'dono' ? html` <a href="#/whatsapp">Conectar</a>` : ''}</span></div>`}
+        ${aberta.canal === 'instagram'
+          ? (instagramOk ? '' : html`<div class="aviso-desconectado">${icone('alerta')}<span>O Instagram da loja está desconectado. Dá para ler, mas não para responder.${eu.perfil === 'dono' ? html` <a href="#/whatsapp">Conectar</a>` : ''}</span></div>`)
+          : (canalOk ? '' : html`<div class="aviso-desconectado">${icone('alerta')}<span>O WhatsApp da loja está desconectado. Dá para ler, mas não para responder.${eu.perfil === 'dono' ? html` <a href="#/whatsapp">Conectar</a>` : ''}</span></div>`)}
         <div class="mensagens" id="mensagens" role="log" aria-live="polite"></div>
         ${compositor()}`);
       desenharCabecalho();
@@ -534,6 +536,7 @@ export async function montar(alvo, ctx) {
 
   // ---------- início ----------
   try { canalOk = (await api.canal()).status === 'conectado'; } catch { canalOk = true; }
+  try { instagramOk = (await api.instagram()).conectado; } catch { instagramOk = true; }
   if (!store.timer) iniciarVigia(ctx);
   const [idInicial] = ctx.params;
   if (idInicial) abrir(idInicial); else chatVazio();

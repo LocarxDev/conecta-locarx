@@ -172,9 +172,14 @@ export function montarSistema({ loja, a, rede, contato, historicoReservas, crm, 
   const agora = agoraBahia();
   // Central de Reservas: atende a rede inteira (a lista de filiais NÃO vai no prompt; a IA acha pela cidade com buscar_filiais)
   const central = !!loja.central && filiais.length > 1;
-  const recorrente = historicoReservas.length
+  const fmt = (d) => new Date(d).toLocaleString('pt-BR', { timeZone: 'America/Bahia', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  const futuras = historicoReservas.filter((r) => r.futura && r.codigo);
+  const reservasAtivas = futuras.length
+    ? `\nRESERVAS ATIVAS DESTE CLIENTE (já criadas; NÃO crie outra para as mesmas datas): ${futuras.map((r) => `${r.codigo} — ${r.grupo || 'grupo não informado'}, retirada ${fmt(r.retirada)}, devolução ${fmt(r.devolucao)}`).join('; ')}. Se o cliente falar em reservar, alugar ou nas mesmas datas, PRIMEIRO pergunte se é sobre essa reserva (dúvida, alteração, cancelamento) ou se quer uma reserva nova em outras datas. Para alterar ou cancelar, use chamar_atendente/cancelar_reserva conforme o roteiro.`
+    : '';
+  const recorrente = (historicoReservas.length
     ? `Cliente recorrente: já alugou ${historicoReservas.length}x nesta loja; última vez grupo ${historicoReservas[0].grupo || 'não informado'} em ${new Date(historicoReservas[0].retirada).toLocaleDateString('pt-BR')}. Cumprimente pelo nome e, se fizer sentido, sugira o mesmo grupo.`
-    : 'Primeiro contato registrado com este cliente.';
+    : 'Primeiro contato registrado com este cliente.') + reservasAtivas;
   return `Você é ${a.nome}, assistente virtual da ${central ? 'Central de Reservas da LocarX Aluguel de Carros, que atende a rede inteira' : `${loja.nome} (${loja.cidade}/${loja.uf}), uma loja da rede LocarX Aluguel de Carros`}. Você atende clientes pelo ${site ? 'chat do site e pelo WhatsApp' : 'WhatsApp'}.
 HOJE É ${agora.porExtenso}, ${agora.dataBr} (ano ${agora.ano}), ${agora.hhmm} em Salvador (${agora.iso}). Use esta data para entender "amanhã", "sexta" etc. e sempre confirme as datas com o cliente.
 
@@ -257,7 +262,7 @@ async function processarAgora(conversaId) {
     const rede = (await c.query('SELECT * FROM rede_config LIMIT 1')).rows[0] || {};
     const msgs = (await c.query(
       `SELECT * FROM (SELECT * FROM mensagens WHERE conversa_id = $1 AND direcao <> 'interna' ORDER BY criada_em DESC LIMIT 30) x ORDER BY criada_em`, [conversaId])).rows;
-    const historicoReservas = (await c.query(`SELECT grupo, retirada FROM reservas WHERE contato_id = $1 AND status <> 'cancelada' ORDER BY retirada DESC LIMIT 3`, [conversa.contato_id])).rows;
+    const historicoReservas = (await c.query(`SELECT codigo, grupo, retirada, devolucao, status, (devolucao >= now()) AS futura FROM reservas WHERE contato_id = $1 AND status <> 'cancelada' ORDER BY retirada DESC LIMIT 5`, [conversa.contato_id])).rows;
     const crm = await crmDoAssistente(c, conversa.loja_id, conversa.contato_id);
     const contaPix = await contaDaLoja(conversa.loja_id, c);
     if (pixDisponivel()) conversa.pixPendente = (await c.query(`SELECT id, valor, expira_em, dev_mode FROM cobrancas WHERE conversa_id = $1 AND status = 'pendente' ORDER BY criada_em DESC LIMIT 1`, [conversa.id])).rows[0] || null;

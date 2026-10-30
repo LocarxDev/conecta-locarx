@@ -1146,3 +1146,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS contatos_loja_ig ON contatos (loja_id, ig_id) 
 -- a conversa pode vir pelo Instagram
 ALTER TABLE conversas DROP CONSTRAINT IF EXISTS conversas_canal_check;
 ALTER TABLE conversas ADD CONSTRAINT conversas_canal_check CHECK (canal IN ('whatsapp', 'site', 'instagram'));
+
+-- Dono convida atendente: pode gravar em usuario_lojas só para a própria loja e só com perfil 'atendente'
+-- (administração continua podendo tudo; o dono não cria outro dono nem mexe em outra loja).
+DROP POLICY IF EXISTS usuario_lojas_alterar ON usuario_lojas;
+CREATE POLICY usuario_lojas_alterar ON usuario_lojas FOR ALL
+  USING (ctx_perfil() IN ('admin', 'sistema') OR (ctx_perfil() = 'dono' AND loja_id = ctx_loja() AND perfil = 'atendente'))
+  WITH CHECK (ctx_perfil() IN ('admin', 'sistema') OR (ctx_perfil() = 'dono' AND loja_id = ctx_loja() AND perfil = 'atendente'));

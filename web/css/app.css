@@ -798,3 +798,5 @@ select option, select optgroup { background: var(--superficie); color: var(--tex
 .conflito p { margin: 0 0 4px; }
 .titulo-secao { display: flex; align-items: center; gap: 8px; font: 600 17px/1.3 Raleway, Figtree, system-ui, sans-serif; margin: 20px 0 10px; }
 .titulo-secao svg { width: 20px; height: 20px; }
+.pc-reserva-ativa { background: var(--ok-fundo); }
+.pc-reserva-ativa h4, .pc-reserva-ativa strong { color: var(--ok); }

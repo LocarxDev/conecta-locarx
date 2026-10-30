@@ -82,7 +82,7 @@ export const config = {
     appSecret: process.env.INSTAGRAM_APP_SECRET.trim(),
     configId: process.env.INSTAGRAM_CONFIG_ID?.trim() || null,
     verifyToken: process.env.INSTAGRAM_VERIFY_TOKEN?.trim() || null,
-    versaoGraph: process.env.INSTAGRAM_GRAPH_VERSION?.trim() || 'v21.0',
+    versaoGraph: process.env.INSTAGRAM_GRAPH_VERSION?.trim() || 'v26.0',
   } : null,
   // Só para testes no computador: IA simulada, sem chamar Anthropic/OpenAI
   iaSimulada: process.env.IA_SIMULADA === '1' && !producao,

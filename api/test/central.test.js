@@ -79,3 +79,8 @@ test('id de filial do chat do site só aceita o formato b + número', () => {
   assert.ok(ehIdDeFilial('b123'));
   for (const ruim of ['123', 'b', 'b12a', 'B12', "b1' OR 1=1", '', null, 'b1234567890']) assert.ok(!ehIdDeFilial(ruim), String(ruim));
 });
+
+test('criar_reserva aceita o parâmetro segunda_reserva_confirmada (trava de duplicidade)', () => {
+  const t = ferramentasDaLoja({ lojaId: 'l', branchId: 101, filiais: [], central: false, locarxDisponivel: true, simulacao: true, campos: [], etiquetas: [] }).find((f) => f.nome === 'criar_reserva');
+  assert.ok(t.parametros.properties.segunda_reserva_confirmada);
+});

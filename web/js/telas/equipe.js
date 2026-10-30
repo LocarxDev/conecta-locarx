@@ -145,7 +145,7 @@ export function painelEquipe(alvo, { ctx, lojaId, podeGerir, podeConvidarDono, t
         <input id="link-convite" readonly value="${link}">
       </div>`);
     render($('.modal-rodape', modal.el), html`<button class="btn btn-contorno" data-copiar>${icone('copiar')}Copiar link</button><button class="btn btn-primario" data-fechar>Concluir</button>`);
-    $('[data-fechar]', modal.el).addEventListener('click', modal.fechar);
+    $('.modal-rodape [data-fechar]', modal.el).addEventListener('click', modal.fechar);   // o botão novo do rodapé (o X do topo já tem o seu)
     $('[data-copiar]', modal.el).addEventListener('click', async () => {
       const campo = $('#link-convite', modal.el);
       try { await navigator.clipboard.writeText(campo.value); avisar('Link copiado.'); } catch { campo.select(); avisar('Selecione e copie o link (Ctrl+C).'); }
