@@ -13,10 +13,14 @@ export async function montar(alvo, ctx) {
   const parar = () => { clearTimeout(espera); espera = null; };
 
   render(alvo, html`
-    <div class="cabecalho-pagina"><div class="titulos"><h1>WhatsApp da loja</h1>
-      <p>O número que os clientes usam para falar com a ${ctx.usuario.loja?.nome || 'loja'}. As conversas aparecem em Conversas.</p></div></div>
-    <div id="area-whats"><div class="painel"><div class="painel-corpo"><div class="esqueleto"></div></div></div></div>`);
+    <div class="cabecalho-pagina"><div class="titulos"><h1>Canais da loja</h1>
+      <p>Por onde os clientes falam com a ${ctx.usuario.loja?.nome || 'loja'}: WhatsApp e Instagram. As conversas dos dois aparecem em Conversas.</p></div></div>
+    <h2 class="titulo-secao">${icone('whatsapp')}WhatsApp</h2>
+    <div id="area-whats"><div class="painel"><div class="painel-corpo"><div class="esqueleto"></div></div></div></div>
+    <h2 class="titulo-secao">${icone('instagram')}Instagram</h2>
+    <div id="area-insta"><div class="painel"><div class="painel-corpo"><div class="esqueleto"></div></div></div></div>`);
   const area = $('#area-whats', alvo);
+  montarInstagram($('#area-insta', alvo), ctx);
 
   function desenharStatus(c) {
     const conectado = c.status === 'conectado';
@@ -120,4 +124,62 @@ export async function montar(alvo, ctx) {
 
   await carregar();
   return parar;
+}
+
+
+// ---------- Instagram (API oficial da Meta): conectar a conta profissional da loja, ligar/desligar a Lia, desconectar ----------
+async function montarInstagram(area, ctx) {
+  // voltou do login da Meta? (#/whatsapp?instagram=ok|erro)
+  const q = new URLSearchParams((location.hash.split('?')[1] || ''));
+  if (q.get('instagram') === 'ok') { avisar(`Instagram ${q.get('usuario') ? '@' + q.get('usuario') + ' ' : ''}conectado.`); history.replaceState(null, '', '#/whatsapp'); }
+  if (q.get('instagram') === 'erro') { avisar(q.get('motivo') || 'Não foi possível conectar o Instagram.', 'erro'); history.replaceState(null, '', '#/whatsapp'); }
+  let r;
+  try { r = await api.instagram(); } catch (err) {
+    if (err.status === 401) return ctx.sessaoExpirou();
+    return render(area, html`<div class="painel"><div class="estado">${icone('alerta')}<h3>Não foi possível carregar</h3><p>${err.message}</p></div></div>`);
+  }
+  const dono = ctx.usuario.perfil === 'dono';
+  render(area, html`
+    <div class="whats-grade">
+      <section class="painel">
+        <div class="painel-cab"><h2>Situação</h2>${r.conectado ? html`<span class="selo ok">Conectado</span>` : html`<span class="selo neutro">Desconectado</span>`}</div>
+        <div class="painel-corpo form">
+          <div class="status-grande">
+            <span class="icone-status ${r.conectado ? 'ok' : ''}">${icone('instagram')}</span>
+            <div>${r.conectado
+              ? html`<strong>${r.usuario ? '@' + r.usuario : 'Instagram conectado'}</strong><div class="sub">${r.pagina ? `Página do Facebook: ${r.pagina}` : 'Recebendo mensagens do direct'}</div>`
+              : html`<strong>Nenhuma conta conectada</strong><div class="sub">As mensagens do direct ainda não chegam ao Conecta.</div>`}</div>
+          </div>
+          ${!r.configurado ? html`<div class="alerta-caixa info">${icone('info')}<span>A integração com o Instagram ainda não está ativa no servidor. Fale com a administração do Conecta.</span></div>` : ''}
+          ${r.erro ? html`<div class="alerta-caixa aviso">${icone('alerta')}<span>${r.erro}</span></div>` : ''}
+          ${r.conectado ? html`<label class="checkbox"><input type="checkbox" id="ig-lia" ${r.assistente ? 'checked' : ''} ${dono ? '' : 'disabled'}> A Lia responde no Instagram (desligado: só a equipe responde)</label>` : ''}
+          ${dono ? html`<div class="acoes-linha">${r.conectado
+            ? html`<button class="btn btn-contorno" id="ig-trocar">Trocar conta</button><button class="btn btn-perigo" id="ig-desconectar">Desconectar</button>`
+            : html`<button class="btn btn-primario" id="ig-conectar" ${r.configurado ? '' : 'disabled'}>${icone('instagram')}Conectar Instagram</button>`}</div>` : ''}
+        </div>
+      </section>
+      <section class="painel">
+        <div class="painel-cab"><h2>Antes de conectar</h2></div>
+        <div class="painel-corpo"><ol class="passos">
+          <li><div>Conta profissional<span class="sub">O Instagram da loja precisa ser Comercial ou Criador de conteúdo (Configurações → Tipo de conta).</span></div></li>
+          <li><div>Vinculado a uma Página do Facebook<span class="sub">No Instagram: Configurações → Central de Contas → Páginas. Quem conecta precisa ser administrador dessa Página.</span></div></li>
+          <li><div>Autorize com a conta certa<span class="sub">Ao clicar em Conectar, entre no Facebook com o perfil que administra a Página da loja e marque a conta do Instagram da loja.</span></div></li>
+          <li><div>Como funciona<span class="sub">Mensagens do direct viram conversas aqui (selo Instagram). A Lia responde como no WhatsApp; para reservar, ela pede o WhatsApp do cliente. Pela regra da Meta, a resposta automática só sai até 24 h depois da última mensagem do cliente; a equipe pode responder por até 7 dias.</span></div></li>
+        </ol></div>
+      </section>
+    </div>`);
+  const recarregar = () => montarInstagram(area, ctx);
+  $('#ig-conectar', area)?.addEventListener('click', (e) => comBotao(e.currentTarget, async () => {
+    try { const { url } = await api.conectarInstagram(); location.href = url; } catch (err) { avisar(err.message, 'erro'); }
+  }));
+  $('#ig-trocar', area)?.addEventListener('click', (e) => comBotao(e.currentTarget, async () => {
+    try { const { url } = await api.conectarInstagram(); location.href = url; } catch (err) { avisar(err.message, 'erro'); }
+  }));
+  $('#ig-desconectar', area)?.addEventListener('click', async () => {
+    if (!(await confirmar({ titulo: 'Desconectar o Instagram', texto: 'As mensagens do direct param de chegar ao Conecta. O histórico das conversas continua guardado.', botao: 'Desconectar', perigo: true }))) return;
+    try { await api.desconectarInstagram(); avisar('Instagram desconectado.'); recarregar(); } catch (err) { avisar(err.message, 'erro'); }
+  });
+  $('#ig-lia', area)?.addEventListener('change', async (e) => {
+    try { await api.assistenteInstagram(e.target.checked); avisar(e.target.checked ? 'A Lia passa a responder no Instagram.' : 'A Lia não responde mais no Instagram; só a equipe.'); } catch (err) { avisar(err.message, 'erro'); recarregar(); }
+  });
 }

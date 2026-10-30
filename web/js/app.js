@@ -77,7 +77,7 @@ function menuDoPerfil(perfilUsuario) {
   if (perfilUsuario === 'dono') {
     itens.push(
       { grupo: 'Gestão da loja' },
-      { rota: 'whatsapp', rotulo: 'WhatsApp da loja', icone: 'whatsapp' },
+      { rota: 'whatsapp', rotulo: 'Canais da loja', icone: 'whatsapp' },
       { rota: 'respostas', rotulo: 'Respostas rápidas', icone: 'editar' },
       { rota: 'modelos', rotulo: 'Mensagens automáticas', icone: 'email' },
       { rota: 'personalizar', rotulo: 'Funis, etiquetas e campos', icone: 'ajustes' },

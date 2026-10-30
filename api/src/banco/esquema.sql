@@ -1102,3 +1102,47 @@ CREATE POLICY canais_eventos_ver ON canais_eventos FOR ALL
   WITH CHECK (ctx_perfil() = 'sistema');
 ALTER TABLE canais ADD COLUMN IF NOT EXISTS instavel_ate timestamptz;
 ALTER TABLE canais ADD COLUMN IF NOT EXISTS ultima_queda_em timestamptz;
+
+-- =====================================================================
+-- Instagram das lojas (API oficial da Meta). Um app para a rede; cada loja conecta a própria conta profissional.
+-- O cliente do Instagram não tem telefone: o contato passa a aceitar ig_id no lugar do telefone.
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS canais_instagram (
+  loja_id        uuid PRIMARY KEY REFERENCES lojas(id) ON DELETE CASCADE,
+  ig_user_id     text NOT NULL UNIQUE,
+  ig_username    text,
+  pagina_id      text,
+  pagina_nome    text,
+  token_cifrado  text NOT NULL,
+  token_expira   timestamptz,
+  assistente     boolean NOT NULL DEFAULT true,
+  status         text NOT NULL DEFAULT 'conectado' CHECK (status IN ('conectado', 'erro', 'desconectado')),
+  erro           text,
+  conectado_por  uuid REFERENCES usuarios(id) ON DELETE SET NULL,
+  conectado_em   timestamptz NOT NULL DEFAULT now(),
+  atualizado_em  timestamptz NOT NULL DEFAULT now()
+);
+GRANT SELECT, INSERT, UPDATE, DELETE ON canais_instagram TO conecta_app;
+ALTER TABLE canais_instagram ENABLE ROW LEVEL SECURITY;
+ALTER TABLE canais_instagram FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS canais_instagram_ver ON canais_instagram;
+CREATE POLICY canais_instagram_ver ON canais_instagram FOR SELECT USING (ctx_perfil() IN ('admin', 'matriz', 'sistema') OR loja_id = ctx_loja());
+DROP POLICY IF EXISTS canais_instagram_alterar ON canais_instagram;
+CREATE POLICY canais_instagram_alterar ON canais_instagram FOR ALL
+  USING (ctx_perfil() = 'sistema' OR (loja_id = ctx_loja() AND ctx_perfil() = 'dono'))
+  WITH CHECK (ctx_perfil() = 'sistema' OR (loja_id = ctx_loja() AND ctx_perfil() = 'dono'));
+
+-- contato do Instagram: sem telefone (até o cliente informar o WhatsApp), identificado pelo ig_id
+ALTER TABLE contatos ALTER COLUMN telefone DROP NOT NULL;
+ALTER TABLE contatos ADD COLUMN IF NOT EXISTS ig_id text;
+ALTER TABLE contatos ADD COLUMN IF NOT EXISTS ig_username text;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'contatos_telefone_ou_ig') THEN
+    ALTER TABLE contatos ADD CONSTRAINT contatos_telefone_ou_ig CHECK (telefone IS NOT NULL OR ig_id IS NOT NULL);
+  END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS contatos_loja_ig ON contatos (loja_id, ig_id) WHERE ig_id IS NOT NULL;
+
+-- a conversa pode vir pelo Instagram
+ALTER TABLE conversas DROP CONSTRAINT IF EXISTS conversas_canal_check;
+ALTER TABLE conversas ADD CONSTRAINT conversas_canal_check CHECK (canal IN ('whatsapp', 'site', 'instagram'));

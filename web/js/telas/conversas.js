@@ -72,8 +72,10 @@ function notificar(c) {
 // ---------------------------------------------------------------------
 // formatos
 // ---------------------------------------------------------------------
-const telefoneBonito = (t) => telefoneBr(t) || '+' + t;
-const nomeDe = (c) => c.contato.nome || telefoneBonito(c.contato.telefone);
+const telefoneBonito = (t) => (t ? (telefoneBr(t) || '+' + t) : '');
+// cliente do Instagram não tem telefone: mostra o @ do perfil
+const contatoDe = (c) => (c.contato.telefone ? telefoneBonito(c.contato.telefone) : (c.contato.igUsername ? '@' + c.contato.igUsername : 'Instagram'));
+const nomeDe = (c) => c.contato.nome || contatoDe(c);
 const hora = (iso) => new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 function quandoCurto(iso) {
   const d = new Date(iso), hoje = new Date();
@@ -177,7 +179,7 @@ export async function montar(alvo, ctx) {
     const dig = busca.replace(/\D/g, '');
     return [...store.mapa.values()]
       .filter((c) => regra(c, eu))
-      .filter((c) => !busca || (c.contato.nome || '').toLowerCase().includes(busca) || (dig && c.contato.telefone.includes(dig)))
+      .filter((c) => !busca || (c.contato.nome || '').toLowerCase().includes(busca) || (dig && (c.contato.telefone || '').includes(dig)) || (c.contato.igUsername || '').toLowerCase().includes(busca))
       .sort((a, b) => b.ultimaMensagemEm.localeCompare(a.ultimaMensagemEm));
   }
 
@@ -201,7 +203,7 @@ export async function montar(alvo, ctx) {
     render(listaEl, html`${lista.map((c) => html`
       <a class="item-conversa${c.naoLidas ? ' nao-lida' : ''}${aberta?.id === c.id ? ' ativa' : ''}" href="#/conversas/${c.id}" data-id="${c.id}">
         <span class="avatar">${c.contato.nome ? iniciais(c.contato.nome) : '#'}</span>
-        <span class="meio"><span class="nome">${nomeDe(c)}${c.canal === 'site' ? html` <span class="selo neutro sem-ponto" title="Veio pelo chat do site">Site</span>` : ''}</span><span class="previa">${c.previa || ''}</span>
+        <span class="meio"><span class="nome">${nomeDe(c)}${c.canal === 'site' ? html` <span class="selo neutro sem-ponto" title="Veio pelo chat do site">Site</span>` : c.canal === 'instagram' ? html` <span class="selo neutro sem-ponto" title="Veio pelo Instagram">Instagram</span>` : ''}</span><span class="previa">${c.previa || ''}</span>
           ${c.etiquetas?.length ? html`<span class="etiquetas-conversa">${c.etiquetas.slice(0, 3).map((e) => chipEtiqueta(e))}${c.etiquetas.length > 3 ? html`<span class="sub">+${c.etiquetas.length - 3}</span>` : ''}</span>` : ''}</span>
         <span class="lado"><span class="hora">${quandoCurto(c.ultimaMensagemEm)}</span>
           ${c.naoLidas ? html`<span class="bolinha">${c.naoLidas > 99 ? '99+' : c.naoLidas}</span>` : html`<span class="marca-estado ${c.estado}" title="${c.estado}"></span>`}</span>
@@ -239,7 +241,7 @@ export async function montar(alvo, ctx) {
     render(cab, html`
       <a class="btn btn-texto btn-icone voltar" href="#/conversas" aria-label="Voltar para a lista">${icone('voltar')}</a>
       <span class="avatar">${c.contato.nome ? iniciais(c.contato.nome) : '#'}</span>
-      <div class="quem"><strong>${nomeDe(c)}</strong><span>${telefoneBonito(c.contato.telefone)}${c.atendente ? ` · com ${c.atendente.nome}` : ''}${c.transferida ? (c.transferida.atendimento.id === ctx.usuario.loja?.id ? ` · 📍 veio de ${c.transferida.origem.nome}` : ` · 📍 atendida por ${c.transferida.atendimento.nome}`) : ''}</span></div>
+      <div class="quem"><strong>${nomeDe(c)}</strong><span>${contatoDe(c)}${c.atendente ? ` · com ${c.atendente.nome}` : ''}${c.transferida ? (c.transferida.atendimento.id === ctx.usuario.loja?.id ? ` · 📍 veio de ${c.transferida.origem.nome}` : ` · 📍 atendida por ${c.transferida.atendimento.nome}`) : ''}</span></div>
       <div class="acoes-chat">
         ${ESTADO[c.estado]}
         <button class="btn btn-contorno" data-lateral aria-pressed="${lateralAberta}" title="Funil, etiquetas e informações do cliente">${icone('painel')}<span class="rotulo-lateral">Dados do cliente</span></button>

@@ -84,7 +84,7 @@ export async function rodarAutomacoes() {
              a.silencio_inicio, a.silencio_fim, cn.instancia, cn.provedor, cn.status AS canal_status, cv.id AS conversa_id
         FROM modelos_mensagem m
         JOIN reservas r ON r.loja_id = m.loja_id
-        JOIN contatos k ON k.id = r.contato_id AND NOT k.optout
+        JOIN contatos k ON k.id = r.contato_id AND NOT k.optout AND k.telefone IS NOT NULL
         JOIN lojas l ON l.id = r.loja_id AND l.ativa
         JOIN canais cn ON cn.loja_id = r.loja_id
         LEFT JOIN assistentes a ON a.loja_id = r.loja_id
@@ -137,7 +137,7 @@ export async function rodarMensagensDeEtapa() {
       FROM oportunidades o
       JOIN etapas_funil e ON e.id = o.etapa_id AND e.modelo_chave IS NOT NULL AND e.mensagem_desde IS NOT NULL
       JOIN funis f ON f.id = o.funil_id AND NOT f.arquivado
-      JOIN contatos k ON k.id = o.contato_id AND NOT k.optout
+      JOIN contatos k ON k.id = o.contato_id AND NOT k.optout AND k.telefone IS NOT NULL
       JOIN lojas l ON l.id = o.loja_id AND l.ativa
       JOIN canais cn ON cn.loja_id = o.loja_id AND cn.status = 'conectado'
       JOIN modelos_mensagem m ON m.loja_id = o.loja_id AND m.chave = e.modelo_chave AND m.ativo

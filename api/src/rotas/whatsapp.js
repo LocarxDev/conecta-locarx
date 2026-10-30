@@ -5,6 +5,7 @@ import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js
 import { evolution, lerMensagemEvolution } from '../servicos/canais/evolution.js';
 import { iguais } from '../servicos/seguranca.js';
 import { emailAviso } from '../servicos/email.js';
+import { enviarAoCliente } from '../servicos/canais/envio.js';
 import { rota, erro, exigirPerfil, registrar, zUuid } from '../http.js';
 import { estadoInicial, agendar, dentroDoHorario } from '../servicos/ia/assistente.js';
 import { registrarEvento } from '../servicos/crm/funis.js';
@@ -210,6 +211,7 @@ canalAdmin.get('/whatsapp', exigirPerfil('admin', 'matriz'), rota(async (req, re
   const linhas = await comoSistema(async (c) => (await c.query(`
     SELECT l.id, l.nome, l.cidade, l.uf, l.ativa, l.branch_id,
            cn.status AS canal_status, cn.numero, cn.instancia, cn.provedor, cn.atualizado_em, cn.instavel_ate, cn.ultima_queda_em,
+           ci.ig_username, ci.status AS ig_status,
            (SELECT count(*) FROM canais_eventos e WHERE e.loja_id = l.id AND e.de = 'conectado' AND e.para <> 'conectado' AND e.criado_em > now() - interval '24 hours')::int AS quedas_24h,
            (SELECT count(*) FROM canais_eventos e WHERE e.loja_id = l.id AND e.de = 'conectado' AND e.para <> 'conectado' AND e.criado_em > now() - interval '7 days')::int AS quedas_7d,
            coalesce(a.ativo, false) AS assistente_ativo, (a.chave_cifrada IS NOT NULL) AS assistente_com_chave,
@@ -219,7 +221,7 @@ canalAdmin.get('/whatsapp', exigirPerfil('admin', 'matriz'), rota(async (req, re
            (SELECT count(*) FROM mensagens m WHERE m.loja_id = l.id AND m.direcao = 'saida' AND m.criada_em > now() - interval '24 hours')::int AS enviadas_24h,
            (SELECT max(m.criada_em) FROM mensagens m WHERE m.loja_id = l.id) AS ultima_mensagem_em,
            (SELECT count(*) FROM conversas cv WHERE cv.loja_id = l.id AND cv.estado = 'aguardando')::int AS aguardando
-      FROM lojas l LEFT JOIN canais cn ON cn.loja_id = l.id LEFT JOIN assistentes a ON a.loja_id = l.id
+      FROM lojas l LEFT JOIN canais cn ON cn.loja_id = l.id LEFT JOIN assistentes a ON a.loja_id = l.id LEFT JOIN canais_instagram ci ON ci.loja_id = l.id
      ORDER BY l.ativa DESC, l.nome`)).rows);
   const evolucao = config.evolution ? await evolution.saude() : { noAr: false, versao: null, naoConfigurada: true };
   const lojas = [];
@@ -241,7 +243,7 @@ canalAdmin.get('/whatsapp', exigirPerfil('admin', 'matriz'), rota(async (req, re
     if (estadoVivo === 'erro') alertas.push('A Evolution não respondeu sobre esta instância');
     lojas.push({
       id: l.id, nome: l.nome, cidade: l.cidade, uf: l.uf, ativa: l.ativa, filial: l.branch_id,
-      status, numero: l.numero, instancia: l.instancia, atualizadoEm: l.atualizado_em, estadoVivo, instavelAte: instavel ? l.instavel_ate : null, quedas24h: l.quedas_24h || 0, quedas7d: l.quedas_7d || 0, ultimaQuedaEm: l.ultima_queda_em || null,
+      status, numero: l.numero, instancia: l.instancia, atualizadoEm: l.atualizado_em, estadoVivo, instagram: l.ig_username ? { usuario: l.ig_username, status: l.ig_status } : null, instavelAte: instavel ? l.instavel_ate : null, quedas24h: l.quedas_24h || 0, quedas7d: l.quedas_7d || 0, ultimaQuedaEm: l.ultima_queda_em || null,
       assistente: l.assistente_ativo ? (l.assistente_com_chave ? 'ligado' : 'sem chave') : 'desligado',
       equipe: l.equipe, online: l.online, recebidas24h: l.recebidas_24h, enviadas24h: l.enviadas_24h, ultimaMensagemEm: l.ultima_mensagem_em, aguardando: l.aguardando,
       alertas,
@@ -306,17 +308,23 @@ const PALAVRAS_SAIR = /^\s*(parar|sair|stop|cancelar mensagens|não quero mais m
 // Registra uma mensagem do cliente (WhatsApp ou chat do site) no contato/conversa da loja.
 // opcoes.canal: por onde o cliente falou agora ('whatsapp' | 'site'); opcoes.semAgendar: o chamador agenda o assistente depois.
 export async function registrarRecebida(lojaId, m, opcoes = {}) {
-  const canalNovo = opcoes.canal === 'site' ? 'site' : 'whatsapp';
+  const canalNovo = opcoes.canal === 'site' ? 'site' : opcoes.canal === 'instagram' ? 'instagram' : 'whatsapp';
   const r = await comoSistema(async (c) => {
     if (m.externoId) {
       const ja = (await c.query('SELECT 1 FROM mensagens WHERE loja_id = $1 AND externo_id = $2', [lojaId, m.externoId])).rowCount;
       if (ja) return null; // repetida ou eco de mensagem enviada pelo próprio Conecta
     }
     const entrada = !m.deMim;
-    const contato = (await c.query(
-      `INSERT INTO contatos (loja_id, telefone, nome, optin_em) VALUES ($1, $2, $3, CASE WHEN $4 THEN now() END)
-       ON CONFLICT (loja_id, telefone) DO UPDATE SET nome = coalesce(contatos.nome, EXCLUDED.nome), optin_em = coalesce(contatos.optin_em, EXCLUDED.optin_em)
-       RETURNING id, optout`, [lojaId, m.telefone, m.nome, entrada])).rows[0];
+    // Instagram: o contato é identificado pelo perfil (ig_id); WhatsApp/site: pelo telefone
+    const contato = canalNovo === 'instagram'
+      ? (await c.query(
+        `INSERT INTO contatos (loja_id, ig_id, ig_username, nome, optin_em) VALUES ($1, $2, $3, $4, CASE WHEN $5 THEN now() END)
+         ON CONFLICT (loja_id, ig_id) WHERE ig_id IS NOT NULL DO UPDATE SET nome = coalesce(contatos.nome, EXCLUDED.nome), ig_username = coalesce(EXCLUDED.ig_username, contatos.ig_username), optin_em = coalesce(contatos.optin_em, EXCLUDED.optin_em)
+         RETURNING id, optout`, [lojaId, m.igId, m.igUsername || null, m.nome, entrada])).rows[0]
+      : (await c.query(
+        `INSERT INTO contatos (loja_id, telefone, nome, optin_em) VALUES ($1, $2, $3, CASE WHEN $4 THEN now() END)
+         ON CONFLICT (loja_id, telefone) DO UPDATE SET nome = coalesce(contatos.nome, EXCLUDED.nome), optin_em = coalesce(contatos.optin_em, EXCLUDED.optin_em)
+         RETURNING id, optout`, [lojaId, m.telefone, m.nome, entrada])).rows[0];
     const anterior = (await c.query('SELECT id, estado FROM conversas WHERE loja_id = $1 AND contato_id = $2', [lojaId, contato.id])).rows[0];
     // conversa nova ou reaberta: vai para o assistente (se estiver ligado e no horário) ou para a equipe
     const reabrir = entrada && (!anterior || anterior.estado === 'encerrada');
@@ -369,6 +377,8 @@ export async function registrarRecebida(lojaId, m, opcoes = {}) {
   if (r.ausencia) {
     if (canalNovo === 'site') {
       await comoSistema((c) => c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto) VALUES ($1, $2, 'saida', 'assistente', 'texto', $3)`, [r.conversa.id, lojaId, r.ausencia]));
+    } else if (canalNovo === 'instagram') {
+      await enviarAoCliente(r.conversa.id, r.ausencia).catch((e) => console.error('[ausencia ig]', e.message));
     } else {
       await enviarAusencia(lojaId, r.conversa.id, m.telefone, r.ausencia).catch((e) => console.error('[ausencia]', e.message));
     }

@@ -1,29 +1,25 @@
 // Envio de mensagem ao cliente fora do ciclo do assistente (ex.: confirmação de pagamento vinda do webhook).
 // Grava na conversa como mensagem do assistente e atualiza a prévia, igual ao motor faz.
 import { comoSistema } from '../../banco/conexao.js';
-import { evolution } from './evolution.js';
-
-const provedores = { evolution };
+import { destinoDaConversa, enviarTexto, enviarMidia, mensagemCanalIndisponivel, limiteTexto, quebrar } from './saida.js';
 
 export async function enviarAoCliente(conversaId, texto, { autor = 'assistente', evento = null } = {}) {
   return comoSistema(async (c) => {
-    const cv = (await c.query('SELECT cv.id, cv.loja_id, ct.telefone FROM conversas cv JOIN contatos ct ON ct.id = cv.contato_id WHERE cv.id = $1', [conversaId])).rows[0];
-    if (!cv) return false;
-    const canal = (await c.query('SELECT * FROM canais WHERE loja_id = $1', [cv.loja_id])).rows[0];
+    const d = await destinoDaConversa(c, conversaId);
+    if (!d) return false;
     if (evento) {
-      await c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto) VALUES ($1, $2, 'interna', 'sistema', 'evento', $3)`, [cv.id, cv.loja_id, String(evento).slice(0, 500)]);
+      await c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto) VALUES ($1, $2, 'interna', 'sistema', 'evento', $3)`, [d.id, d.loja_id, String(evento).slice(0, 500)]);
     }
     if (!texto) return true;
-    if (!canal || canal.status !== 'conectado') {
-      await c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto) VALUES ($1, $2, 'interna', 'sistema', 'evento', $3)`, [cv.id, cv.loja_id, 'WhatsApp desconectado: a mensagem ao cliente não foi enviada — ' + String(texto).slice(0, 200)]);
+    if (!d.pronto) {
+      await c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto) VALUES ($1, $2, 'interna', 'sistema', 'evento', $3)`, [d.id, d.loja_id, mensagemCanalIndisponivel(d)]);
       return false;
     }
-    const partes = String(texto).match(/[\s\S]{1,3800}(?=\s|$)|[\s\S]{1,3800}/g) || [];
-    for (const parte of partes) {
-      const externoId = await provedores[canal.provedor].enviarTexto(canal.instancia, cv.telefone, parte.trim());
-      await c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto, externo_id) VALUES ($1, $2, 'saida', $3, 'texto', $4, $5)`, [cv.id, cv.loja_id, autor, parte.trim(), externoId]);
+    for (const parte of quebrar(texto, limiteTexto(d))) {
+      const externoId = await enviarTexto(d, parte.trim(), { humano: autor === 'atendente' });
+      await c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto, externo_id) VALUES ($1, $2, 'saida', $3, 'texto', $4, $5)`, [d.id, d.loja_id, autor, parte.trim(), externoId]);
     }
-    await c.query(`UPDATE conversas SET ultima_previa = $2, ultima_mensagem_em = now(), atualizada_em = now() WHERE id = $1`, [cv.id, String(texto).slice(0, 140)]);
+    await c.query(`UPDATE conversas SET ultima_previa = $2, ultima_mensagem_em = now(), atualizada_em = now() WHERE id = $1`, [d.id, String(texto).slice(0, 140)]);
     return true;
   });
 }
@@ -31,14 +27,12 @@ export async function enviarAoCliente(conversaId, texto, { autor = 'assistente',
 // Envia um documento (ex.: comprovante em PDF) ao cliente e registra na conversa.
 export async function enviarDocumentoAoCliente(conversaId, { buffer, mimetype = 'application/pdf', nomeArquivo, legenda = '' }, { autor = 'assistente' } = {}) {
   return comoSistema(async (c) => {
-    const cv = (await c.query('SELECT cv.id, cv.loja_id, ct.telefone FROM conversas cv JOIN contatos ct ON ct.id = cv.contato_id WHERE cv.id = $1', [conversaId])).rows[0];
-    if (!cv) return false;
-    const canal = (await c.query('SELECT * FROM canais WHERE loja_id = $1', [cv.loja_id])).rows[0];
-    if (!canal || canal.status !== 'conectado') return false;
-    const externoId = await provedores[canal.provedor].enviarMidia(canal.instancia, cv.telefone, { tipo: 'documento', mimetype, base64: buffer.toString('base64'), nomeArquivo, legenda });
+    const d = await destinoDaConversa(c, conversaId);
+    if (!d || !d.pronto || d.tipo === 'instagram') return false;   // Instagram não recebe documentos pela API de mensagens
+    const externoId = await enviarMidia(d, { tipo: 'documento', mimetype, base64: buffer.toString('base64'), nomeArquivo, legenda });
     await c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto, externo_id, midia) VALUES ($1, $2, 'saida', $3, 'documento', $4, $5, $6)`,
-      [cv.id, cv.loja_id, autor, legenda || nomeArquivo, externoId, { mimetype, nome: nomeArquivo, tamanho: buffer.length }]);
-    await c.query(`UPDATE conversas SET ultima_previa = $2, ultima_mensagem_em = now(), atualizada_em = now() WHERE id = $1`, [cv.id, `📎 ${nomeArquivo}`]);
+      [d.id, d.loja_id, autor, legenda || nomeArquivo, externoId, { mimetype, nome: nomeArquivo, tamanho: buffer.length }]);
+    await c.query(`UPDATE conversas SET ultima_previa = $2, ultima_mensagem_em = now(), atualizada_em = now() WHERE id = $1`, [d.id, `📎 ${nomeArquivo}`]);
     return true;
   });
 }

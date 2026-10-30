@@ -19,7 +19,7 @@ const loja = exigirPerfil('dono', 'atendente');
 // ---------- clientes ----------
 function contatoPublico(k) {
   return {
-    id: k.id, nome: k.nome, telefone: k.telefone, email: k.email, etiquetas: k.etiquetas || [], observacoes: k.observacoes || '',
+    id: k.id, nome: k.nome, telefone: k.telefone, igUsername: k.ig_username || null, email: k.email, etiquetas: k.etiquetas || [], observacoes: k.observacoes || '',
     cpf: k.cpf_final ? `***.***.***-${k.cpf_final}` : null, optout: k.optout, criadoEm: k.criado_em,
     ultimaConversa: k.ultima_mensagem_em || null, conversaId: k.conversa_id || null, etapa: k.etapa || null, reservas: k.qtd_reservas != null ? Number(k.qtd_reservas) : undefined,
   };
@@ -298,6 +298,7 @@ crm.post('/contatos/:id/mensagem', loja, rota(async (req, res) => {
   const prep = await comContexto(ctx(req), async (c) => {
     const k = (await c.query('SELECT * FROM contatos WHERE id = $1 AND loja_id = $2', [id, req.usuario.loja_id])).rows[0];
     if (!k) throw erro(404, 'Cliente não encontrado.');
+    if (!k.telefone) throw erro(422, 'Este cliente veio pelo Instagram e ainda não informou o WhatsApp. Responda pela própria conversa do Instagram.');
     const canal = (await c.query('SELECT * FROM canais WHERE loja_id = $1', [req.usuario.loja_id])).rows[0];
     if (!canal || canal.status !== 'conectado') throw erro(409, 'O WhatsApp da loja está desconectado.');
     const cv = (await c.query('SELECT * FROM conversas WHERE contato_id = $1', [id])).rows[0];

@@ -102,6 +102,7 @@ const caminhos = {
   seta: '<path d="m9 6 6 6-6 6"/>',
   voltar: '<path d="m15 6-6 6 6 6"/>',
   whatsapp: '<path d="M4 20l1.3-3.9A8 8 0 1 1 8 19z"/><path d="M9 9.5c0 3 2.5 5.5 5.5 5.5l1-1.5-2-1-1 .8a4 4 0 0 1-2-2l.8-1-1-2z"/>',
+  instagram: '<rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1" fill="currentColor"/>',
   vazio: '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M3.5 13h5l1.5 2h4l1.5-2h5"/>',
   copiar: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',

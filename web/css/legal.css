@@ -1,0 +1,19 @@
+/* Páginas públicas (política de privacidade, exclusão de dados) — fora do sistema, sem login */
+:root { --vermelho: #DA291C; --texto: #1D1D1B; --texto-2: #5E5A55; --fundo: #F6F5F3; --borda: #E4E1DD; }
+@media (prefers-color-scheme: dark) { :root { --texto: #F2F0EC; --texto-2: #B5B1AB; --fundo: #151514; --borda: #33322F; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--fundo); color: var(--texto); font: 16px/1.6 Figtree, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+.legal { max-width: 760px; margin: 0 auto; padding: 32px 20px 64px; }
+.legal header { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--borda); }
+.legal header img { height: 40px; }
+.legal header span { color: var(--texto-2); font-size: 14px; }
+.legal h1 { font: 700 28px/1.2 Raleway, Figtree, system-ui, sans-serif; margin: 0 0 8px; }
+.legal h2 { font: 600 19px/1.3 Raleway, Figtree, system-ui, sans-serif; margin: 28px 0 8px; }
+.legal p, .legal li { color: var(--texto); }
+.legal .sub { color: var(--texto-2); font-size: 14px; }
+.legal ul { padding-left: 20px; }
+.legal a { color: var(--vermelho); }
+.legal .caixa { border: 1px solid var(--borda); border-radius: 10px; padding: 14px 16px; margin: 16px 0; }
+.legal .revisar { background: #FFF4E5; color: #8A4B00; border-radius: 8px; padding: 10px 14px; font-size: 14px; }
+@media (prefers-color-scheme: dark) { .legal .revisar { background: #33280F; color: #E8B55C; } }
+.legal footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--borda); color: var(--texto-2); font-size: 13px; }
