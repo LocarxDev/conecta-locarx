@@ -4,6 +4,7 @@ import { config } from '../../config.js';
 import { comoSistema } from '../../banco/conexao.js';
 import { decifrar } from '../seguranca.js';
 import { evolution } from '../canais/evolution.js';
+import { destinoDaConversa, enviarTexto as enviarPeloCanal, limiteTexto, quebrar } from '../canais/saida.js';
 import { conversarComIa, transcreverAudio } from './provedores.js';
 import { simularIa } from './simulada.js';
 import { ferramentasDaLoja } from '../locarx/ferramentas.js';
@@ -73,18 +74,20 @@ export function paraWhatsApp(texto) {
 // manda também pelo WhatsApp (número já confirmado por código). `ui` = componentes do chat do site (cartões, botões…) que acompanham o texto.
 async function enviarComoAssistente(c, conversa, canal, textoBruto, ui = null) {
   const texto = paraWhatsApp(textoBruto);
-  let partes = texto.match(/[\s\S]{1,3800}(?=\s|$)|[\s\S]{1,3800}/g) || [];
-  if (!partes.length && ui?.length) partes = [''];
   const site = conversa.canal === 'site';
   const soSite = site && (!canal || canal.status !== 'conectado' || await visitanteAtivo(c, conversa.id));
+  // Instagram: limite menor por mensagem e envio pela Meta; WhatsApp/site: Evolution
+  const destino = soSite ? null : await destinoDaConversa(c, conversa.id);
+  let partes = quebrar(texto, limiteTexto(destino)) || [];
+  if (!partes.length && ui?.length) partes = [''];
   const fallback = (ui || []).map((u) => u.fallback).filter(Boolean).join('\n\n');
   for (const [i, parte] of partes.entries()) {
     const ultima = i === partes.length - 1;
     const uiDaParte = ultima && ui?.length ? ui : null;
     let externoId = null;
-    if (!soSite) {
+    if (!soSite && destino?.pronto) {
       const paraZap = (parte.trim() + (uiDaParte && fallback ? `\n\n${fallback}` : '')).trim();
-      externoId = await provedoresCanal[canal.provedor].enviarTexto(canal.instancia, conversa.telefone, paraZap);
+      if (paraZap) externoId = await enviarPeloCanal(destino, paraZap);
     }
     await c.query(
       `INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto, externo_id, ui) VALUES ($1, $2, 'saida', 'assistente', 'texto', $3, $4, $5)`,
@@ -194,6 +197,7 @@ REGRAS OBRIGATÓRIAS
 14. DATAS E ANO. O ano atual é ${agora.ano}${agora.diasParaFimDoAno <= 120 ? ` e ele acaba em ${agora.diasParaFimDoAno} dias` : ''}. Quando o cliente disser só dia e mês (sem o ano), use SEMPRE a próxima vez em que essa data acontece a partir de hoje: se ainda não passou neste ano, é em ${agora.ano}; se já passou, é em ${agora.ano + 1}. Nunca use um ano anterior a ${agora.ano}. Retirada no fim do ano com devolução em janeiro: a devolução é no ano seguinte (ex.: retirar 31/12/${agora.ano} e devolver 02/01/${agora.ano + 1}). Ao confirmar com o cliente, escreva o ano quando a locação passar pela virada do ano. Se a data não existir no calendário (31/11, 30/02), não chame atendente: diga com cordialidade que essa data não existe e pergunte a data certa.
 15. APLICATIVOS E FROTA. A LocarX NÃO aluga para motoristas de aplicativo (Uber, 99, inDrive, entregas por app etc.), de nenhum tipo, em nenhuma loja. Se o cliente disser ou deixar claro que o carro é para trabalhar em aplicativo, explique com cordialidade que a LocarX não faz locação para aplicativos e não siga com a cotação nem com a reserva; não sugira "dar um jeito". Se o cliente quiser FROTA ou locação para EMPRESA (vários carros, contrato mensal/longo prazo, CNPJ, frotista), não cote nem reserve pelo assistente: diga que esse atendimento é feito pela equipe e use chamar_atendente com o motivo "frota/empresa".
 16. NÃO INVENTE VALORES NEM CONDIÇÕES. Caução, coparticipação, franquia, multa, taxa, desconto, idade mínima, documentos aceitos e qualquer regra comercial: só informe o que estiver nas REGRAS DA REDE, nas ORIENTAÇÕES DESTA LOJA, no resultado de uma ferramenta (buscar_informacoes, calcular_preco, dados_da_loja) ou nas orientacoes_oficiais da reserva. Se não encontrar, diga que vai confirmar o valor exato na retirada ou com a equipe (e, se o cliente precisar da resposta para decidir, use chamar_atendente). Nunca complete com o que "costuma ser" em locadoras.
+17. CONTINUIDADE APÓS A EQUIPE. Mensagens marcadas como "[mensagem enviada por um atendente humano da loja]" foram escritas pela equipe, não por você. Quando a conversa voltar para você, continue exatamente de onde parou: não se apresente de novo, não cumprimente outra vez, não repita perguntas já respondidas, e honre o que a equipe combinou com o cliente (datas, filial, valores informados por eles). Se o cliente respondeu a uma pergunta da equipe, trate a resposta como parte do atendimento em andamento.
 
 ROTEIRO DE RESERVA (uma etapa por mensagem; se o cliente já deu a informação, não pergunte de novo)
 ${central ? `Passo 0 — Onde retirar. Você atende pela Central e há filiais LocarX em várias cidades. SEMPRE pergunte ao cliente em qual cidade (ou aeroporto) ele quer retirar o carro; se ele já disse, não pergunte de novo. Se ele falar um bairro, ponto turístico ou cidade pequena, deduza a cidade pela sua noção de geografia do Brasil e confirme ("Você diz Porto de Galinhas, perto de Recife, certo?"). Use buscar_filiais com a cidade: se houver mais de uma filial (ex.: cidade e aeroporto), mostre as opções com endereço e pergunte em qual. Se o cliente disser só o estado, busque pelo estado e liste as cidades dele. Se NÃO houver filial na cidade que ele pediu, a ferramenta devolve as cidades atendidas por estado: sugira a(s) mais próxima(s) com base na geografia (pode citar a distância aproximada, sem inventar exatidão) e pergunte se quer retirar lá. Nunca reserve numa filial sem o cliente confirmar. Depois de confirmada, informe a filial (nome exato) em todas as ferramentas. Retirada e devolução na mesma filial.\n` : ''}${!central && filiais.length > 1 ? `Passo 0 — Filial. Esta loja tem ${filiais.length} filiais: ${filiais.map((f) => f.nome).join(', ')}. Antes de consultar, pergunte em qual delas o cliente quer retirar (se ele já disse, não pergunte) e informe filial nas ferramentas. Retirada e devolução na mesma filial.\n` : ''}Passo 1 — Período. Você precisa de 4 coisas: data e hora da retirada, data e hora da devolução. Pergunte o que faltar em uma mensagem só (ex.: "Para qual dia e horário você quer retirar, e quando devolve?"). Converta "sexta", "dia 15", "de manhã" para data e hora reais usando a data de hoje; se a hora não vier, pergunte (não chute). Se a data informada já passou (antes de hoje), NÃO consulte nem chame atendente: diga que essa data já passou e pergunte a data certa (ex.: "13/10 já passou — você quis dizer 13/11?"). Repita o período entendido em uma linha antes de consultar ("Então retirada 15/11 às 10h e devolução 18/11 às 10h, certo?") — pode consultar na mesma resposta se o cliente já foi claro.
@@ -220,7 +224,7 @@ ${crm ? textoCrm(crm) : ''}
 
 ${textoReservaEmAndamento(conversa)}
 
-CLIENTE: ${contato.nome || 'nome não informado'}. ${recorrente}${site ? '\n' + promptDoSite(site) : ''}`;
+CLIENTE: ${contato.nome || 'nome não informado'}. ${recorrente}${site ? '\n' + promptDoSite(site) : ''}${conversa?.canal === 'instagram' ? `\nCANAL: esta conversa é pelo INSTAGRAM (direct da loja${contato.igUsername ? `; perfil @${contato.igUsername}` : ''}). Você não tem o telefone do cliente: para criar a reserva, peça o número de WhatsApp com DDD junto com os dados do condutor (nome, CPF, e-mail) e passe em telefone. Mensagens curtas (o Instagram corta textos longos); sem tabelas; emojis com moderação. Não há Pix nem envio de arquivos por aqui: se precisar, ofereça continuar pelo WhatsApp da loja.` : ''}`;
 }
 
 export async function processar(conversaId, { forcar = false } = {}) {
@@ -235,14 +239,18 @@ async function processarAgora(conversaId) {
     const trava = (await c.query('SELECT pg_try_advisory_xact_lock(hashtext($1)) AS ok', [conversaId])).rows[0].ok;
     if (!trava) return null;
     const conversa = (await c.query(
-      `SELECT cv.*, ct.telefone, ct.nome AS contato_nome, ct.id AS contato_id_real FROM conversas cv JOIN contatos ct ON ct.id = cv.contato_id WHERE cv.id = $1`, [conversaId])).rows[0];
+      `SELECT cv.*, ct.telefone, ct.ig_id, ct.ig_username, ct.nome AS contato_nome, ct.id AS contato_id_real FROM conversas cv JOIN contatos ct ON ct.id = cv.contato_id WHERE cv.id = $1`, [conversaId])).rows[0];
     if (!conversa || conversa.estado !== 'assistente') return null;
     if (conversa.bot_respondeu_em && conversa.ultima_do_cliente && conversa.bot_respondeu_em >= conversa.ultima_do_cliente) return null;
     const a = (await c.query('SELECT * FROM assistentes WHERE loja_id = $1', [conversa.loja_id])).rows[0];
     const canal = (await c.query('SELECT * FROM canais WHERE loja_id = $1', [conversa.loja_id])).rows[0];
     const loja = (await c.query('SELECT * FROM lojas WHERE id = $1', [conversa.loja_id])).rows[0];
     if (!a?.ativo || !loja?.ativa || !moduloLigado(loja.modulos, 'assistente')) return null;
-    if (conversa.canal !== 'site' && (!canal || canal.status !== 'conectado')) return null;
+    if (conversa.canal === 'instagram') {
+      const ig = (await c.query('SELECT status, assistente FROM canais_instagram WHERE loja_id = $1', [conversa.loja_id])).rows[0];
+      if (!ig || ig.status !== 'conectado') return null;
+      if (!ig.assistente) return { repassar: 'assistente desligado para o Instagram desta loja', conversa };
+    } else if (conversa.canal !== 'site' && (!canal || canal.status !== 'conectado')) return null;
     if (!a.chave_cifrada && !config.iaSimulada) return { repassar: 'assistente sem chave de IA configurada', conversa };
     const hoje = (await c.query(`SELECT count(*)::int AS n FROM uso_ia WHERE loja_id = $1 AND criado_em >= now() - interval '24 hours'`, [conversa.loja_id])).rows[0].n;
     if (a.limite_diario && hoje >= a.limite_diario) return { repassar: 'limite diário de respostas do assistente atingido', conversa };
@@ -290,7 +298,13 @@ async function processarAgora(conversaId) {
   for (const m of msgs) {
     if (m.tipo === 'audio' && m.direcao === 'entrada' && !m.transcricao && chaveAudio && m.externo_id) {
       try {
-        const arq = await provedoresCanal[canal.provedor].baixarMidia(canal.instancia, m.externo_id);
+        let arq = null;
+        if (conversa.canal === 'instagram' && m.midia?.url) {
+          const r = await fetch(m.midia.url, { signal: AbortSignal.timeout(15_000) });
+          if (r.ok) arq = { buffer: Buffer.from(await r.arrayBuffer()), mimetype: r.headers.get('content-type') || 'audio/mp4' };
+        } else if (canal) {
+          arq = await provedoresCanal[canal.provedor].baixarMidia(canal.instancia, m.externo_id);
+        }
         if (arq) {
           m.transcricao = await transcreverAudio({ chave: chaveAudio, buffer: arq.buffer, mimetype: arq.mimetype });
           await comoSistema((c) => c.query('UPDATE mensagens SET transcricao = $2 WHERE id = $1', [m.id, m.transcricao]));
@@ -300,9 +314,10 @@ async function processarAgora(conversaId) {
   }
 
   const DESCRICAO = { imagem: 'enviou uma foto', video: 'enviou um vídeo', documento: 'enviou um documento', localizacao: 'enviou uma localização', figurinha: 'enviou uma figurinha', audio: 'enviou um áudio (não foi possível ouvir; peça para escrever)', outro: 'enviou uma mensagem que não é texto' };
+  // mensagens da equipe entram no histórico marcadas: a IA sabe que foi um humano que falou e continua de onde parou
   const historico = msgs.map((m) => ({
     papel: m.direcao === 'entrada' ? 'cliente' : 'assistente',
-    texto: m.tipo === 'texto' ? [m.texto, descreverUi(m.ui)].filter(Boolean).join(' ')
+    texto: m.tipo === 'texto' ? [(m.autor === 'atendente' ? '[mensagem enviada por um atendente humano da loja] ' : '') + (m.texto || ''), descreverUi(m.ui)].filter(Boolean).join(' ')
       : m.tipo === 'audio' && m.transcricao ? `[áudio transcrito] ${m.transcricao}`
       : `[o ${m.direcao === 'entrada' ? 'cliente' : 'atendente'} ${DESCRICAO[m.tipo] || 'enviou um arquivo'}]${m.texto ? ' ' + m.texto : ''}`,
   })).filter((h) => h.texto);
@@ -311,7 +326,7 @@ async function processarAgora(conversaId) {
   let pedidoAtendente = null;
   const ctxFerramentas = {
     lojaId: loja.id, branchId: conversa.opcoes?.branchId || conversa.cotacao?.branchId || loja.branch_id, branchEscolhido: !!(conversa.opcoes?.branchId || conversa.cotacao?.branchId), filialNome: conversa.opcoes?.filialNome || conversa.cotacao?.filialNome || null, filiais: prep.filiais,
-    conversaId: conversa.id, contatoId: conversa.contato_id, telefone: conversa.telefone, central: !!loja.central,
+    conversaId: conversa.id, contatoId: conversa.contato_id, telefone: conversa.telefone, canal: conversa.canal || 'whatsapp', central: !!loja.central,
     locarxDisponivel: !!config.locarx, pixDisponivel: prep.pix, regrasFunil: prep.regrasFunil, simulacao: false, campos: crm.campos, etiquetas: crm.etiquetas, opcoesAnteriores: conversa.opcoes?.grupos || [],
     enviarDepois: [],   // mensagens que o sistema manda logo após a resposta da IA (ex.: código Pix em mensagem própria)
     aoChamarAtendente: async (args) => { pedidoAtendente = args; },
@@ -327,7 +342,7 @@ async function processarAgora(conversaId) {
   try {
     const opcoes = {
       provedor: a.provedor, modelo: a.modelo, chave: a.chave_cifrada ? decifrar(a.chave_cifrada) : null,
-      sistema: montarSistema({ loja, a, rede, contato: { nome: conversa.contato_nome }, historicoReservas, crm, conversa, pix: prep.pix, filiais: prep.filiais, site: conversa.canal === 'site' ? { antes: false, nomeCliente: conversa.contato_nome } : null }), historico, ferramentas,
+      sistema: montarSistema({ loja, a, rede, contato: { nome: conversa.contato_nome, igUsername: conversa.ig_username || null }, historicoReservas, crm, conversa, pix: prep.pix, filiais: prep.filiais, site: conversa.canal === 'site' ? { antes: false, nomeCliente: conversa.contato_nome } : null }), historico, ferramentas,
     };
     resposta = config.iaSimulada ? await simularIa(opcoes) : await conversarComIa(opcoes);
   } catch (e) { erroIa = e; console.error('[assistente] IA:', e.message); }

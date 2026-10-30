@@ -107,6 +107,11 @@ const real = {
   importarConhecimento: (d) => chamar('POST', '/conhecimento/importar', d),
   rede: () => chamar('GET', '/admin/rede'),
   salvarRede: (d) => chamar('PUT', '/admin/rede', d),
+  // Instagram da loja (API oficial da Meta)
+  instagram: () => chamar('GET', '/loja/instagram'),
+  conectarInstagram: () => chamar('POST', '/loja/instagram/conectar'),
+  desconectarInstagram: () => chamar('POST', '/loja/instagram/desconectar'),
+  assistenteInstagram: (ativo) => chamar('PUT', '/loja/instagram/assistente', { ativo }),
   // prompt da Lia (regras da rede)
   promptRede: () => chamar('GET', '/admin/prompt'),
   salvarPromptRede: (d) => chamar('PUT', '/admin/prompt', d),

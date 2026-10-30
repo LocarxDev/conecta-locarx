@@ -75,6 +75,15 @@ export const config = {
     limiteCodigosDia: Number(process.env.SITE_LIMITE_CODIGOS_DIA) || 300,
     diasSessao: Number(process.env.SITE_DIAS_SESSAO) || 30,
   } : null,
+  // Instagram das lojas (API oficial da Meta). Um app da LocarX para a rede; cada loja conecta a própria conta.
+  // Desligado sem INSTAGRAM_APP_ID + INSTAGRAM_APP_SECRET. INSTAGRAM_VERIFY_TOKEN é o "Verificar token" do webhook (você escolhe).
+  instagram: process.env.INSTAGRAM_APP_ID && process.env.INSTAGRAM_APP_SECRET ? {
+    appId: process.env.INSTAGRAM_APP_ID.trim(),
+    appSecret: process.env.INSTAGRAM_APP_SECRET.trim(),
+    configId: process.env.INSTAGRAM_CONFIG_ID?.trim() || null,
+    verifyToken: process.env.INSTAGRAM_VERIFY_TOKEN?.trim() || null,
+    versaoGraph: process.env.INSTAGRAM_GRAPH_VERSION?.trim() || 'v21.0',
+  } : null,
   // Só para testes no computador: IA simulada, sem chamar Anthropic/OpenAI
   iaSimulada: process.env.IA_SIMULADA === '1' && !producao,
   // Em desenvolvimento local (http://localhost) o cookie não pode ter o prefixo __Host- nem Secure.

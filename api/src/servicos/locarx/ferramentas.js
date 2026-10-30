@@ -305,6 +305,11 @@ export function ferramentasDaLoja(ctx) {
         const cnh = String(a.cnh || '').replace(/\D/g, '');
         if (cnh && !/^\d{9,11}$/.test(cnh)) return 'O número da CNH parece incompleto. Peça para conferir ou siga sem a CNH (ela é opcional).';
         const telefone = String(a.telefone || ctx.telefone || '').replace(/\D/g, '');
+        if (!telefone && ctx.canal === 'instagram') return 'Falta o número de WhatsApp do cliente (com DDD). Peça o número e chame criar_reserva de novo passando em telefone.';
+        // cliente do Instagram informou o WhatsApp: guarda no contato (vira o telefone dele no CRM)
+        if (!ctx.simulacao && ctx.contatoId && !ctx.telefone && ctx.canal === 'instagram') {
+          await comoSistema((c) => c.query('UPDATE contatos SET telefone = $2 WHERE id = $1 AND telefone IS NULL AND NOT EXISTS (SELECT 1 FROM contatos x WHERE x.loja_id = contatos.loja_id AND x.telefone = $2)', [ctx.contatoId, telefone])).catch(() => {});
+        }
         // dados do condutor ficam na conversa (CPF cifrado): se o cliente trocar de grupo, a IA não precisa pedir de novo
         if (!ctx.simulacao && ctx.conversaId) {
           await comoSistema((c) => c.query('UPDATE conversas SET condutor = $2 WHERE id = $1', [ctx.conversaId, { nome: String(a.nome).trim().slice(0, 100), email: String(a.email).trim().toLowerCase(), cpf_cifrado: cifrar(String(a.cpf).replace(/\D/g, '')), cpf_final: String(a.cpf).replace(/\D/g, '').slice(-2), cnh: cnh || null, em: new Date().toISOString() }]));

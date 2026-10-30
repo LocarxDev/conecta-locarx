@@ -18,6 +18,7 @@ import { personalizacaoLoja, personalizacaoRede } from './rotas/personalizacao.j
 import { relatorioLoja, relatorioRede } from './rotas/relatorios.js';
 import { webhookAbacatePay, pagamentosLoja, pagamentosAdmin } from './rotas/pagamentos.js';
 import { site, siteAdmin, corsDoSite } from './rotas/site.js';
+import { instagramLoja, instagramPublico, webhookInstagram } from './rotas/instagram.js';
 
 export function criarApp() {
   const app = express();
@@ -33,6 +34,11 @@ export function criarApp() {
 
   // saúde (Railway healthcheck) — não revela nada
   app.get('/api/saude', (req, res) => res.json({ ok: true }));
+
+  // Instagram (Meta): webhook com corpo BRUTO (a assinatura HMAC é sobre os bytes originais) — antes do parser JSON dos outros webhooks
+  app.use('/api/webhooks/instagram', express.raw({ type: () => true, limit: '1mb' }), webhookInstagram);
+  // retorno do login do Instagram (sem cookies; a loja vem no state assinado)
+  app.use('/api/instagram', rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: 'draft-7', legacyHeaders: false }), instagramPublico);
 
   // webhook da Evolution: chega servidor-a-servidor (sem navegador, sem login), protegido por segredo na URL
   app.use('/api/webhooks', express.json({ limit: '2mb' }), webhooks);
@@ -69,7 +75,7 @@ export function criarApp() {
   app.use(['/api/loja/respostas', '/api/crm/modelos'], exigirModulo('automacoes'));
   app.use(['/api/loja/assistente', '/api/loja/perguntas'], exigirModulo('assistente'));
   app.use('/api/admin', admin, equipeAdmin, rede, locarxAdmin, relatorioRede, personalizacaoRede, canalAdmin, pagamentosAdmin, siteAdmin);
-  app.use('/api/loja', loja, equipeLoja, canal, respostas, assistente, reservas, relatorioLoja, pagamentosLoja);
+  app.use('/api/loja', loja, equipeLoja, canal, instagramLoja, respostas, assistente, reservas, relatorioLoja, pagamentosLoja);
   app.use('/api/crm', crm, personalizacaoLoja);
   app.use('/api/conhecimento', conhecimento);
   app.use('/api/conversas', conversas);

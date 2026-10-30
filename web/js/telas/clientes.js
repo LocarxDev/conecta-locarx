@@ -4,7 +4,7 @@ import { html, render, $, $$, icone, iniciais, avisar, abrirModal, comBotao, mar
 import { montarPainelCliente } from './painel-cliente.js';
 
 const reais = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }));
-const telefone = (t) => telefoneBr(t) || '+' + t;
+const telefone = (t) => (t ? (telefoneBr(t) || '+' + t) : 'sem telefone (Instagram)');
 const seloEtapa = (e) => html`<span class="etapa-chip" data-cor="${e.cor}" title="${e.funil}"><span class="ponto-cor"></span>${e.nome}</span>`;
 
 export async function montar(alvo, ctx) {

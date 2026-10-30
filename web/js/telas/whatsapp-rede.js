@@ -52,7 +52,7 @@ export async function montar(alvo, ctx) {
             <td><strong>${l.nome}</strong><div class="sub">${l.cidade}/${l.uf} · filial ${l.filial ?? '—'}${l.ativa ? '' : ' · desativada'}</div></td>
             <td>${l.instavelAte ? html`<span class="selo erro">Instável</span>` : (SELO[l.status] || SELO.nunca)}${l.estadoVivo && l.estadoVivo !== 'erro' ? html`<div class="sub">ao vivo: ${l.estadoVivo}</div>` : ''}${l.atualizadoEm ? html`<div class="sub">${quando(l.atualizadoEm)}</div>` : ''}
               ${l.quedas24h || l.quedas7d ? html`<div class="sub" title="Vezes em que saiu de conectado">quedas: ${l.quedas24h} em 24 h · ${l.quedas7d} em 7 dias</div>` : ''}</td>
-            <td class="col-opcional num nowrap">${formatarNumero(l.numero)}</td>
+            <td class="col-opcional num nowrap">${formatarNumero(l.numero)}${l.instagram ? html`<div class="sub">${icone('instagram')} @${l.instagram.usuario}${l.instagram.status !== 'conectado' ? ' (desconectado)' : ''}</div>` : ''}</td>
             <td class="col-opcional">${ASSISTENTE[l.assistente]}</td>
             <td class="col-opcional num">${l.online} <span class="sub">de ${l.equipe}</span>${l.aguardando ? html`<div class="sub">${l.aguardando} aguardando</div>` : ''}</td>
             <td class="col-opcional num">${l.recebidas24h} <span class="sub">↓ ${l.enviadas24h} ↑ em 24 h</span><div class="sub">${l.ultimaMensagemEm ? 'última ' + quando(l.ultimaMensagemEm).toLowerCase() : 'nenhuma ainda'}</div></td>

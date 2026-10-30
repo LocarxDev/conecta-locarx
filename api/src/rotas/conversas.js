@@ -6,6 +6,9 @@ import { evolution } from '../servicos/canais/evolution.js';
 import { rota, erro, validar, zUuid, exigirPerfil, registrar } from '../http.js';
 import { previaDe } from './whatsapp.js';
 import { visitanteAtivo } from '../servicos/site/presenca.js';
+import { agendar } from '../servicos/ia/assistente.js';
+import { destinoDaConversa, enviarTexto as enviarPeloCanal, limiteTexto, quebrar } from '../servicos/canais/saida.js';
+import { explicarErro as explicarErroInstagram } from '../servicos/canais/instagram.js';
 
 export const conversas = Router();
 export const respostas = Router();
@@ -21,7 +24,7 @@ function conversaPublica(r) {
     id: r.id, estado: r.estado, canal: r.canal || 'whatsapp', naoLidas: r.nao_lidas, previa: r.ultima_previa,
     ultimaMensagemEm: r.ultima_mensagem_em, ultimaDoCliente: r.ultima_do_cliente,
     atendente: r.atendente_id ? { id: r.atendente_id, nome: r.atendente_nome } : null, atribuidaEm: r.atribuida_em || null,
-    contato: { id: r.contato_id, nome: r.contato_nome, telefone: r.telefone },
+    contato: { id: r.contato_id, nome: r.contato_nome, telefone: r.telefone, igUsername: r.ig_username || null },
     etiquetas: r.etiquetas || [],
     cursor: r.cursor,
     // transferência entre lojas: de onde veio e quem atende (só aparece quando há transferência)
@@ -38,7 +41,7 @@ function mensagemPublica(m) {
 }
 
 const SQL_CONVERSA = `
-  SELECT cv.*, ct.nome AS contato_nome, ct.telefone, u.nome AS atendente_nome, ${cursor('cv.atualizada_em')} AS cursor,
+  SELECT cv.*, ct.nome AS contato_nome, ct.telefone, ct.ig_username, u.nome AS atendente_nome, ${cursor('cv.atualizada_em')} AS cursor,
          lo.nome AS loja_origem_nome, la.nome AS loja_atendimento_nome,
          (SELECT coalesce(json_agg(json_build_object('id', e.id, 'nome', e.nome, 'cor', e.cor) ORDER BY lower(e.nome)), '[]')
             FROM contato_etiquetas ce JOIN etiquetas e ON e.id = ce.etiqueta_id WHERE ce.contato_id = cv.contato_id) AS etiquetas
@@ -57,7 +60,7 @@ conversas.get('/', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
   if (q.busca) {
     params.push('%' + q.busca.replace(/[%_\\]/g, '\\$&') + '%');
     params.push(q.busca.replace(/\D/g, '') ? '%' + q.busca.replace(/\D/g, '') + '%' : '__nenhum__');
-    filtro += ` AND (ct.nome ILIKE $${params.length - 1} OR ct.telefone LIKE $${params.length})`;
+    filtro += ` AND (ct.nome ILIKE $${params.length - 1} OR ct.telefone LIKE $${params.length} OR ct.ig_username ILIKE $${params.length - 1})`;
   }
   filtro += filtroVisibilidade(req, params);
   const r = await comContexto(ctx(req), async (c) => {
@@ -118,8 +121,11 @@ async function canalDaConversa(c, cv) {
 async function prepararEnvio(req, id) {
   return comContexto(ctx(req), async (c) => {
     const cv = await obterConversa(c, req, id);
-    const canal = await canalDaConversa(c, cv);
-    if (cv.canal !== 'site' && (!canal || canal.status !== 'conectado')) throw erro(409, `O WhatsApp da loja${cv.loja_atendimento_id ? ' de origem (' + cv.loja_origem_nome + ')' : ''} está desconectado. Conecte em "WhatsApp" antes de responder.`);
+    // Instagram: o canal é a conta do Instagram da loja de origem (fora do RLS desta loja quando outra atende)
+    const destino = cv.canal === 'instagram' ? await comoSistema((cs) => destinoDaConversa(cs, cv.id)) : null;
+    if (destino && !destino.pronto) throw erro(409, 'O Instagram da loja está desconectado. Conecte em "Canais da loja" antes de responder.');
+    const canal = destino ? null : await canalDaConversa(c, cv);
+    if (!destino && cv.canal !== 'site' && (!canal || canal.status !== 'conectado')) throw erro(409, `O WhatsApp da loja${cv.loja_atendimento_id ? ' de origem (' + cv.loja_origem_nome + ')' : ''} está desconectado. Conecte em "WhatsApp" antes de responder.`);
     // quem responde assume a conversa
     if (cv.estado !== 'humano' || cv.atendente_id !== req.usuario.id) {
       if (cv.estado === 'humano' && cv.atendente_id && cv.atendente_id !== req.usuario.id && req.usuario.perfil !== 'dono') {
@@ -130,7 +136,7 @@ async function prepararEnvio(req, id) {
     }
     // conversa do chat do site com o visitante na tela: a resposta vai para o chat (sem WhatsApp); fora da tela, vai pelo WhatsApp
     const soSite = cv.canal === 'site' && (!canal || canal.status !== 'conectado' || await visitanteAtivo(c, cv.id));
-    return { cv, canal, soSite };
+    return { cv, canal, soSite, destino };
   });
 }
 
@@ -139,14 +145,14 @@ async function finalizarEnvio(req, cv, { tipo, texto, midia, enviar }) {
     `INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, autor_id, tipo, texto, midia, status)
      VALUES ($1, $2, 'saida', 'atendente', $3, $4, $5, $6, 'enviando') RETURNING id`,
     [cv.id, cv.loja_id, req.usuario.id, tipo, texto, midia])).rows[0]);
-  let externoId = null, falhou = false;
-  try { externoId = await enviar(); } catch (e) { falhou = true; console.error('[envio]', e.message, JSON.stringify(e.resposta || '').slice(0, 200)); }
+  let externoId = null, falhou = false, erroEnvio = null;
+  try { externoId = await enviar(); } catch (e) { falhou = true; erroEnvio = e; console.error('[envio]', e.message, JSON.stringify(e.resposta || '').slice(0, 200)); }
   const final = await comContexto(ctx(req), async (c) => {
     await c.query(`UPDATE mensagens SET status = $2, externo_id = $3 WHERE id = $1`, [msg.id, falhou ? 'erro' : 'ok', externoId]);
     if (!falhou) await c.query(`UPDATE conversas SET ultima_previa = $2, ultima_mensagem_em = now(), humano_respondeu_em = now(), atualizada_em = now() WHERE id = $1`, [cv.id, previaDe(tipo, texto)]);
     return (await c.query(`SELECT m.*, u.nome AS autor_nome, ${cursor('m.criada_em')} AS cursor FROM mensagens m LEFT JOIN usuarios u ON u.id = m.autor_id WHERE m.id = $1`, [msg.id])).rows[0];
   });
-  if (falhou) throw erro(502, 'A mensagem não foi enviada. Confira a conexão do WhatsApp e tente de novo.');
+  if (falhou) throw erro(502, cv.canal === 'instagram' ? `A mensagem não foi enviada pelo Instagram. ${explicarErroInstagram(erroEnvio)}` : 'A mensagem não foi enviada. Confira a conexão do WhatsApp e tente de novo.');
   return mensagemPublica(final);
 }
 
@@ -157,8 +163,16 @@ export const assinar = (usuario, texto) => { const nome = String(usuario?.nome |
 conversas.post('/:id/mensagens', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
   const id = uuid(req.params.id);
   const { texto } = validar(z.object({ texto: z.string().trim().min(1, 'Escreva a mensagem.').max(4000, 'Mensagem muito longa (máx. 4.000 caracteres).') }), req.body);
-  const { cv, canal, soSite } = await prepararEnvio(req, id);
-  res.status(201).json(await finalizarEnvio(req, cv, { tipo: 'texto', texto, midia: null, enviar: async () => (soSite ? null : provedores[canal.provedor].enviarTexto(canal.instancia, cv.telefone, assinar(req.usuario, texto))) }));
+  const { cv, canal, soSite, destino } = await prepararEnvio(req, id);
+  res.status(201).json(await finalizarEnvio(req, cv, { tipo: 'texto', texto, midia: null, enviar: async () => {
+    if (soSite) return null;
+    if (destino) {   // Instagram: até 1.000 caracteres por mensagem; mensagem de atendente pode sair fora da janela de 24 h
+      let ultimo = null;
+      for (const parte of quebrar(assinar(req.usuario, texto), limiteTexto(destino))) ultimo = await enviarPeloCanal(destino, parte, { humano: true });
+      return ultimo;
+    }
+    return provedores[canal.provedor].enviarTexto(canal.instancia, cv.telefone, assinar(req.usuario, texto));
+  } }));
 }));
 
 // mídia: só tipos seguros, conferindo o conteúdo real do arquivo (não só a extensão)
@@ -185,7 +199,8 @@ conversas.post('/:id/midia', exigirPerfil('dono', 'atendente'), rota(async (req,
   const bytes = Buffer.from(d.base64, 'base64');
   if (!bytes.length || bytes.length > MAX_MIDIA) throw erro(422, 'Arquivo vazio ou maior que 8 MB.');
   if (!regra.assinatura.every((b, i) => bytes[i] === b)) throw erro(422, 'O conteúdo do arquivo não corresponde ao tipo informado.');
-  const { cv, canal, soSite } = await prepararEnvio(req, id);
+  const { cv, canal, soSite, destino } = await prepararEnvio(req, id);
+  if (destino) throw erro(422, 'Pelo Instagram não dá para enviar arquivos por aqui. Se o cliente informou o WhatsApp, envie por lá.');
   if (soSite && !canal) throw erro(409, 'Esta conversa é do chat do site e o WhatsApp da loja está desconectado: arquivos só podem ser enviados pelo WhatsApp.');
   const midia = { mimetype: d.mimetype, nome: d.nomeArquivo || null };
   res.status(201).json(await finalizarEnvio(req, cv, {
@@ -200,12 +215,21 @@ conversas.get('/:id/mensagens/:mid/arquivo', exigirPerfil('dono', 'atendente'), 
   const r = await comContexto(ctx(req), async (c) => {
     const cv = await obterConversa(c, req, id);
     const m = (await c.query('SELECT * FROM mensagens WHERE id = $1 AND conversa_id = $2', [mid, id])).rows[0];
-    const canal = await canalDaConversa(c, cv);
-    return { m, canal };
+    const canal = cv.canal === 'instagram' ? null : await canalDaConversa(c, cv);
+    return { m, canal, instagram: cv.canal === 'instagram' };
   });
-  if (!r.m?.externo_id || !r.canal) throw erro(404, 'Arquivo não encontrado.');
+  if (!r.m) throw erro(404, 'Arquivo não encontrado.');
   let arq;
-  try { arq = await provedores[r.canal.provedor].baixarMidia(r.canal.instancia, r.m.externo_id); } catch (e) { console.error('[arquivo]', e.message); }
+  if (r.instagram) {
+    // Instagram: a mídia vem por URL temporária da Meta (guardada na mensagem); baixamos na hora, nada fica no Conecta
+    const url = r.m.midia?.url;
+    if (!url || !/^https:\/\/[\w.-]*(fbcdn|cdninstagram|facebook|instagram)\.(net|com)\//i.test(url)) throw erro(404, 'Arquivo não encontrado.');
+    try { const resp = await fetch(url, { signal: AbortSignal.timeout(15_000) }); if (resp.ok) arq = { buffer: Buffer.from(await resp.arrayBuffer()), mimetype: resp.headers.get('content-type') || 'application/octet-stream' }; } catch (e) { console.error('[arquivo ig]', e.message); }
+    if (!arq) throw erro(404, 'O arquivo não está mais disponível no Instagram.');
+  } else {
+    if (!r.m.externo_id || !r.canal) throw erro(404, 'Arquivo não encontrado.');
+    try { arq = await provedores[r.canal.provedor].baixarMidia(r.canal.instancia, r.m.externo_id); } catch (e) { console.error('[arquivo]', e.message); }
+  }
   if (!arq) throw erro(404, 'O arquivo não está mais disponível no WhatsApp.');
   const seguro = /^(image\/(jpeg|png|webp|gif)|audio\/[\w.+-]+|video\/(mp4|3gpp)|application\/pdf)(;.*)?$/i.test(arq.mimetype);
   res.set('Content-Type', seguro ? arq.mimetype.split(';')[0] : 'application/octet-stream');
@@ -254,9 +278,13 @@ conversas.post('/:id/devolver', exigirPerfil('dono', 'atendente'), rota(async (r
   const r = await mudarEstado(req, uuid(req.params.id), async (c, cv) => {
     const a = await comoSistema(async (cs) => (await cs.query('SELECT ativo FROM assistentes WHERE loja_id = $1', [cv.loja_id])).rows[0]);
     if (!a?.ativo) throw erro(409, 'O assistente virtual desta loja está desligado. Ligue em "Assistente virtual".');
-    // marca como já respondido até agora: o assistente só fala quando o cliente escrever de novo
-    await c.query(`UPDATE conversas SET estado = 'assistente', atendente_id = NULL, bot_respondeu_em = now() WHERE id = $1`, [cv.id]);
-    await evento(c, cv, req, `${req.usuario.nome} devolveu a conversa ao assistente`);
+    // Se o cliente escreveu depois da última resposta (da equipe ou do assistente), o assistente continua o atendimento
+    // na hora, com o histórico inteiro (inclusive o que a equipe disse). Senão, espera o cliente escrever de novo.
+    const ultimaSaida = (await c.query(`SELECT max(criada_em) AS em FROM mensagens WHERE conversa_id = $1 AND direcao = 'saida'`, [cv.id])).rows[0]?.em;
+    const pendente = !!cv.ultima_do_cliente && (!ultimaSaida || new Date(cv.ultima_do_cliente) > new Date(ultimaSaida));
+    await c.query(`UPDATE conversas SET estado = 'assistente', atendente_id = NULL, bot_respondeu_em = CASE WHEN $2 THEN bot_respondeu_em ELSE now() END WHERE id = $1`, [cv.id, pendente]);
+    await evento(c, cv, req, `${req.usuario.nome} devolveu a conversa ao assistente${pendente ? ' (cliente aguardando resposta: o assistente continua)' : ''}`);
+    if (pendente) setTimeout(() => agendar(cv.id, 500), 0);
   });
   res.json(r);
 }));
