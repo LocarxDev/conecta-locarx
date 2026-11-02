@@ -364,7 +364,7 @@ export async function registrarRecebida(lojaId, m, opcoes = {}) {
     let ausencia = null;
     if (entrada && conversa.estado === 'aguardando') {
       const a = (await c.query('SELECT * FROM assistentes WHERE loja_id = $1', [lojaId])).rows[0];
-      if (a?.ativo && a.fora_horario === 'mensagem' && a.msg_ausencia && !dentroDoHorario(a.horario)
+      if (a?.ativo && a.fora_horario === 'mensagem' && a.msg_ausencia && !dentroDoHorario(a.horario, a.dias_fechados)
           && (!conversa.ausencia_enviada_em || Date.now() - new Date(conversa.ausencia_enviada_em) > 12 * 3_600_000)) {
         await c.query('UPDATE conversas SET ausencia_enviada_em = now() WHERE id = $1', [conversa.id]);
         ausencia = a.msg_ausencia;

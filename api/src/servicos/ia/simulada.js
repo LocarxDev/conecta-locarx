@@ -30,7 +30,14 @@ export async function simularIa({ historico, ferramentas }) {
     return { texto, uso: { entrada: 100, saida: 30 }, usadas };
   }
   const dadosCliente = { nome: 'Ana Paula Souza', cpf: '529.982.247-25', email: 'ana@exemplo.com' };
-  if (/fechar/.test(t) && ferramentas.some((f) => f.nome === 'criar_reserva')) {
+  const cod = ultima.match(/\b([A-Z]{2,4}-?\d{4,8})\b/)?.[1] || null;
+  if (/cancelar/.test(t) && ferramentas.some((f) => f.nome === 'registrar_pedido')) {
+    const r = await usar('registrar_pedido', { tipo: 'cancelamento', codigo_reserva: cod, detalhes: ultima.slice(0, 200) });
+    texto = `Entendi. Registrei o pedido de cancelamento${cod ? ' da reserva ' + cod : ''}; a equipe vai confirmar com você. (${String(r.instrucao || r).slice(0, 80)})`;
+  } else if (/mudar|alterar|trocar a data/.test(t) && ferramentas.some((f) => f.nome === 'registrar_pedido')) {
+    const r = await usar('registrar_pedido', { tipo: 'alteracao', codigo_reserva: cod, detalhes: ultima.slice(0, 200) });
+    texto = `Anotei o pedido de alteração${cod ? ' da reserva ' + cod : ''}; a equipe vai confirmar com você. (${String(r.instrucao || r).slice(0, 80)})`;
+  } else if (/fechar/.test(t) && ferramentas.some((f) => f.nome === 'criar_reserva')) {
     const d = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10), e = new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10);
     await usar('calcular_preco', { fleet_id: 102, data_retirada: d, hora_retirada: '10:00', data_devolucao: e, hora_devolucao: '10:00', protecoes: ['PROTECAO_X'] });
     const r = await usar('criar_reserva', { ...dadosCliente, cliente_confirmou: true });  // a IA tenta pular a confirmação: o sistema devolve o resumo

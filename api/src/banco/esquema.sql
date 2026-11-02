@@ -1153,3 +1153,35 @@ DROP POLICY IF EXISTS usuario_lojas_alterar ON usuario_lojas;
 CREATE POLICY usuario_lojas_alterar ON usuario_lojas FOR ALL
   USING (ctx_perfil() IN ('admin', 'sistema') OR (ctx_perfil() = 'dono' AND loja_id = ctx_loja() AND perfil = 'atendente'))
   WITH CHECK (ctx_perfil() IN ('admin', 'sistema') OR (ctx_perfil() = 'dono' AND loja_id = ctx_loja() AND perfil = 'atendente'));
+
+-- =====================================================================
+-- v14 — Parte A: horário de atendimento com dias fechados/feriados; a Lia continua quando não há atendente
+-- =====================================================================
+-- dias_fechados: lista de { de: 'AAAA-MM-DD', ate: 'AAAA-MM-DD', motivo, abre: 'HH:MM'|null, fecha: 'HH:MM'|null }
+--   com abre/fecha = horário especial naquele(s) dia(s); sem eles = loja fechada.
+ALTER TABLE assistentes ADD COLUMN IF NOT EXISTS dias_fechados jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE assistentes ADD COLUMN IF NOT EXISTS continuar_sem_equipe boolean NOT NULL DEFAULT true;
+-- conversa em que a Lia pediu um atendente e não havia ninguém: ela continua atendendo; a equipe recebe quando alguém ficar disponível
+ALTER TABLE conversas ADD COLUMN IF NOT EXISTS pendente_equipe_em timestamptz;
+ALTER TABLE conversas ADD COLUMN IF NOT EXISTS pendente_motivo text;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'conversas_pendente_motivo_tamanho') THEN
+    ALTER TABLE conversas ADD CONSTRAINT conversas_pendente_motivo_tamanho CHECK (pendente_motivo IS NULL OR length(pendente_motivo) <= 200);
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS conversas_pendentes_equipe ON conversas (loja_id, pendente_equipe_em) WHERE pendente_equipe_em IS NOT NULL;
+
+-- =====================================================================
+-- v14 — Parte B: pedidos do cliente registrados pela Lia (cancelamento, alteração, multa…) viram tarefas tipadas
+-- =====================================================================
+ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS tipo text NOT NULL DEFAULT 'geral';
+ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS detalhes text;
+ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS reserva_codigo text;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'tarefas_tipo_ok') THEN
+    ALTER TABLE tarefas ADD CONSTRAINT tarefas_tipo_ok CHECK (tipo IN ('geral', 'cancelamento', 'alteracao', 'multa', 'outro'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'tarefas_detalhes_tamanho') THEN
+    ALTER TABLE tarefas ADD CONSTRAINT tarefas_detalhes_tamanho CHECK (detalhes IS NULL OR length(detalhes) <= 1000);
+  END IF;
+END $$;

@@ -65,7 +65,9 @@ test('cancelamento é sempre com atendente: a ferramenta não é oferecida e o p
   const nomes = ferramentasDaLoja({ lojaId: 'l', branchId: 1, locarxDisponivel: true, simulacao: true }).map((f) => f.nome);
   assert.ok(!nomes.includes('cancelar_reserva'));
   assert.ok(nomes.includes('consultar_reserva') && nomes.includes('criar_reserva'));
-  assert.match(montarSistema(base), /CANCELAMENTO ou alteração de reserva já criada: você não cancela/);
+  // v14: cancelamento e alteração vão por registrar_pedido; a Lia nunca cancela
+  assert.match(montarSistema(base), /CANCELAMENTO de reserva: você NUNCA cancela/);
+  assert.ok(nomes.includes('registrar_pedido'));
 });
 
 test('prompt: com Pix, nenhuma regra fixa diz que o pagamento é só na loja', () => {
@@ -104,4 +106,14 @@ test('prompt: regra de aplicativos (não aluga) e frota (atendente)', async () =
   const t = montarSistema({ loja: { nome: 'LocarX Salvador', cidade: 'Salvador', uf: 'BA' }, a: { nome: 'Lia', instrucoes: '', boas_vindas: '' }, rede: {}, contato: { nome: 'Ana' }, historicoReservas: [], crm: null });
   assert.match(t, /NÃO aluga para motoristas de aplicativo \(Uber, 99/);
   assert.match(t, /FROTA.*chamar_atendente/);
+});
+
+test('conferir conflitos (v14 D): o revisor só aponta contradição real e conhece os exemplos de 29/10', async () => {
+  const { SISTEMA_CONFLITOS } = await import('../src/rotas/assistente.js');
+  assert.match(SISTEMA_CONFLITOS, /Só aponte CONTRADIÇÃO REAL/);
+  for (const item of ['(a) regras que completam o fixo', '(b) regras que repetem o fixo', '(c) regras de estilo compatíveis', '(d) diferenças de formato', 'Na dúvida, não aponte']) assert.ok(SISTEMA_CONFLITOS.includes(item), item);
+  assert.match(SISTEMA_CONFLITOS, /não pagar pelo Pix, o pagamento é feito na loja" → SEM conflito/);
+  assert.match(SISTEMA_CONFLITOS, /"Uma pergunta por vez" → SEM conflito/);
+  assert.match(SISTEMA_CONFLITOS, /outras datas" → CONFLITO/);
+  assert.match(SISTEMA_CONFLITOS, /Responda em JSON puro/);
 });

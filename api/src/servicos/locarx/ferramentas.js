@@ -11,6 +11,7 @@ import { cifrar, decifrar } from '../seguranca.js';
 import { registrarEvento, regrasDaLoja, fecharOportunidade } from '../crm/funis.js';
 import { normalizarValor } from '../crm/personalizacao.js';
 import { registrarOcorrencia } from '../ocorrencias.js';
+import { situacaoDaEquipe, textoProximoAtendimento } from '../crm/expediente.js';
 import * as cobrancas from '../pagamentos/cobrancas.js';
 import { reais, validarPeriodo, normalizarProtecoes, nomesDasProtecoes, periodoTexto, dataBr, rotuloGrupo, ordenarPorPreco, textoOpcoes } from './cotacao.js';
 
@@ -35,7 +36,7 @@ const PERIODO = {
 };
 
 /**
- * @param {object} ctx { lojaId, branchId, conversaId, contatoId, simulacao, aoChamarAtendente(motivo) }
+ * @param {object} ctx { lojaId, branchId, conversaId, contatoId, simulacao, aoChamarAtendente(args), equipeDisponivel() → situação da equipe, aoPendenteEquipe(args) }
  */
 export function ferramentasDaLoja(ctx) {
   // Várias filiais (ctx.filiais = [{ id, branchId, nome, principal }]): a IA escolhe pelo nome; a escolha fica na conversa
@@ -191,8 +192,8 @@ export function ferramentasDaLoja(ctx) {
         const p = validarPeriodo(a);
         if (p.corrigido) a = { ...a, data_retirada: p.retirada.date, data_devolucao: p.devolucao.date };   // ano corrigido pela ferramenta
         const periodo = periodoTexto(a);
-        let grupos;
-        try { grupos = await locarx.disponibilidade({ branchId: ctx.branchId, ...p }); }
+        let grupos, adicionaisDisp = [];
+        try { const completa = await locarx.disponibilidadeCompleta({ branchId: ctx.branchId, ...p }); grupos = completa.grupos; adicionaisDisp = completa.adicionais || []; }
         catch (e) { if (e.dicaAssistente) return `Consulta para ${periodo} recusada pelo portal (${e.codigo}): ${e.dicaAssistente}`; throw e; }
         if (!grupos.length) {
           await etiquetarSemDisponibilidade(ctx);
@@ -209,8 +210,9 @@ export function ferramentasDaLoja(ctx) {
         // guarda as opções na conversa: na próxima mensagem a IA recebe letra → fleet_id no prompt (ela não vê o resultado da ferramenta depois)
         if (!ctx.simulacao && ctx.conversaId) {
           const opcoes = { periodo: { data_retirada: a.data_retirada, hora_retirada: a.hora_retirada, data_devolucao: a.data_devolucao, hora_devolucao: a.hora_devolucao }, em: new Date().toISOString(),
+            branchId: ctx.branchId, filialNome: ctx.filialNome || null, adicionais: adicionaisDisp,
             grupos: [...(a.mais_opcoes ? (ctx.opcoesAnteriores || []) : []), ...mostrar.map((g, i) => ({ letra: rotuloGrupo(g, i + (a.mais_opcoes ? 4 : 1)).letra, fleet_id: g.fleetId, grupo: g.grupo, total: g.total }))] };
-          await comoSistema((c) => c.query('UPDATE conversas SET opcoes = $2 WHERE id = $1', [ctx.conversaId, opcoes]));
+          await comoSistema((c) => c.query('UPDATE conversas SET opcoes = coalesce(opcoes, $3::jsonb) || $2::jsonb WHERE id = $1', [ctx.conversaId, opcoes, {}]));
         }
         if (ctx.simulacao && ctx.aoGuardar) {
           ctx.aoGuardar('opcoes', { periodo: { data_retirada: a.data_retirada, hora_retirada: a.hora_retirada, data_devolucao: a.data_devolucao, hora_devolucao: a.hora_devolucao }, em: new Date().toISOString(), branchId: ctx.branchId, filialNome: ctx.filialNome || null,
@@ -231,6 +233,7 @@ export function ferramentasDaLoja(ctx) {
             protecoes_disponiveis: (mostrar[0].protecoes || []).map((x) => ({ codigo: x.codigo, nome: x.nome, diaria: reais(x.diaria), basica: x.base, caucao: x.caucao != null ? reais(x.caucao) : null })),
             caucao: mostrar[0].protecoes?.find((x) => x.base && x.padrao)?.caucao != null ? `Caução (pré-autorização no cartão de crédito, liberada após a devolução): ${reais(mostrar[0].protecoes.find((x) => x.base && x.padrao).caucao)} com a Proteção X. Informe se o cliente perguntar.` : null,
             ha_mais_opcoes: !a.mais_opcoes && grupos.length > 3,
+            ...(adicionaisDisp.length ? { adicionais_disponiveis: adicionaisDisp.map((x) => ({ id: x.id, nome: x.nome, valor: x.diaria != null ? reais(x.diaria) : 'a confirmar', maximo: x.maximo })) } : {}),
             instrucao: `OS CARROS JÁ ESTÃO APARECENDO NA TELA DO CLIENTE como cartões (com foto do carro, câmbio, diária e total ${periodo}). Escreva só UMA frase curta de abertura (ex.: "Encontrei estas opções para ${periodo}:") e peça para escolher um cartão. NÃO liste os carros, letras nem preços no texto. O botão "Escolher" do cartão manda a letra e o fleet_id para você.`,
           };
         }
@@ -241,35 +244,39 @@ export function ferramentasDaLoja(ctx) {
           protecoes_disponiveis: (mostrar[0].protecoes || []).map((x) => ({ codigo: x.codigo, nome: x.nome, diaria: reais(x.diaria), basica: x.base, caucao: x.caucao != null ? reais(x.caucao) : null })),
           caucao: mostrar[0].protecoes?.find((x) => x.base && x.padrao)?.caucao != null ? `Caução (pré-autorização no cartão de crédito, liberada após a devolução): ${reais(mostrar[0].protecoes.find((x) => x.base && x.padrao).caucao)} com a Proteção X. Informe se o cliente perguntar.` : null,
           ha_mais_opcoes: !a.mais_opcoes && grupos.length > 3,
+          ...(adicionaisDisp.length ? { adicionais_disponiveis: adicionaisDisp.map((x) => ({ id: x.id, nome: x.nome, valor: x.diaria != null ? reais(x.diaria) : 'a confirmar', maximo: x.maximo })), instrucao_adicionais: 'No Passo 4, junto com a proteção, ofereça estes serviços adicionais com os valores acima (só estes; nada além do que veio da API). Se o cliente quiser, passe em adicionais no calcular_preco.' } : {}),
         };
       },
     },
     {
       nome: 'calcular_preco',
-      descricao: 'Calcula o valor total da locação do grupo escolhido com as proteções. Use o fleet_id da opção que o cliente escolheu. Proteções: PROTECAO_X ou PROTECAO_SUPER_X (uma das duas é obrigatória), TERCEIROS, VIDROS ou VIDROS_E_PNEUS (opcionais; VIDROS e VIDROS_E_PNEUS não podem ir juntas). Esta cotação fica guardada e é a que será reservada.',
-      parametros: { type: 'object', properties: { fleet_id: { type: ['integer', 'string'], description: 'fleet_id numérico da opção escolhida (a letra da opção, ex.: "B", também é aceita)' }, ...PERIODO, protecoes: { type: 'array', items: { type: 'string' } }, ...PARAM_FILIAL }, required: ['fleet_id', ...Object.keys(PERIODO)] },
+      descricao: 'Calcula o valor total da locação do grupo escolhido com as proteções e os serviços adicionais. Use o fleet_id da opção que o cliente escolheu. Proteções: PROTECAO_X ou PROTECAO_SUPER_X (uma das duas é obrigatória), TERCEIROS, VIDROS ou VIDROS_E_PNEUS (opcionais; VIDROS e VIDROS_E_PNEUS não podem ir juntas). Adicionais: só os que vieram em adicionais_disponiveis da consulta (cadeirinha, condutor adicional, GPS…), pelo nome ou id, com quantidade. Esta cotação fica guardada e é a que será reservada.',
+      parametros: { type: 'object', properties: { fleet_id: { type: ['integer', 'string'], description: 'fleet_id numérico da opção escolhida (a letra da opção, ex.: "B", também é aceita)' }, ...PERIODO, protecoes: { type: 'array', items: { type: 'string' } }, adicionais: { type: 'array', description: 'serviços adicionais que o cliente pediu, só os de adicionais_disponiveis', items: { type: 'object', properties: { nome: { type: 'string', description: 'nome (ou id) exatamente como veio em adicionais_disponiveis' }, qtd: { type: 'integer', description: 'quantidade (padrão 1)' } }, required: ['nome'] } }, ...PARAM_FILIAL }, required: ['fleet_id', ...Object.keys(PERIODO)] },
       executar: async (a) => {
         try { await usarFilial(a.filial); } catch (e) { if (e.paraIa) return e.message; throw e; }
         const p = validarPeriodo(a);
         if (p.corrigido) a = { ...a, data_retirada: p.retirada.date, data_devolucao: p.devolucao.date };
         const protecoes = normalizarProtecoes(a.protecoes);
+        const pedidosAd = (Array.isArray(a.adicionais) ? a.adicionais : []).slice(0, 10);
         let r;
-        try { r = await locarx.calcularPreco({ branchId: ctx.branchId, fleetId: a.fleet_id, ...p, protecoes }); }
+        try { r = await locarx.calcularPreco({ branchId: ctx.branchId, fleetId: a.fleet_id, ...p, protecoes, adicionais: pedidosAd }); }
         catch (e) { if (e.dicaAssistente) return `Cálculo recusado pelo portal (${e.codigo}): ${e.dicaAssistente}`; throw e; }
-        const cotacao = { fleetId: r.fleetId ?? a.fleet_id, grupo: r.grupo, caucao: r.caucao ?? null, branchId: ctx.branchId, filialNome: variasFiliais ? ctx.filialNome : null, retirada: p.retirada, devolucao: p.devolucao, protecoes, nomesProtecoes: r.protecoes.map((x) => x.nome), total: r.total, diaria: r.diaria, diarias: r.diarias, em: new Date().toISOString() };
+        const naoAchados = pedidosAd.filter((x) => !(r.adicionais || []).some((y) => String(y.id) === String(x?.nome ?? x?.id ?? x) || String(y.nome).toLowerCase() === String(x?.nome || '').toLowerCase())).map((x) => x?.nome ?? x?.id ?? x);
+        const cotacao = { fleetId: r.fleetId ?? a.fleet_id, grupo: r.grupo, caucao: r.caucao ?? null, branchId: ctx.branchId, filialNome: variasFiliais ? ctx.filialNome : null, retirada: p.retirada, devolucao: p.devolucao, protecoes, nomesProtecoes: r.protecoes.map((x) => x.nome), adicionais: r.adicionais || [], total: r.total, diaria: r.diaria, diarias: r.diarias, em: new Date().toISOString() };
         ctx.cotacao = cotacao;
         if (ctx.simulacao) ctx.aoGuardar?.('cotacao', cotacao);
         if (!ctx.simulacao && ctx.conversaId) {
           await comoSistema((c) => c.query('UPDATE conversas SET cotacao = $2, resumo_enviado_em = NULL WHERE id = $1', [ctx.conversaId, cotacao]));
         }
         await marcarEtapa(ctx, 'cotacao', r.total);
-        const saida = { grupo: r.grupo, fleet_id: r.fleetId, total: reais(r.total), diaria: reais(r.diaria), diarias: r.diarias, protecoes: r.protecoes.length ? r.protecoes.map((x) => x.nome) : protecoes, caucao: r.caucao != null ? `${reais(r.caucao)} (pré-autorização no cartão, liberada após a devolução; não entra no total)` : null, pagamento: ctx.pixDisponivel && !ctx.simulacao ? 'na loja, na retirada, ou agora via Pix pelo WhatsApp — pergunte qual o cliente prefere (Passo 4b)' : 'na loja, na retirada', proximo_passo: ctx.pixDisponivel && !ctx.simulacao ? 'Informe o total ao cliente e pergunte a forma de pagamento (loja ou Pix). Depois peça nome completo, CPF e e-mail (se ainda não tiver) e chame criar_reserva com forma_pagamento.' : 'Informe o total ao cliente. Para fechar, peça nome completo, CPF e e-mail (se ainda não tiver) e chame criar_reserva.' };
+        const saida = { grupo: r.grupo, fleet_id: r.fleetId, total: reais(r.total), diaria: reais(r.diaria), diarias: r.diarias, protecoes: r.protecoes.length ? r.protecoes.map((x) => x.nome) : protecoes, adicionais: (r.adicionais || []).map((x) => `${x.nome} x${x.qtd}`), ...(naoAchados.length && r.adicionaisDisponiveis?.length ? { aviso_adicionais: `Não encontrei: ${naoAchados.join(', ')}. Disponíveis: ${r.adicionaisDisponiveis.map((x) => x.nome).join(', ')}. Avise o cliente; não invente valor.` } : naoAchados.length ? { aviso_adicionais: `Esta filial não oferece serviços adicionais pela API (${naoAchados.join(', ')}): diga que a equipe confirma na retirada.` } : {}), caucao: r.caucao != null ? `${reais(r.caucao)} (pré-autorização no cartão, liberada após a devolução; não entra no total)` : null, pagamento: ctx.pixDisponivel && !ctx.simulacao ? 'na loja, na retirada, ou agora via Pix pelo WhatsApp — pergunte qual o cliente prefere (Passo 4b)' : 'na loja, na retirada', proximo_passo: ctx.pixDisponivel && !ctx.simulacao ? 'Informe o total ao cliente e pergunte a forma de pagamento (loja ou Pix). Depois peça nome completo, CPF e e-mail (se ainda não tiver) e chame criar_reserva com forma_pagamento.' : 'Informe o total ao cliente. Para fechar, peça nome completo, CPF e e-mail (se ainda não tiver) e chame criar_reserva.' };
         // texto pronto: evita a IA mandar "o total fica assim: Proteção X" sem valor
         const nomesProt = (r.protecoes.length ? r.protecoes.map((x) => x.nome) : nomesDasProtecoes(protecoes)) || [];
         saida.texto_para_cliente = [
           `*${r.grupo}* · ${periodoTexto(a)}${r.diarias && r.diaria != null ? ` (${r.diarias} ${r.diarias === 1 ? 'diária' : 'diárias'} de ${reais(r.diaria)})` : ''}`,
           `🛡️ Proteção: ${nomesProt.join(' + ') || 'Proteção X'}`,
-          `*Total: ${reais(r.total)}* (já com proteção e taxas)`,
+          (r.adicionais || []).length ? `➕ Adicionais: ${r.adicionais.map((x) => `${x.nome}${x.qtd > 1 ? ' x' + x.qtd : ''}`).join(', ')}` : null,
+          `*Total: ${reais(r.total)}* (já com proteção${(r.adicionais || []).length ? ', adicionais' : ''} e taxas)`,
           r.caucao != null ? `Caução: ${reais(r.caucao)} (pré-autorização no cartão, liberada após a devolução; não entra no total)` : null,
         ].filter(Boolean).join('\n');
         saida.proximo_passo = 'Envie texto_para_cliente EXATAMENTE como veio (com o Total). ' + (!protecoes.includes('PROTECAO_SUPER_X')
@@ -338,7 +345,7 @@ export function ferramentasDaLoja(ctx) {
         const pixOk = ctx.pixDisponivel && !ctx.simulacao;
         const forma = pixOk && a.forma_pagamento === 'pix' ? 'pix' : 'loja';
         if (a.forma_pagamento === 'pix' && !pixOk) return 'Pagamento via Pix não está disponível nesta loja. Siga com pagamento na loja, na retirada (forma_pagamento = "loja").';
-        const resumo = `*Resumo da reserva*\n🚗 ${cotacao.grupo ? `${rg.letra} – ${rg.nome}` : 'Grupo escolhido'}${variasFiliais && cotacao.filialNome ? `\n📍 Filial: ${cotacao.filialNome}` : ''}\n📅 Retirada: ${dataBr(cotacao.retirada)}\n📅 Devolução: ${dataBr(cotacao.devolucao)}\n🛡️ Proteção: ${nomesDasProtecoes(cotacao.protecoes).join(', ')}\n💰 Total: *${reais(cotacao.total)}* (${forma === 'pix' ? 'pagamento via Pix por aqui' : 'pagamento na loja, na retirada'})${cotacao.caucao != null ? `\n💳 Caução: ${reais(cotacao.caucao)} (pré-autorização no cartão, liberada após a devolução)` : ''}\n👤 ${cliente.nome} · CPF final ${cliente.cpf.slice(-2)} · ${cliente.email}`;
+        const resumo = `*Resumo da reserva*\n🚗 ${cotacao.grupo ? `${rg.letra} – ${rg.nome}` : 'Grupo escolhido'}${variasFiliais && cotacao.filialNome ? `\n📍 Filial: ${cotacao.filialNome}` : ''}\n📅 Retirada: ${dataBr(cotacao.retirada)}\n📅 Devolução: ${dataBr(cotacao.devolucao)}\n🛡️ Proteção: ${nomesDasProtecoes(cotacao.protecoes).join(', ')}${(cotacao.adicionais || []).length ? `\n➕ Adicionais: ${cotacao.adicionais.map((x) => `${x.nome}${x.qtd > 1 ? ' x' + x.qtd : ''}`).join(', ')}` : ''}\n💰 Total: *${reais(cotacao.total)}* (${forma === 'pix' ? 'pagamento via Pix por aqui' : 'pagamento na loja, na retirada'})${cotacao.caucao != null ? `\n💳 Caução: ${reais(cotacao.caucao)} (pré-autorização no cartão, liberada após a devolução)` : ''}\n👤 ${cliente.nome} · CPF final ${cliente.cpf.slice(-2)} · ${cliente.email}`;
         const assinatura = `${cliente.cpf}|${cliente.email}|${cotacao.em}|${forma}`;
 
         // passo 1: o resumo precisa ter sido enviado e o cliente precisa ter respondido depois dele
@@ -385,7 +392,7 @@ export function ferramentasDaLoja(ctx) {
         let reserva;
         if (ctx.simulacao) reserva = { codigo: 'TESTE' + Math.floor(Math.random() * 1e5), status: 'SIMULACAO', grupo: cotacao.grupo, valor: cotacao.total };
         else {
-          try { reserva = await locarx.criarReserva({ branchId: ctx.branchId, fleetId: cotacao.fleetId, retirada: p.retirada, devolucao: p.devolucao, protecoes: cotacao.protecoes, cliente }); }
+          try { reserva = await locarx.criarReserva({ branchId: ctx.branchId, fleetId: cotacao.fleetId, retirada: p.retirada, devolucao: p.devolucao, protecoes: cotacao.protecoes, adicionais: cotacao.adicionais || [], cliente }); }
           catch (e) {
             // erro conhecido do portal: a IA recebe a orientação (e o Monitor recebe o erro pelo evento da ferramenta)
             if (e.dicaAssistente) { e.message = `Reserva NÃO criada — portal recusou (${e.codigo}): ${e.dicaAssistente}`; }
@@ -394,7 +401,7 @@ export function ferramentasDaLoja(ctx) {
           if (reserva.valor == null) reserva.valor = cotacao.total;
           // a reserva já existe no portal: se a gravação no Conecta falhar, o cliente ainda recebe o código
           try {
-            await registrarReserva(ctx, reserva, p, cliente, { fleetId: cotacao.fleetId, protecoes: cotacao.protecoes });
+            await registrarReserva(ctx, reserva, p, cliente, { fleetId: cotacao.fleetId, protecoes: cotacao.protecoes, adicionais: cotacao.adicionais || [] });
             await comoSistema((c) => c.query('UPDATE conversas SET cotacao = NULL, resumo_enviado_em = NULL, opcoes = NULL WHERE id = $1', [ctx.conversaId]));
           } catch (e) {
             console.error('[criar_reserva] criada no portal mas falhou ao gravar no Conecta:', reserva.codigo, e);
@@ -541,10 +548,62 @@ export function ferramentasDaLoja(ctx) {
       },
     },
     {
+      nome: 'registrar_pedido',
+      descricao: 'Registra para a equipe um pedido que você NÃO pode resolver: cancelamento de reserva (você nunca cancela), alteração de reserva (datas, grupo, filial), multa ou outro assunto da equipe. Cria uma tarefa com prazo e avisa a equipe. Antes de registrar, confirme com o cliente o código da reserva (quando houver) e o que ele quer. Depois, diga ao cliente que a equipe vai confirmar; não prometa que o pedido será aceito.',
+      parametros: {
+        type: 'object',
+        properties: {
+          tipo: { type: 'string', enum: ['cancelamento', 'alteracao', 'multa', 'outro'] },
+          codigo_reserva: { type: 'string', description: 'código da reserva, se houver (ex.: SSA586587)' },
+          detalhes: { type: 'string', description: 'o que o cliente pediu, em uma ou duas frases (motivo do cancelamento, datas novas, etc.)' },
+        },
+        required: ['tipo', 'detalhes'],
+      },
+      executar: async ({ tipo, codigo_reserva, detalhes }) => {
+        const t = ['cancelamento', 'alteracao', 'multa', 'outro'].includes(tipo) ? tipo : 'outro';
+        const cod = String(codigo_reserva || '').toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 20) || null;
+        const det = String(detalhes || '').replace(/\s+/g, ' ').trim().slice(0, 1000);
+        if (ctx.simulacao || !ctx.conversaId) return { registrado: true, simulacao: true, instrucao: 'Diga ao cliente que a equipe vai confirmar. Não prometa a alteração nem o cancelamento.' };
+        const r = await comoSistema(async (c) => {
+          const sit = await situacaoDaEquipe(c, ctx.lojaId);
+          const k = ctx.contatoId ? (await c.query('SELECT nome, telefone, ig_username FROM contatos WHERE id = $1', [ctx.contatoId])).rows[0] : null;
+          const nome = k?.nome || (k?.ig_username ? '@' + k.ig_username : null) || (k?.telefone ? '+' + k.telefone : 'cliente');
+          const titulo = ({ cancelamento: `Avaliar cancelamento de ${nome}`, alteracao: `Confirmar alteração com ${nome}`, multa: `Retornar ${nome} sobre multa`, outro: `Retornar ${nome}: ${det.slice(0, 80) || 'pedido'}` })[t].slice(0, 200);
+          const vence = sit.equipeDisponivel ? new Date(Date.now() + 2 * 3_600_000) : new Date((sit.proximaAbertura && !sit.abertoAgora ? sit.proximaAbertura.em.getTime() : Date.now()) + 3_600_000);
+          // um pedido aberto por tipo e conversa: pedir de novo só atualiza
+          const aberta = (await c.query(`SELECT id FROM tarefas WHERE conversa_id = $1 AND tipo = $2 AND feita_em IS NULL ORDER BY criada_em LIMIT 1`, [ctx.conversaId, t])).rows[0];
+          if (aberta) await c.query(`UPDATE tarefas SET titulo = $2, detalhes = $3, reserva_codigo = coalesce($4, reserva_codigo), vence_em = $5 WHERE id = $1`, [aberta.id, titulo, det || null, cod, vence]);
+          else await c.query(`INSERT INTO tarefas (loja_id, contato_id, conversa_id, titulo, vence_em, automatica, tipo, detalhes, reserva_codigo) VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8)`,
+            [ctx.lojaId, ctx.contatoId || null, ctx.conversaId, titulo, vence, t, det || null, cod]);
+          const ROTULO = { cancelamento: 'pedido de cancelamento', alteracao: 'pedido de alteração', multa: 'multa', outro: 'pedido' };
+          await c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto) VALUES ($1, $2, 'interna', 'sistema', 'evento', $3)`,
+            [ctx.conversaId, ctx.lojaId, `Assistente registrou: ${ROTULO[t]}${cod ? ` da reserva ${cod}` : ''}${det ? ` — ${det.slice(0, 160)}` : ''} · tarefa criada para a equipe`]);
+          await c.query('UPDATE conversas SET atualizada_em = now() WHERE id = $1', [ctx.conversaId]);
+          return sit;
+        });
+        const quando = r.equipeDisponivel ? 'agora' : `a partir de ${textoProximoAtendimento(r)}`;
+        // com equipe disponível a conversa vai para a equipe (como em chamar_atendente); sem equipe, fica pendente e você continua
+        if (r.equipeDisponivel) await ctx.aoChamarAtendente?.({ motivo: `${t === 'cancelamento' ? 'cancelamento' : t === 'alteracao' ? 'alteração' : t} de reserva${cod ? ' ' + cod : ''}` });
+        else if (r.continuarSemEquipe) await ctx.aoPendenteEquipe?.({ motivo: `${({ cancelamento: 'Cancelamento', alteracao: 'Alteração', multa: 'Multa', outro: 'Pedido' })[t]}${cod ? ' da reserva ' + cod : ''}` });
+        else await ctx.aoChamarAtendente?.({ motivo: `${t} de reserva${cod ? ' ' + cod : ''}` });
+        return `Pedido registrado. Diga ao cliente que a equipe vai confirmar (${quando}). Não prometa a alteração nem o cancelamento: quem decide é a equipe.${t === 'alteracao' && !r.equipeDisponivel ? ' Se o cliente quiser, você pode consultar e cotar as datas novas para deixar pronto para a equipe — mas NÃO chame criar_reserva.' : ''}`;
+      },
+    },
+    {
       nome: 'chamar_atendente',
       descricao: 'Passa a conversa para um atendente humano da loja. Use quando o cliente pedir, quando não houver informação oficial, em reclamações, multas, acidentes, cobranças, contratos, ou depois de criar uma reserva.',
       parametros: { type: 'object', properties: { motivo: { type: 'string' }, sem_resposta: { type: 'boolean', description: 'true se for porque a informação não estava na base' }, pergunta: { type: 'string', description: 'a pergunta que ficou sem resposta' } }, required: ['motivo'] },
       executar: async (a) => {
+        // Sem ninguém da equipe disponível (fora do horário, feriado, todos offline) e com "continuar sem equipe" ligado:
+        // não repassa; registra o pedido e a Lia segue atendendo (Parte A, v14).
+        if (ctx.equipeDisponivel && !ctx.simulacao) {
+          const sit = await ctx.equipeDisponivel();
+          if (sit && !sit.equipeDisponivel && sit.continuarSemEquipe) {
+            await ctx.aoPendenteEquipe?.(a);
+            const quando = sit.abertoAgora ? 'hoje mesmo, assim que um atendente ficar livre' : sit.proximaAbertura ? sit.proximaAbertura.texto : 'assim que a loja reabrir';
+            return `Nenhum atendente disponível agora. Próximo atendimento da equipe: ${quando}. Diga ao cliente, em uma frase, que registrou o pedido e que um atendente vai falar com ele a partir desse horário. CONTINUE atendendo: tire dúvidas, cote e reserve normalmente. Assuntos que só a equipe resolve (reclamação, multa, acidente, cobrança, contrato, alteração ou cancelamento que você não pode fazer): só registre e avise, não resolva nem prometa nada.`;
+          }
+        }
         await ctx.aoChamarAtendente?.(a);
         return 'Atendente avisado. Diga ao cliente, em uma frase, que um atendente da loja vai continuar o atendimento em breve.';
       },
@@ -559,7 +618,7 @@ export function ferramentasDaLoja(ctx) {
   if (!ctx.pixDisponivel || ctx.simulacao) semCrm.add('verificar_pagamento');
   const disponiveis = lista.filter((f) => !semCrm.has(f.nome));
   // sem API LocarX configurada, as ferramentas de reserva não são oferecidas ao assistente
-  if (!ctx.locarxDisponivel) return disponiveis.filter((f) => ['buscar_informacoes', 'dados_da_loja', 'salvar_informacoes', 'aplicar_etiqueta', 'chamar_atendente'].includes(f.nome));
+  if (!ctx.locarxDisponivel) return disponiveis.filter((f) => ['buscar_informacoes', 'dados_da_loja', 'salvar_informacoes', 'aplicar_etiqueta', 'registrar_pedido', 'chamar_atendente'].includes(f.nome));
   return disponiveis;
 }
 

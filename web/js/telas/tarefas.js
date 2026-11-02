@@ -2,6 +2,7 @@
 import { api } from '../api.js';
 import { html, render, $, $$, icone, avisar, confirmar } from '../util.js';
 import { novaTarefa, abrirFicha } from './clientes.js';
+import { TIPO_PEDIDO } from './painel-cliente.js';
 
 const quandoVence = (iso) => {
   const d = new Date(iso), agora = new Date();
@@ -13,7 +14,7 @@ export async function montar(alvo, ctx) {
   let situacao = 'abertas', minhas = '0', lista = [];
   render(alvo, html`
     <div class="cabecalho-pagina">
-      <div class="titulos"><h1>Tarefas</h1><p>Retornos para clientes. Cotações sem resposta há 24 horas viram tarefa sozinhas.</p></div>
+      <div class="titulos"><h1>Tarefas</h1><p>Retornos para clientes e pedidos registrados pela Lia (cancelamento, alteração, multa). Cotações sem resposta há 24 horas viram tarefa sozinhas.</p></div>
       <button class="btn btn-primario" id="nova-tarefa">${icone('mais')}Nova tarefa</button>
     </div>
     <section class="painel">
@@ -29,8 +30,9 @@ export async function montar(alvo, ctx) {
     if (!lista.length) return render(area, html`<div class="estado">${icone('ok')}<h3>${situacao === 'abertas' ? 'Nenhuma tarefa pendente' : 'Nenhuma tarefa feita nos últimos 30 dias'}</h3><p>${situacao === 'abertas' ? 'Tudo em dia.' : ''}</p></div>`);
     render(area, html`<ul class="lista-tarefas">${lista.map((t) => { const v = quandoVence(t.venceEm); return html`<li class="${t.feitaEm ? 'feita' : ''}">
       <label class="checkbox"><input type="checkbox" data-feita="${t.id}" ${t.feitaEm ? 'checked' : ''}><span class="sr-only">Marcar como feita</span></label>
-      <div class="tarefa-meio"><strong>${t.titulo}</strong>
-        <span class="sub">${t.automatica ? 'criada pelo sistema · ' : ''}${t.responsavel ? t.responsavel.nome + ' · ' : ''}${t.contatoId ? html`<a href="#" data-cliente="${t.contatoId}">${t.contatoNome || 'ver cliente'}</a>` : ''}</span></div>
+      <div class="tarefa-meio"><strong>${t.tipo && t.tipo !== 'geral' ? html`<span class="selo ${TIPO_PEDIDO[t.tipo]?.[1] || 'neutro'} sem-ponto">${TIPO_PEDIDO[t.tipo]?.[0] || t.tipo}</span> ` : ''}${t.titulo}</strong>
+        ${t.detalhes ? html`<span class="tarefa-detalhes">${t.detalhes}${t.reservaCodigo ? html` · reserva <strong class="num">${t.reservaCodigo}</strong>` : ''}</span>` : ''}
+        <span class="sub">${t.automatica ? (t.tipo && t.tipo !== 'geral' ? 'registrada pela Lia · ' : 'criada pelo sistema · ') : ''}${t.conversaId ? html`<a href="#/conversas/${t.conversaId}">abrir conversa</a> · ` : ''}${t.responsavel ? t.responsavel.nome + ' · ' : ''}${t.contatoId ? html`<a href="#" data-cliente="${t.contatoId}">${t.contatoNome || 'ver cliente'}</a>` : ''}</span></div>
       <span class="selo ${t.feitaEm ? 'neutro' : v.atrasada ? 'erro' : v.hoje ? 'alerta' : 'neutro'} num">${t.feitaEm ? 'Feita' : v.atrasada ? 'Atrasada · ' + v.txt : v.txt}</span>
       <button class="btn btn-texto btn-icone" data-excluir="${t.id}" aria-label="Excluir tarefa">${icone('lixo')}</button></li>`; })}</ul>`);
     $$('[data-feita]', area).forEach((c) => c.addEventListener('change', async () => {

@@ -326,7 +326,9 @@ personalizacaoLoja.get('/contatos/:id/painel', daEquipe, rota(async (req, res) =
       `SELECT o.id, o.funil_id, o.etapa_id, o.valor_previsto, o.atualizada_em FROM oportunidades o
         WHERE o.contato_id = $1 AND o.fechada_em IS NULL ORDER BY o.criada_em`, [k.id])).rows;
     const reservas = (await c.query(`SELECT id, codigo, status, retirada, devolucao, grupo, valor FROM reservas WHERE contato_id = $1 ORDER BY retirada DESC NULLS LAST LIMIT 3`, [k.id])).rows;
-    return { k, funis, ops, reservas, ...(await dadosDoPainel(c, req.usuario.loja_id, k.id)) };
+    // pedidos registrados pela Lia (cancelamento, alteração, multa…) ainda abertos
+    const pedidos = (await c.query(`SELECT id, tipo, titulo, detalhes, reserva_codigo, vence_em, criada_em, conversa_id FROM tarefas WHERE contato_id = $1 AND feita_em IS NULL AND tipo <> 'geral' ORDER BY criada_em DESC LIMIT 5`, [k.id])).rows;
+    return { k, funis, ops, reservas, pedidos, ...(await dadosDoPainel(c, req.usuario.loja_id, k.id)) };
   });
   res.json({
     contato: { id: r.k.id, nome: r.k.nome, telefone: r.k.telefone, email: r.k.email, cpf: r.k.cpf_final ? `***.***.***-${r.k.cpf_final}` : null, optout: r.k.optout, criadoEm: r.k.criado_em },
@@ -334,6 +336,7 @@ personalizacaoLoja.get('/contatos/:id/painel', daEquipe, rota(async (req, res) =
     funis: r.funis.map((f) => ({ id: f.id, nome: f.nome, principal: f.principal, etapas: f.etapas.map(etapaPublica) })),
     oportunidades: r.ops.map((o) => ({ id: o.id, funilId: o.funil_id, etapaId: o.etapa_id, valor: o.valor_previsto != null ? Number(o.valor_previsto) : null, atualizadaEm: o.atualizada_em })),
     reservas: r.reservas.map((x) => ({ ...x, valor: x.valor != null ? Number(x.valor) : null })),
+    pedidos: r.pedidos.map((p) => ({ id: p.id, tipo: p.tipo, titulo: p.titulo, detalhes: p.detalhes, reservaCodigo: p.reserva_codigo, venceEm: p.vence_em, criadaEm: p.criada_em, conversaId: p.conversa_id })),
   });
 }));
 

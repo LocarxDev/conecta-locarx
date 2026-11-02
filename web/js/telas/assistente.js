@@ -81,8 +81,9 @@ export async function montar(alvo, ctx) {
 
       <div class="perfil-grade">
         <section class="painel">
-          <div class="painel-cab"><h2>Horário do assistente</h2></div>
+          <div class="painel-cab"><h2>Horário de atendimento da equipe</h2></div>
           <div class="painel-corpo form">
+            <p class="sub">A Lia usa este horário para saber se tem gente da loja para assumir uma conversa. Fora dele, ou sem ninguém marcado como "Disponível", ela avisa o cliente quando a equipe volta e continua atendendo.</p>
             <label class="checkbox"><input type="checkbox" id="sempre" ${semHorario ? 'checked' : ''}> Atender 24 horas, todos os dias</label>
             <div class="horario-grade" id="horario-grade" ${semHorario ? 'hidden' : ''}>
               ${DIAS.map(([d, nome]) => { const f = a.horario?.[d]; return html`<div class="horario-linha">
@@ -91,10 +92,33 @@ export async function montar(alvo, ctx) {
                 <span class="sub">às</span>
                 <input type="time" data-fecha="${d}" value="${f?.[1] || '18:00'}" aria-label="${nome}: fim"></div>`; })}
             </div>
+            <label class="checkbox opcao-destaque"><input type="checkbox" name="continuarSemEquipe" ${a.continuarSemEquipe !== false ? 'checked' : ''}>
+              <span><strong>Quando não houver atendente, a Lia continua atendendo</strong><br>
+              <span class="sub">Ela avisa o cliente quando a equipe volta, tira dúvidas, cota e reserva, e deixa a conversa marcada como "Pendente para a equipe". Desligado: a conversa só fica na fila esperando.</span></span></label>
             <div class="campo"><label for="as-fora">Fora do horário</label><select id="as-fora" name="foraHorario">
               <option value="assistente" ${a.foraHorario === 'assistente' ? 'selected' : ''}>O assistente atende normalmente</option>
               <option value="mensagem" ${a.foraHorario === 'mensagem' ? 'selected' : ''}>Mandar mensagem de ausência e deixar para a equipe</option></select></div>
             <div class="campo"><label for="as-ausencia">Mensagem de ausência</label><textarea id="as-ausencia" name="msgAusencia" rows="3" maxlength="1000" placeholder="Ex.: Nosso atendimento é das 8h às 18h. Assim que abrirmos, respondemos você.">${a.msgAusencia}</textarea></div>
+          </div>
+        </section>
+
+        <section class="painel">
+          <div class="painel-cab"><h2>Dias fechados e feriados</h2></div>
+          <div class="painel-corpo form">
+            <p class="sub">Nesses dias a equipe não atende, mesmo que caia num dia útil. Pode ser um feriado, uma emenda ou um dia com horário especial.</p>
+            <ul class="dias-fechados" id="dias-fechados"></ul>
+            <div class="form-linha">
+              <div class="campo"><label for="df-de">De</label><input id="df-de" type="date"></div>
+              <div class="campo"><label for="df-ate">Até</label><input id="df-ate" type="date"></div>
+            </div>
+            <div class="campo"><label for="df-motivo">Motivo</label><input id="df-motivo" maxlength="80" placeholder="Ex.: feriado de Finados"></div>
+            <label class="checkbox"><input type="checkbox" id="df-especial"> Horário especial nesse dia (em vez de fechado)</label>
+            <div class="form-linha" id="df-horas" hidden>
+              <div class="campo"><label for="df-abre">Abre às</label><input id="df-abre" type="time" value="08:00"></div>
+              <div class="campo"><label for="df-fecha">Fecha às</label><input id="df-fecha" type="time" value="12:00"></div>
+            </div>
+            <div><button class="btn btn-contorno" type="button" id="df-adicionar">${icone('mais')}Adicionar dia fechado</button></div>
+            <div class="caixa-expediente" id="caixa-expediente" hidden></div>
           </div>
         </section>
 
@@ -157,6 +181,53 @@ export async function montar(alvo, ctx) {
     t.addEventListener('input', mostrar); mostrar();
   });
   $('#sempre', alvo).addEventListener('change', (e) => { $('#horario-grade', alvo).hidden = e.target.checked; });
+
+  // ---------- dias fechados e feriados ----------
+  let diasFechados = (a.diasFechados || []).map((x) => ({ ...x }));
+  const dataBr = (d) => { const [y, m, dd] = d.split('-'); return `${dd}/${m}`; };
+  const diaSemana = (d) => ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'][new Date(`${d}T12:00:00`).getDay()];
+  const listaDf = $('#dias-fechados', alvo);
+  function desenharDias() {
+    if (!diasFechados.length) return render(listaDf, html`<li class="sub vazio">Nenhum dia fechado cadastrado.</li>`);
+    render(listaDf, html`${diasFechados.map((x, i) => html`<li>
+      <div><strong>${diaSemana(x.de)}, ${dataBr(x.de)}${x.ate && x.ate !== x.de ? html` a ${diaSemana(x.ate)}, ${dataBr(x.ate)}` : ''}</strong>
+        <span class="sub">${x.motivo || 'sem motivo'} · ${x.abre && x.fecha ? `horário especial ${x.abre}–${x.fecha}` : 'fechado'}</span></div>
+      <button type="button" class="btn btn-texto btn-icone" data-remover-dia="${i}" aria-label="Remover">${icone('fechar')}</button></li>`)}`);
+    $$('[data-remover-dia]', listaDf).forEach((b) => b.addEventListener('click', () => { diasFechados.splice(Number(b.dataset.removerDia), 1); desenharDias(); }));
+  }
+  desenharDias();
+  $('#df-especial', alvo).addEventListener('change', (e) => { $('#df-horas', alvo).hidden = !e.target.checked; });
+  $('#df-de', alvo).addEventListener('change', (e) => { const ate = $('#df-ate', alvo); if (!ate.value || ate.value < e.target.value) ate.value = e.target.value; });
+  $('#df-adicionar', alvo).addEventListener('click', () => {
+    const de = $('#df-de', alvo).value, ate = $('#df-ate', alvo).value || de, motivo = $('#df-motivo', alvo).value.trim();
+    const especial = $('#df-especial', alvo).checked, abre = $('#df-abre', alvo).value, fecha = $('#df-fecha', alvo).value;
+    if (!de) return avisar('Informe a data inicial.', 'erro');
+    if (ate < de) return avisar('A data final precisa ser igual ou depois da inicial.', 'erro');
+    if (especial && (!abre || !fecha || abre >= fecha)) return avisar('No horário especial, o fechar precisa ser depois do abrir.', 'erro');
+    if (diasFechados.length >= 60) return avisar('No máximo 60 períodos fechados.', 'erro');
+    diasFechados.push({ de, ate, motivo, abre: especial ? abre : null, fecha: especial ? fecha : null });
+    diasFechados.sort((x, y) => x.de.localeCompare(y.de));
+    ['#df-de', '#df-ate', '#df-motivo'].forEach((id) => { $(id, alvo).value = ''; });
+    desenharDias();
+    avisar('Dia adicionado. Clique em "Salvar configurações" para gravar.');
+  });
+
+  // ---------- como a Lia vai responder agora ----------
+  async function mostrarExpediente() {
+    const caixa = $('#caixa-expediente', alvo);
+    try {
+      const e = await api.expediente();
+      const quando = e.proximaAbertura?.texto || 'sem abertura prevista nos próximos 14 dias';
+      const continua = e.continuarSemEquipe;
+      let titulo, frase;
+      if (e.equipeDisponivel) { titulo = `Equipe disponível agora (${e.pessoasDisponiveis} pessoa${e.pessoasDisponiveis > 1 ? 's' : ''} "Disponível").`; frase = 'Se o cliente pedir uma pessoa, a conversa vai para a equipe pela roleta.'; }
+      else if (e.abertoAgora) { titulo = 'Loja no horário, mas ninguém marcado como "Disponível".'; frase = continua ? '"Nossa equipe vai falar com você hoje mesmo, assim que um atendente ficar livre. Enquanto isso, posso te ajudar por aqui."' : 'Pedidos de atendente ficam na fila esperando alguém.'; }
+      else { titulo = html`Equipe fora do horário. Próxima abertura: <strong>${quando}</strong>.`; frase = continua ? `"Nossa equipe não está atendendo agora; um atendente vai falar com você a partir de ${quando}. Enquanto isso, posso te ajudar por aqui."` : 'Pedidos de atendente ficam na fila esperando a equipe.'; }
+      caixa.hidden = false;
+      render(caixa, html`<span class="rotulo">Como a Lia vai responder agora</span><p>${titulo}</p><p class="sub">${frase}</p>`);
+    } catch { caixa.hidden = true; }
+  }
+  mostrarExpediente();
   f.addEventListener('submit', async (e) => {
     e.preventDefault();
     const horario = {};
@@ -174,6 +245,7 @@ export async function montar(alvo, ctx) {
       palavrasAtendente: f.elements.palavrasAtendente.value.split(',').map((p) => p.trim()).filter((p) => p.length >= 2),
       retornoHoras: Number(f.elements.retornoHoras.value || 0), limiteDiario: Number(f.elements.limiteDiario.value || 0),
       silencioInicio: Number(f.elements.silencioInicio.value), silencioFim: Number(f.elements.silencioFim.value),
+      diasFechados, continuarSemEquipe: f.elements.continuarSemEquipe.checked,
     };
     if (!marcarErros(f, d.nome.length >= 2 ? {} : { nome: 'Informe o nome do assistente.' })) return;
     await comBotao($('.barra-salvar [type=submit]', f), async () => {
@@ -181,6 +253,7 @@ export async function montar(alvo, ctx) {
         const r = await api.salvarAssistente(d);
         const selo = $('#selo-ativo', alvo); selo.className = 'selo ' + (r.ativo ? 'ok' : 'neutro'); selo.textContent = r.ativo ? 'Ligado' : 'Desligado';
         avisar('Configurações salvas.');
+        mostrarExpediente();
       } catch (err) { if (err.campos) { marcarErros(f, err.campos); if (err.campos.ativo) avisar(err.campos.ativo, 'erro'); } else avisar(err.message, 'erro'); }
     });
   });

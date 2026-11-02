@@ -6,6 +6,7 @@ import { api } from '../api.js';
 import { html, render, $, $$, icone, avisar, abrirModal, comBotao, marcarErros, dadosDoForm, telefoneBr, buscavel } from '../util.js';
 
 const reais = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }));
+const ROTULOS_PROTECAO = { PROTECAO_X: 'Proteção X', PROTECAO_SUPER_X: 'Super X', TERCEIROS: 'Terceiros', VIDROS: 'Vidros', VIDROS_E_PNEUS: 'Vidros e pneus' };
 const cambio = (c) => (c ? String(c).toLowerCase().replace('automatic', 'automático') : '—');
 const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const dataBr = (x) => `${x.date.split('-').reverse().join('/')} às ${x.time}`;
@@ -169,78 +170,80 @@ export function montarCotacao(alvo, { ctx, conversa = null, compacto = false, ao
     f.addEventListener('change', () => { preco = null; $('#copiar-preco', m.el).hidden = true; const u = $('#usar-preco', m.el); if (u) u.hidden = true; });
     $('#copiar-preco', m.el).addEventListener('click', () => preco && copiar(preco.textoWhatsapp));
     $('#usar-preco', m.el)?.addEventListener('click', () => { if (preco) { usar(preco.textoWhatsapp); m.fechar(); } });
-    $('#reservar', m.el)?.addEventListener('click', () => abrirReserva(g, escolhidas(), () => m.fechar()));
+    $('#reservar', m.el)?.addEventListener('click', () => reservaModal({ ctx, conversa, periodo, g, protecoes: escolhidas(), usar, aoReservar, aoConcluir: () => m.fechar() }));
   }
+}
 
-  // ---------- reserva pela equipe: dados do cliente → resumo → confirmação (igual ao assistente) ----------
-  function abrirReserva(g, protecoes, aoConcluir) {
-    const ct = conversa?.contato || {};
-    const m = abrirModal({
-      titulo: `Reservar ${g.letra} – ${g.nome}`,
-      corpo: html`<form class="form" id="form-reserva" novalidate>
-        <p class="sub">${dataBr({ date: periodo.dataRetirada, time: periodo.horaRetirada })} → ${dataBr({ date: periodo.dataDevolucao, time: periodo.horaDevolucao })} · ${protecoes.length ? protecoes.map((p) => (g.protecoes.find((x) => x.codigo === p) || {}).nome || p).join(', ') : 'Proteção X'} · pagamento na loja, na retirada</p>
-        <div class="campo"><label for="r-nome">Nome completo do condutor</label><input id="r-nome" name="nome" value="${ct.nome || ''}" autocomplete="off" required></div>
-        <div class="form-linha">
-          <div class="campo"><label for="r-cpf">CPF</label><input id="r-cpf" name="cpf" inputmode="numeric" placeholder="000.000.000-00" required></div>
-          <div class="campo"><label for="r-cnh">CNH (opcional)</label><input id="r-cnh" name="cnh" inputmode="numeric" placeholder="Só números"></div>
-        </div>
-        <div class="form-linha">
-          <div class="campo"><label for="r-email">E-mail</label><input id="r-email" name="email" type="email" value="${ct.email || ''}" required></div>
-          <div class="campo"><label for="r-tel">Telefone</label><input id="r-tel" name="telefone" inputmode="tel" value="${telefoneBr(ct.telefone)}" required><p class="ajuda">Vem do WhatsApp do cliente.</p></div>
-        </div>
-        ${configPagamento?.pix ? html`<div class="campo"><label>Forma de pagamento</label><div class="lista-opcoes">
-          <label class="opcao-modo"><input type="radio" name="pagamento" value="loja" checked><div><strong>Na loja, na retirada</strong><div class="sub">A reserva é criada agora no portal.</div></div></label>
-          <label class="opcao-modo"><input type="radio" name="pagamento" value="pix"><div><strong>Pix pelo WhatsApp</strong><div class="sub">Gera o código Pix (válido ${configPagamento.validadeMinutos || 30} min) para enviar ao cliente; a reserva é criada automaticamente quando o pagamento cair.</div></div></label>
-        </div></div>` : ''}
-        <div id="resumo-reserva" hidden></div>
-      </form>`,
-      rodape: html`<button class="btn btn-contorno" data-fechar>Cancelar</button>
-        <button class="btn btn-primario" type="submit" form="form-reserva" id="ver-resumo">Ver resumo</button>
-        <button class="btn btn-primario" id="confirmar-reserva" hidden>Confirmar reserva</button>`,
-    });
-    const f = $('#form-reserva', m.el), resumoEl = $('#resumo-reserva', m.el), btnResumo = $('#ver-resumo', m.el), btnConfirmar = $('#confirmar-reserva', m.el);
-    f.elements.cpf.addEventListener('input', (e) => { e.target.value = mascaraCpf(e.target.value); });
-    const dadosReserva = () => ({ ...periodo, fleetId: g.fleetId, protecoes, ...dadosDoForm(f), contatoId: ct.id || undefined, conversaId: conversa?.id || undefined });
-    // qualquer mudança nos dados invalida o resumo mostrado
-    f.addEventListener('input', () => { resumoEl.hidden = true; btnConfirmar.hidden = true; btnResumo.hidden = false; });
+// ---------- reserva pela equipe: dados do cliente → resumo → confirmação (igual ao assistente) ----------
+// Usada pela cotação (botão Reservar) e pelo cartão "Cotação da Lia" do painel da conversa (já preenchido).
+export function reservaModal({ ctx, conversa, periodo, g, protecoes, adicionais = [], usar, aoReservar, aoConcluir }) {
+  const ct = conversa?.contato || {};
+  pagamentoConfig();
+  const m = abrirModal({
+    titulo: `Reservar ${g.letra} – ${g.nome}`,
+    corpo: html`<form class="form" id="form-reserva" novalidate>
+      <p class="sub">${dataBr({ date: periodo.dataRetirada, time: periodo.horaRetirada })} → ${dataBr({ date: periodo.dataDevolucao, time: periodo.horaDevolucao })} · ${protecoes.length ? protecoes.map((p) => (g.protecoes?.find((x) => x.codigo === p) || {}).nome || ROTULOS_PROTECAO[p] || p).join(', ') : 'Proteção X'}${adicionais.length ? ' · ' + adicionais.map((x) => `${x.nome}${x.qtd > 1 ? ' x' + x.qtd : ''}`).join(', ') : ''} · pagamento na loja, na retirada</p>
+      <div class="campo"><label for="r-nome">Nome completo do condutor</label><input id="r-nome" name="nome" value="${ct.nome || ''}" autocomplete="off" required></div>
+      <div class="form-linha">
+        <div class="campo"><label for="r-cpf">CPF</label><input id="r-cpf" name="cpf" inputmode="numeric" placeholder="000.000.000-00" required></div>
+        <div class="campo"><label for="r-cnh">CNH (opcional)</label><input id="r-cnh" name="cnh" inputmode="numeric" placeholder="Só números"></div>
+      </div>
+      <div class="form-linha">
+        <div class="campo"><label for="r-email">E-mail</label><input id="r-email" name="email" type="email" value="${ct.email || ''}" required></div>
+        <div class="campo"><label for="r-tel">Telefone</label><input id="r-tel" name="telefone" inputmode="tel" value="${telefoneBr(ct.telefone)}" required><p class="ajuda">Vem do WhatsApp do cliente.</p></div>
+      </div>
+      ${configPagamento?.pix ? html`<div class="campo"><label>Forma de pagamento</label><div class="lista-opcoes">
+        <label class="opcao-modo"><input type="radio" name="pagamento" value="loja" checked><div><strong>Na loja, na retirada</strong><div class="sub">A reserva é criada agora no portal.</div></div></label>
+        <label class="opcao-modo"><input type="radio" name="pagamento" value="pix"><div><strong>Pix pelo WhatsApp</strong><div class="sub">Gera o código Pix (válido ${configPagamento.validadeMinutos || 30} min) para enviar ao cliente; a reserva é criada automaticamente quando o pagamento cair.</div></div></label>
+      </div></div>` : ''}
+      <div id="resumo-reserva" hidden></div>
+    </form>`,
+    rodape: html`<button class="btn btn-contorno" data-fechar>Cancelar</button>
+      <button class="btn btn-primario" type="submit" form="form-reserva" id="ver-resumo">Ver resumo</button>
+      <button class="btn btn-primario" id="confirmar-reserva" hidden>Confirmar reserva</button>`,
+  });
+  const f = $('#form-reserva', m.el), resumoEl = $('#resumo-reserva', m.el), btnResumo = $('#ver-resumo', m.el), btnConfirmar = $('#confirmar-reserva', m.el);
+  f.elements.cpf.addEventListener('input', (e) => { e.target.value = mascaraCpf(e.target.value); });
+  const dadosReserva = () => ({ ...periodo, fleetId: g.fleetId, protecoes, adicionais, ...dadosDoForm(f), contatoId: ct.id || undefined, conversaId: conversa?.id || undefined });
+  // qualquer mudança nos dados invalida o resumo mostrado
+  f.addEventListener('input', () => { resumoEl.hidden = true; btnConfirmar.hidden = true; btnResumo.hidden = false; });
 
-    f.addEventListener('submit', (e) => {
-      e.preventDefault();
-      comBotao(btnResumo, async () => {
-        try {
-          const r = await api.reservarEquipe({ ...dadosReserva(), confirmar: false });
-          render(resumoEl, html`<div class="total-cotacao resumo-reserva">${r.resumo}</div><p class="ajuda">${r.pagamento === 'pix' ? 'Confira com o cliente. Ao confirmar, o Pix é gerado e colocado na mensagem para você enviar; a reserva entra no portal quando o pagamento for confirmado.' : 'Confira com o cliente antes de confirmar. A reserva sai com pagamento na loja.'}</p>`);
-          btnConfirmar.textContent = r.pagamento === 'pix' ? 'Gerar Pix' : 'Confirmar reserva';
-          resumoEl.hidden = false; btnResumo.hidden = true; btnConfirmar.hidden = false; btnConfirmar.focus();
-        } catch (err) {
-          if (err.status === 401) return ctx.sessaoExpirou();
-          if (err.campos) marcarErros(f, err.campos);
-          avisar(err.message, 'erro');
-        }
-      });
-    });
-    btnConfirmar.addEventListener('click', () => comBotao(btnConfirmar, async () => {
+  f.addEventListener('submit', (e) => {
+    e.preventDefault();
+    comBotao(btnResumo, async () => {
       try {
-        const r = await api.reservarEquipe({ ...dadosReserva(), confirmar: true });
-        if (r.passo === 'pix') {
-          if (r.enviado) avisar(`Pix de ${reais(r.cobranca.valor)} enviado ao cliente${r.cobranca.devMode ? ' (ambiente de teste)' : ''}. A reserva será criada quando o pagamento cair; acompanhe em Reservas.`);
-          else { avisar(`Pix de ${reais(r.cobranca.valor)} gerado. Não foi possível enviar automaticamente: o código foi colocado na mensagem.`, 'erro'); usar(r.textoWhatsapp); }
-          aoReservar?.(r);
-          m.fechar(); aoConcluir?.();
-          return;
-        }
-        avisar(`Reserva ${r.codigo || ''} criada no portal LocarX.`.replace('  ', ' '));
-        if (r.atencao) avisar(r.atencao, 'erro');
-        usar(r.textoWhatsapp);
-        aoReservar?.(r);
-        m.fechar(); aoConcluir?.();
+        const r = await api.reservarEquipe({ ...dadosReserva(), confirmar: false });
+        render(resumoEl, html`<div class="total-cotacao resumo-reserva">${r.resumo}</div>${r.avisoAdicionais ? html`<p class="ajuda">${r.avisoAdicionais}</p>` : ''}<p class="ajuda">${r.pagamento === 'pix' ? 'Confira com o cliente. Ao confirmar, o Pix é gerado e colocado na mensagem para você enviar; a reserva entra no portal quando o pagamento for confirmado.' : 'Confira com o cliente antes de confirmar. A reserva sai com pagamento na loja.'}</p>`);
+        btnConfirmar.textContent = r.pagamento === 'pix' ? 'Gerar Pix' : 'Confirmar reserva';
+        resumoEl.hidden = false; btnResumo.hidden = true; btnConfirmar.hidden = false; btnConfirmar.focus();
       } catch (err) {
         if (err.status === 401) return ctx.sessaoExpirou();
         if (err.campos) marcarErros(f, err.campos);
         avisar(err.message, 'erro');
       }
-    }));
-  }
+    });
+  });
+  btnConfirmar.addEventListener('click', () => comBotao(btnConfirmar, async () => {
+    try {
+      const r = await api.reservarEquipe({ ...dadosReserva(), confirmar: true });
+      if (r.passo === 'pix') {
+        if (r.enviado) avisar(`Pix de ${reais(r.cobranca.valor)} enviado ao cliente${r.cobranca.devMode ? ' (ambiente de teste)' : ''}. A reserva será criada quando o pagamento cair; acompanhe em Reservas.`);
+        else { avisar(`Pix de ${reais(r.cobranca.valor)} gerado. Não foi possível enviar automaticamente: o código foi colocado na mensagem.`, 'erro'); usar(r.textoWhatsapp); }
+        aoReservar?.(r);
+        m.fechar(); aoConcluir?.();
+        return;
+      }
+      avisar(`Reserva ${r.codigo || ''} criada no portal LocarX.`.replace('  ', ' '));
+      if (r.atencao) avisar(r.atencao, 'erro');
+      usar(r.textoWhatsapp);
+      aoReservar?.(r);
+      m.fechar(); aoConcluir?.();
+    } catch (err) {
+      if (err.status === 401) return ctx.sessaoExpirou();
+      if (err.campos) marcarErros(f, err.campos);
+      avisar(err.message, 'erro');
+    }
+  }));
 }
 
 /**

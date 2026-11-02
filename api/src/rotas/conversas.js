@@ -26,6 +26,8 @@ function conversaPublica(r) {
     atendente: r.atendente_id ? { id: r.atendente_id, nome: r.atendente_nome } : null, atribuidaEm: r.atribuida_em || null,
     contato: { id: r.contato_id, nome: r.contato_nome, telefone: r.telefone, igUsername: r.ig_username || null },
     etiquetas: r.etiquetas || [],
+    // a Lia pediu um atendente sem ninguém disponível e continuou atendendo (some ao assumir, encerrar ou devolver)
+    pendenteEquipeEm: r.pendente_equipe_em || null, pendenteMotivo: r.pendente_motivo || null,
     cursor: r.cursor,
     // transferência entre lojas: de onde veio e quem atende (só aparece quando há transferência)
     ...(r.loja_atendimento_id ? { transferida: { origem: { id: r.loja_id, nome: r.loja_origem_nome }, atendimento: { id: r.loja_atendimento_id, nome: r.loja_atendimento_nome }, em: r.transferida_em } } : {}),
@@ -53,10 +55,12 @@ conversas.get('/', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
   const q = validar(z.object({
     desde: z.string().datetime({ offset: true }).optional(),
     busca: z.string().trim().max(60).optional(),
+    filtro: z.enum(['pendentes']).optional(),   // pendentes = a Lia pediu atendente sem ninguém disponível
   }), req.query);
   const params = [req.usuario.loja_id];
   let filtro = '';
   if (q.desde) { params.push(q.desde); filtro += ` AND cv.atualizada_em > $${params.length}::timestamptz`; }
+  if (q.filtro === 'pendentes') filtro += ` AND cv.pendente_equipe_em IS NOT NULL AND cv.estado <> 'encerrada'`;
   if (q.busca) {
     params.push('%' + q.busca.replace(/[%_\\]/g, '\\$&') + '%');
     params.push(q.busca.replace(/\D/g, '') ? '%' + q.busca.replace(/\D/g, '') + '%' : '__nenhum__');
@@ -131,7 +135,7 @@ async function prepararEnvio(req, id) {
       if (cv.estado === 'humano' && cv.atendente_id && cv.atendente_id !== req.usuario.id && req.usuario.perfil !== 'dono') {
         throw erro(409, `Esta conversa está com ${cv.atendente_nome}. Peça para ele(a) liberar ou para o dono da loja transferir.`);
       }
-      await c.query(`UPDATE conversas SET estado = 'humano', atendente_id = $2, atualizada_em = now() WHERE id = $1`, [id, req.usuario.id]);
+      await c.query(`UPDATE conversas SET estado = 'humano', atendente_id = $2, pendente_equipe_em = NULL, pendente_motivo = NULL, atualizada_em = now() WHERE id = $1`, [id, req.usuario.id]);
       await evento(c, cv, req, `${req.usuario.nome} assumiu a conversa`);
     }
     // conversa do chat do site com o visitante na tela: a resposta vai para o chat (sem WhatsApp); fora da tela, vai pelo WhatsApp
@@ -269,7 +273,7 @@ conversas.post('/:id/assumir', exigirPerfil('dono', 'atendente'), rota(async (re
     if (cv.estado === 'humano' && cv.atendente_id && cv.atendente_id !== req.usuario.id && req.usuario.perfil !== 'dono') {
       throw erro(409, `Esta conversa está com ${cv.atendente_nome}.`);
     }
-    await c.query(`UPDATE conversas SET estado = 'humano', atendente_id = $2 WHERE id = $1`, [cv.id, req.usuario.id]);
+    await c.query(`UPDATE conversas SET estado = 'humano', atendente_id = $2, pendente_equipe_em = NULL, pendente_motivo = NULL WHERE id = $1`, [cv.id, req.usuario.id]);
     await evento(c, cv, req, `${req.usuario.nome} assumiu a conversa`);
   }));
 }));
@@ -282,7 +286,7 @@ conversas.post('/:id/devolver', exigirPerfil('dono', 'atendente'), rota(async (r
     // na hora, com o histórico inteiro (inclusive o que a equipe disse). Senão, espera o cliente escrever de novo.
     const ultimaSaida = (await c.query(`SELECT max(criada_em) AS em FROM mensagens WHERE conversa_id = $1 AND direcao = 'saida'`, [cv.id])).rows[0]?.em;
     const pendente = !!cv.ultima_do_cliente && (!ultimaSaida || new Date(cv.ultima_do_cliente) > new Date(ultimaSaida));
-    await c.query(`UPDATE conversas SET estado = 'assistente', atendente_id = NULL, bot_respondeu_em = CASE WHEN $2 THEN bot_respondeu_em ELSE now() END WHERE id = $1`, [cv.id, pendente]);
+    await c.query(`UPDATE conversas SET estado = 'assistente', atendente_id = NULL, pendente_equipe_em = NULL, pendente_motivo = NULL, bot_respondeu_em = CASE WHEN $2 THEN bot_respondeu_em ELSE now() END WHERE id = $1`, [cv.id, pendente]);
     await evento(c, cv, req, `${req.usuario.nome} devolveu a conversa ao assistente${pendente ? ' (cliente aguardando resposta: o assistente continua)' : ''}`);
     if (pendente) setTimeout(() => agendar(cv.id, 500), 0);
   });
@@ -326,7 +330,7 @@ conversas.post('/:id/transferir-loja', exigirPerfil('dono', 'atendente'), rota(a
       if (!irmas.some((l) => l.id === destino.id)) throw erro(403, 'Você só pode transferir para lojas do mesmo dono.');
     }
     await c.query(`UPDATE conversas SET loja_atendimento_id = $2, transferida_em = CASE WHEN $2::uuid IS NULL THEN NULL ELSE now() END, transferida_por = $3,
-                     estado = 'aguardando', atendente_id = NULL, atualizada_em = now() WHERE id = $1`, [cv.id, voltando ? null : destino.id, req.usuario.id]);
+                     estado = 'aguardando', atendente_id = NULL, pendente_equipe_em = NULL, pendente_motivo = NULL, atualizada_em = now() WHERE id = $1`, [cv.id, voltando ? null : destino.id, req.usuario.id]);
     await evento(c, cv, req, `${req.usuario.nome} transferiu a conversa para ${destino.nome}${d.nota ? ` — ${d.nota}` : ''}`);
     await registrar(c, req, 'transferiu_conversa', { alvo: cv.id, lojaId: req.usuario.loja_id, detalhes: { para: destino.id, nota: d.nota || null } });
     return destino;
@@ -338,7 +342,7 @@ conversas.post('/:id/transferir-loja', exigirPerfil('dono', 'atendente'), rota(a
 
 conversas.post('/:id/encerrar', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
   res.json(await mudarEstado(req, uuid(req.params.id), async (c, cv) => {
-    await c.query(`UPDATE conversas SET estado = 'encerrada', nao_lidas = 0 WHERE id = $1`, [cv.id]);
+    await c.query(`UPDATE conversas SET estado = 'encerrada', nao_lidas = 0, pendente_equipe_em = NULL, pendente_motivo = NULL WHERE id = $1`, [cv.id]);
     await evento(c, cv, req, `${req.usuario.nome} encerrou a conversa`);
   }));
 }));
@@ -348,7 +352,7 @@ conversas.post('/:id/transferir', exigirPerfil('dono'), rota(async (req, res) =>
   res.json(await mudarEstado(req, uuid(req.params.id), async (c, cv) => {
     const alvo = (await c.query(`SELECT id, nome FROM usuarios WHERE id = $1 AND loja_id = $2 AND status = 'ativo'`, [atendenteId, req.usuario.loja_id])).rows[0];
     if (!alvo) throw erro(422, 'Escolha uma pessoa ativa da sua equipe.');
-    await c.query(`UPDATE conversas SET estado = 'humano', atendente_id = $2, atribuida_em = now() WHERE id = $1`, [cv.id, alvo.id]);
+    await c.query(`UPDATE conversas SET estado = 'humano', atendente_id = $2, atribuida_em = now(), pendente_equipe_em = NULL, pendente_motivo = NULL WHERE id = $1`, [cv.id, alvo.id]);
     await evento(c, cv, req, `${req.usuario.nome} transferiu a conversa para ${alvo.nome}`);
     await registrar(c, req, 'transferiu_conversa', { alvo: cv.id, detalhes: { para: alvo.id } });
   }));

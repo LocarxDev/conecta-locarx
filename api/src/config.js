@@ -44,6 +44,9 @@ export const config = {
   locarx: process.env.LOCARX_API_TOKEN ? {
     url: (process.env.LOCARX_API_URL || 'https://api.locarx.com.br/api').trim().replace(/\/+$/, ''),
     token: process.env.LOCARX_API_TOKEN.trim(),
+    // Serviços adicionais (cadeirinha, condutor adicional…) no POST /reservations/new: só depois de a 4code confirmar o formato.
+    // Desligado (padrão), a reserva vai sem eles e o pedido entra em `observations` com aviso à equipe.
+    reservaAdicionais: /^(1|true|sim)$/i.test(process.env.LOCARX_RESERVA_ADICIONAIS || ''),
   } : null,
   // Pagamento Pix pelo WhatsApp (AbacatePay). Uma chave da REDE: tudo cai na conta do franqueador, que repassa às lojas.
   // Sem ABACATEPAY_API_KEY o pagamento online fica desligado (o assistente nem oferece).

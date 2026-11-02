@@ -112,7 +112,7 @@ const ROTAS = [
   { padrao: /^base$/, tela: baseTela.montar, perfis: ['dono', 'atendente'] },
   { padrao: /^rede$/, tela: redeTela.montar, perfis: ['admin', 'matriz'] },
   { padrao: /^prompt$/, tela: promptTela.montar, perfis: ['admin', 'matriz'] },
-  { padrao: /^reservas$/, tela: reservasTela.montar, perfis: ['dono', 'atendente'] },
+  { padrao: /^reservas(?:\/([^/]+))?$/, tela: reservasTela.montar, perfis: ['dono', 'atendente'] },
   { padrao: /^cotacao$/, tela: cotacaoTela.montar, perfis: ['dono', 'atendente'] },
   { padrao: /^whatsapp-rede$/, tela: whatsappRedeTela.montar, perfis: ['admin', 'matriz'] },
   { padrao: /^monitor-assistente$/, tela: monitorTela.montar, perfis: ['admin'] },

@@ -420,9 +420,11 @@ fieldset.codigo-2fa { border: 0; padding: 0; margin: 0; min-width: 0; }
 .chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--fundo); }
 .chat-vazio { flex: 1; display: grid; place-content: center; justify-items: center; text-align: center; gap: 10px; color: var(--texto-2); padding: 24px; }
 .chat-vazio .ic { width: 44px; height: 44px; color: var(--texto-3); }
-.chat-cab { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--superficie); border-bottom: 1px solid var(--borda); min-height: 64px; flex-wrap: wrap; }
+.chat-cab { display: grid; gap: 8px; padding: 10px 16px; background: var(--superficie); border-bottom: 1px solid var(--borda); min-height: 64px; }
+.chat-cab-topo { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.chat-cab .estado-chat { margin-left: auto; flex: none; }
 .chat-cab .voltar { display: none; }
-.chat-cab .quem { display: grid; min-width: 0; flex: 1 1 160px; }
+.chat-cab .quem { display: grid; min-width: 0; flex: 1 1 120px; }
 .chat-cab .quem strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chat-cab .quem span { font-size: 12.5px; color: var(--texto-3); font-variant-numeric: tabular-nums; }
 .chat-cab .acoes-chat { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
@@ -447,8 +449,9 @@ fieldset.codigo-2fa { border: 0; padding: 0; margin: 0; min-width: 0; }
 
 .compositor { background: var(--superficie); border-top: 1px solid var(--borda); padding: 10px 12px; display: grid; gap: 8px; position: relative; }
 .compositor.modo-nota { background: var(--alerta-fundo); }
-.compositor .linha-comp { display: flex; gap: 8px; align-items: flex-end; }
-.compositor textarea { flex: 1; min-height: 44px; max-height: 160px; resize: none; padding: 11px 12px; border-radius: var(--raio); border: 1px solid var(--borda-forte); background: var(--superficie); color: var(--texto); font: 400 15px/1.4 var(--fonte-texto); }
+.compositor .linha-comp { display: flex; gap: 8px; align-items: flex-end; min-width: 0; }
+.compositor .linha-comp > .btn { flex: none; }
+.compositor textarea { flex: 1 1 0; min-width: 0; min-height: 44px; max-height: 160px; resize: none; padding: 11px 12px; border-radius: var(--raio); border: 1px solid var(--borda-forte); background: var(--superficie); color: var(--texto); font: 400 15px/1.4 var(--fonte-texto); }
 .compositor textarea:focus { outline: none; border-color: var(--vermelho); }
 .compositor .opcoes-comp { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 13px; color: var(--texto-2); }
 .compositor .anexo-escolhido { display: inline-flex; gap: 8px; align-items: center; padding: 4px 6px 4px 10px; border-radius: 99px; background: var(--superficie-2); font-size: 13px; max-width: 100%; }
@@ -670,6 +673,11 @@ details[open] summary { margin-bottom: 10px; }
 /* lateral da caixa de conversas */
 .caixa { position: relative; }
 .caixa.com-lateral { grid-template-columns: minmax(260px, 340px) minmax(0, 1fr) minmax(280px, 330px); }
+/* telas até 1439px com o painel aberto: lista e painel mais estreitos e botões do cabeçalho só com ícone */
+@media (max-width: 1439px) {
+  .caixa.com-lateral { grid-template-columns: minmax(220px, 270px) minmax(0, 1fr) minmax(280px, 310px); }
+  .caixa.com-lateral .chat-cab .rotulo-lateral { display: none; }
+}
 .lateral { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--superficie); border-left: 1px solid var(--borda); }
 .lateral[hidden] { display: none; }
 .lateral-cab { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 10px 10px 14px; min-height: 64px; border-bottom: 1px solid var(--borda); }
@@ -800,3 +808,38 @@ select option, select optgroup { background: var(--superficie); color: var(--tex
 .titulo-secao svg { width: 20px; height: 20px; }
 .pc-reserva-ativa { background: var(--ok-fundo); }
 .pc-reserva-ativa h4, .pc-reserva-ativa strong { color: var(--ok); }
+
+/* ---------- v14 Parte A: horário de atendimento, dias fechados, pendente para a equipe ---------- */
+.checkbox.opcao-destaque { align-items: flex-start; padding: 10px 12px; border: 1px solid var(--borda); border-radius: var(--raio); background: var(--superficie-2); }
+.checkbox.opcao-destaque input { margin-top: 3px; }
+.dias-fechados { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.dias-fechados li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--borda); border-radius: var(--raio); background: var(--superficie-2); font-size: 14px; }
+.dias-fechados li > div { display: flex; flex-direction: column; gap: 2px; }
+.dias-fechados li.vazio { border-style: dashed; background: transparent; }
+.caixa-expediente { padding: 12px 14px; border-radius: var(--raio); background: var(--ok-fundo); color: var(--texto); display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.caixa-expediente .rotulo { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--ok); }
+.caixa-expediente p { margin: 0; }
+.faixa-pendente { display: flex; gap: 10px; align-items: flex-start; padding: 10px 16px; background: var(--alerta-fundo); color: var(--alerta); font-size: 13.5px; border-bottom: 1px solid var(--borda); }
+.faixa-pendente .ic { flex: none; margin-top: 1px; }
+.filtro-chips button.pendentes:not(.ativo) { border-color: var(--alerta); color: var(--alerta); }
+/* v14 Parte B: pedido do cliente registrado pela Lia */
+.pc-pedido { border: 1px solid var(--alerta); border-radius: var(--raio); background: var(--alerta-fundo); }
+.pc-pedido h4 { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pc-pedido p { margin: 4px 0; font-size: 14px; }
+.pc-acoes { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.tarefa-detalhes { display: block; font-size: 13.5px; color: var(--texto-2); margin: 2px 0; }
+/* v14 Parte C: cartão "Cotação da Lia" no painel da conversa */
+#lateral-cotacao[hidden] { display: none; }
+.cl-cartao { border-bottom: 2px solid var(--vermelho); background: var(--superficie-2); }
+.cl-cartao h4 { flex-wrap: wrap; }
+.cl-cartao .cl-quando { font-weight: 400; text-transform: none; letter-spacing: 0; flex-basis: 100%; }
+.cl-grade { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin: 8px 0; font-size: 13.5px; }
+.cl-grade > div { display: flex; flex-direction: column; }
+.cl-opcionais { display: flex; gap: 12px; flex-wrap: wrap; margin: -4px 0 8px; font-size: 13.5px; }
+.cl-adicionais { display: flex; flex-direction: column; gap: 6px; }
+.cl-adicionais .checkbox { justify-content: space-between; }
+.cl-adicionais .cl-ad-nome { flex: 1; }
+.cl-adicionais input.cl-qtd { width: 54px; height: auto; padding: 4px 6px; border: 1px solid var(--borda-forte); border-radius: var(--raio); background: var(--superficie); color: var(--texto); font: 400 13px var(--fonte-texto); }
+.cl-total { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; margin: 10px 0 4px; padding-top: 8px; border-top: 1px solid var(--borda); font-size: 13.5px; }
+.cl-total strong { font-size: 18px; }
+.cl-total .sub { flex-basis: 100%; }

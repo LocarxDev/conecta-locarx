@@ -4,6 +4,8 @@ import { api } from '../api.js';
 import { html, render, $, $$, icone, avisar, abrirModal, chipEtiqueta, CORES, data } from '../util.js';
 
 const reais = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }));
+export const TIPO_PEDIDO = { cancelamento: ['Cancelamento', 'erro'], alteracao: ['Alteração', 'alerta'], multa: ['Multa', 'alerta'], outro: ['Pedido', 'neutro'], geral: ['Tarefa', 'neutro'] };
+const quando = (iso) => new Date(iso).toLocaleString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 
 // pergunta o motivo quando o cliente vai para uma etapa de "perdido"
 export function pedirMotivo() {
@@ -75,6 +77,12 @@ export function montarPainelCliente(el, contatoId, { comLinkFicha = true, aoMuda
         return ativa ? html`<section class="pc-bloco pc-reserva-ativa" aria-label="Reserva ativa"><h4>${icone('reservas')}Reserva ativa</h4>
           <div><strong class="num">${ativa.codigo}</strong>${ativa.grupo ? html` · ${ativa.grupo}` : ''}<div class="sub">${data(ativa.retirada)} → ${data(ativa.devolucao)} · ${reais(ativa.valor)} · ${ativa.status}</div></div></section>` : '';
       })()}
+      ${(d.pedidos || []).map((p) => { const [rotulo, cor] = TIPO_PEDIDO[p.tipo] || TIPO_PEDIDO.outro; return html`<section class="pc-bloco pc-pedido" aria-label="Pedido do cliente">
+        <h4>${icone('alerta')}Pedido do cliente <span class="selo ${cor} sem-ponto">${rotulo}</span></h4>
+        <p>${p.detalhes || p.titulo}${p.reservaCodigo ? html` <span class="sub">· reserva <strong class="num">${p.reservaCodigo}</strong></span>` : ''}</p>
+        <p class="sub">Tarefa: <strong>${p.titulo}</strong> · prazo ${quando(p.venceEm)} · registrado pela Lia em ${quando(p.criadaEm)}</p>
+        <div class="pc-acoes">${p.reservaCodigo ? html`<a class="btn btn-contorno" href="#/reservas/${encodeURIComponent(p.reservaCodigo)}">Abrir reserva</a>` : ''}<button type="button" class="btn btn-contorno" data-resolver="${p.id}">Marcar resolvido</button></div>
+      </section>`; })}
       <section class="pc-bloco" aria-label="Funil">
         <h4>${icone('funil')}Funil</h4>
         ${d.oportunidades.map((o) => {
@@ -121,6 +129,12 @@ export function montarPainelCliente(el, contatoId, { comLinkFicha = true, aoMuda
   }
 
   function ligar() {
+    // pedidos do cliente (tarefas registradas pela Lia)
+    $$('[data-resolver]', el).forEach((b) => b.addEventListener('click', async () => {
+      b.disabled = true;
+      try { await api.marcarTarefa(b.dataset.resolver, true); avisar('Pedido marcado como resolvido.'); await carregar(); aoMudar?.(); }
+      catch (err) { avisar(err.message, 'erro'); b.disabled = false; }
+    }));
     // funil
     $$('[data-op]', el).forEach((s) => s.addEventListener('change', async () => {
       const o = d.oportunidades.find((x) => x.id === s.dataset.op);

@@ -320,8 +320,27 @@ export function acharGrupo(grupos, ref) {
     || null;
 }
 
-async function prepararGrupo({ branchId, fleetId, retirada, devolucao, protecoes = [] }) {
-  const grupos = await disponibilidade({ branchId, retirada, devolucao });
+// Serviços adicionais pedidos ({ id | nome, qtd }) → [{ id, nome, qtd, valor, maximo }] válidos na lista da consulta.
+// Nome sem acento e por trecho ("cadeirinha" acha "Cadeirinha infantil"). Quantidade respeita o máximo da API.
+export function resolverAdicionais(pedidos, lista) {
+  const semAcento = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+  const saida = [];
+  for (const p of Array.isArray(pedidos) ? pedidos : []) {
+    if (!p) continue;
+    const ref = p.id ?? p.nome ?? p.nome_ou_id ?? p;
+    const q = semAcento(ref);
+    const a = (lista || []).find((x) => String(x.id) === String(ref)) || (lista || []).find((x) => semAcento(x.nome) === q) || (q.length >= 4 ? (lista || []).find((x) => semAcento(x.nome).includes(q)) : null);
+    if (!a || saida.some((x) => x.id === a.id)) continue;
+    let qtd = Math.max(1, Math.floor(Number(p.qtd ?? p.quantidade ?? 1) || 1));
+    if (a.maximo) qtd = Math.min(qtd, a.maximo);
+    saida.push({ id: a.id, nome: a.nome, qtd, valor: a.diaria ?? null, maximo: a.maximo ?? null });
+  }
+  return saida;
+}
+
+async function prepararGrupo({ branchId, fleetId, retirada, devolucao, protecoes = [], adicionais = [] }) {
+  const completa = await disponibilidadeCompleta({ branchId, retirada, devolucao });
+  const grupos = completa.grupos;
   const g = acharGrupo(grupos, fleetId);
   if (!g) {
     const e = new ErroLocarx(grupos.length
@@ -335,17 +354,20 @@ async function prepararGrupo({ branchId, fleetId, retirada, devolucao, protecoes
     throw e;
   }
   const ids = protecoes.map((c) => g.protecoes.find((p) => p.codigo === c)?.id).filter((x) => x != null);
-  return { g, ids };
+  return { g, ids, adicionais: resolverAdicionais(adicionais, completa.adicionais), adicionaisDisponiveis: completa.adicionais };
 }
 
 // ---------- preço ----------
 // POST /prices/calculate { dateFrom, dateTo, priceFleetId, branchId, protections: [{ id }], additionalServices: [{ id, qtd }] }
-export async function calcularPreco({ branchId, fleetId, retirada, devolucao, protecoes = [] }) {
-  const { g, ids } = await prepararGrupo({ branchId, fleetId, retirada, devolucao, protecoes });
+export async function calcularPreco({ branchId, fleetId, retirada, devolucao, protecoes = [], adicionais = [] }) {
+  const { g, ids, adicionais: ad, adicionaisDisponiveis } = await prepararGrupo({ branchId, fleetId, retirada, devolucao, protecoes, adicionais });
   const d = await chamar('POST', '/prices/calculate', {
-    corpo: { dateFrom: dataHoraApi(retirada), dateTo: dataHoraApi(devolucao), priceFleetId: g.priceFleetId, branchId: Number(branchId), protections: ids.map((id) => ({ id })), additionalServices: [] },
+    corpo: { dateFrom: dataHoraApi(retirada), dateTo: dataHoraApi(devolucao), priceFleetId: g.priceFleetId, branchId: Number(branchId), protections: ids.map((id) => ({ id })), additionalServices: ad.map((a) => ({ id: a.id, qtd: a.qtd })) },
   });
   return {
+    adicionais: ad,                                   // os que entraram no cálculo (id, nome, qtd, valor)
+    adicionaisDisponiveis,                            // todos os que a filial oferece nessas datas
+    totalAdicionais: num(d?.summary?.additionalServicesTotal ?? d?.summary?.totalAdditionalServices ?? d?.summary?.additionalServices),
     total: num(d?.summary?.totalWithTax),
     diaria: num(d?.period?.baseDailyRate),
     diarias: num(d?.period?.baseDays),
@@ -360,8 +382,12 @@ export async function calcularPreco({ branchId, fleetId, retirada, devolucao, pr
 
 // ---------- reservas ----------
 // POST /reservations/new — pagamento na loja (LOCAL_PAYMENT); a API recalcula o preço sozinha.
-export async function criarReserva({ branchId, fleetId, retirada, devolucao, protecoes = [], cliente }) {
-  const { g, ids } = await prepararGrupo({ branchId, fleetId, retirada, devolucao, protecoes });
+export async function criarReserva({ branchId, fleetId, retirada, devolucao, protecoes = [], adicionais = [], cliente }) {
+  const { g, ids, adicionais: ad } = await prepararGrupo({ branchId, fleetId, retirada, devolucao, protecoes, adicionais });
+  // adicionais: pela API só com LOCARX_RESERVA_ADICIONAIS ligado (formato a confirmar com a 4code); senão vão nas observações
+  let enviarAdicionais = !!config.locarx?.reservaAdicionais && ad.length > 0;
+  const textoAdicionais = () => (ad.length && !enviarAdicionais ? `\nSERVIÇOS ADICIONAIS SOLICITADOS (confirmar e incluir na retirada): ${ad.map((a) => `${a.nome} x${a.qtd}`).join(', ')}.` : '');
+  let obsAdicionais = textoAdicionais();
   const corpo = (phone) => ({
       priceFleetId: g.priceFleetId,
       pickUpLocationBranchId: Number(branchId), dropOffLocationBranchId: Number(branchId),
@@ -374,17 +400,25 @@ export async function criarReserva({ branchId, fleetId, retirada, devolucao, pro
         ...(cliente.cnh ? { cnh: cliente.cnh } : {}),
       },
       protections: ids.map((id) => ({ fleetProtectionId: id })),
-      additionalServices: [],
-      observations: cliente.observacoes || 'Reserva feita pelo Conecta LocarX (WhatsApp).',
+      additionalServices: enviarAdicionais ? ad.map((a) => ({ id: a.id, qtd: a.qtd })) : [],
+      observations: ((cliente.observacoes || 'Reserva feita pelo Conecta LocarX (WhatsApp).') + obsAdicionais).slice(0, 1000),
       ...(cliente.referencia ? { assistanceNumber: String(cliente.referencia).slice(0, 60) } : {}),
   });
   let d;
   try { d = await chamar('POST', '/reservations/new', { corpo: corpo(telefoneBr(cliente.telefone)) }); }
   catch (e) {
-    // o portal recusou só o telefone no formato nacional: tenta uma vez no internacional (+55…). Nada foi criado ainda.
-    const soTelefone = e.status === 400 && !e.codigo && /customer\.phone/.test(JSON.stringify(e.resposta || '')) && !/customer\.(cpf|name|email)/.test(JSON.stringify(e.resposta || ''));
-    if (!soTelefone) throw e;
-    d = await chamar('POST', '/reservations/new', { corpo: corpo(telefoneE164(cliente.telefone)) });
+    const resposta = JSON.stringify(e.resposta || '');
+    // o portal recusou os adicionais (formato ainda não confirmado pela 4code): tenta uma vez sem eles, levando-os para as observações
+    if (enviarAdicionais && e.status === 400 && /additional/i.test(resposta)) {
+      console.warn('[locarx] reserva recusou additionalServices; reenviando sem eles (vão nas observações):', resposta.slice(0, 200));
+      enviarAdicionais = false; obsAdicionais = textoAdicionais();
+      d = await chamar('POST', '/reservations/new', { corpo: corpo(telefoneBr(cliente.telefone)) });
+    } else {
+      // o portal recusou só o telefone no formato nacional: tenta uma vez no internacional (+55…). Nada foi criado ainda.
+      const soTelefone = e.status === 400 && !e.codigo && /customer\.phone/.test(resposta) && !/customer\.(cpf|name|email)/.test(resposta);
+      if (!soTelefone) throw e;
+      d = await chamar('POST', '/reservations/new', { corpo: corpo(telefoneE164(cliente.telefone)) });
+    }
   }
   const r = normalizarReserva(d?.reservation || d?.data || d);
   // o portal respondeu OK mas sem reserva reconhecível: melhor avisar do que seguir com código vazio

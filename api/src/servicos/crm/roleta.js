@@ -4,21 +4,13 @@
 // (a conversa fica em "Aguardando" para quem pegar primeiro).
 // Só entra quem marcou "Disponível", participa da roleta e está com o Conecta aberto (visto nos últimos 5 minutos).
 
+import { candidatos, equipeDisponivel } from './expediente.js';
+
 export const MODOS = ['rodizio', 'menos_ocupado', 'desligada'];
 
 export async function configDaRoleta(c, lojaId) {
   const r = (await c.query('SELECT * FROM distribuicao WHERE loja_id = $1', [lojaId])).rows[0];
   return { modo: r?.modo || 'rodizio', limite: r?.limite ?? 0, ultimoUsuarioId: r?.ultimo_usuario_id || null };
-}
-
-async function candidatos(c, lojaId) {
-  return (await c.query(
-    `SELECT u.id, u.nome,
-            (SELECT count(*) FROM conversas cv WHERE cv.atendente_id = u.id AND cv.estado = 'humano')::int AS em_andamento
-       FROM usuarios u
-      WHERE u.loja_id = $1 AND u.status = 'ativo' AND u.perfil IN ('dono', 'atendente')
-        AND u.disponivel AND u.na_roleta AND u.visto_em > now() - interval '5 minutes'
-      ORDER BY u.criado_em, u.id`, [lojaId])).rows;
 }
 
 /** Escolhe a próxima pessoa (ou null). Trava a configuração da loja para duas conversas não caírem na mesma vez. */
@@ -48,14 +40,34 @@ export async function distribuir(c, conversaId) {
   if (!cv || cv.estado !== 'aguardando' || cv.atendente_id) return null;
   const u = await escolher(c, cv.loja_id);
   if (!u) return null;
-  await c.query(`UPDATE conversas SET estado = 'humano', atendente_id = $2, atribuida_em = now(), atualizada_em = now() WHERE id = $1`, [cv.id, u.id]);
+  // entregue a alguém = assumida: o "pendente para a equipe" (Lia pediu atendente sem ninguém disponível) é limpo
+  await c.query(`UPDATE conversas SET estado = 'humano', atendente_id = $2, atribuida_em = now(), pendente_equipe_em = NULL, pendente_motivo = NULL, atualizada_em = now() WHERE id = $1`, [cv.id, u.id]);
   await c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto) VALUES ($1, $2, 'interna', 'sistema', 'evento', $3)`,
     [cv.id, cv.loja_origem, `Roleta de atendimento: conversa entregue para ${u.nome}`]);
   return u;
 }
 
+/**
+ * Conversas em que a Lia pediu um atendente sem ninguém disponível (ela continuou atendendo): quando a equipe fica disponível,
+ * passam para "aguardando" (das mais antigas para as mais novas) para a roleta entregar. Devolve quantas passaram.
+ */
+export async function liberarPendentesParaEquipe(c, lojaId, maximo = 20) {
+  if (!(await equipeDisponivel(c, lojaId))) return 0;
+  const rows = (await c.query(
+    `UPDATE conversas SET estado = 'aguardando', atendente_id = NULL, atualizada_em = now()
+      WHERE id IN (SELECT id FROM conversas WHERE loja_id = $1 AND loja_atendimento_id IS NULL AND estado = 'assistente' AND pendente_equipe_em IS NOT NULL
+                     AND ultima_do_cliente > now() - interval '3 days' ORDER BY pendente_equipe_em LIMIT $2)
+      RETURNING id, loja_id, pendente_motivo`, [lojaId, maximo])).rows;
+  for (const r of rows) {
+    await c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto) VALUES ($1, $2, 'interna', 'sistema', 'evento', $3)`,
+      [r.id, r.loja_id, `Equipe disponível: conversa pendente (${String(r.pendente_motivo || 'pedido do cliente').slice(0, 120)}) entregue à fila de atendimento`]);
+  }
+  return rows.length;
+}
+
 /** Quando alguém fica disponível (ou a configuração muda), distribui as conversas que estavam esperando. */
 export async function distribuirPendentes(c, lojaId, maximo = 20) {
+  await liberarPendentesParaEquipe(c, lojaId, maximo);
   const pendentes = (await c.query(
     `SELECT id FROM conversas WHERE coalesce(loja_atendimento_id, loja_id) = $1 AND estado = 'aguardando' AND atendente_id IS NULL
         AND ultima_do_cliente > now() - interval '3 days' ORDER BY ultima_do_cliente LIMIT $2`, [lojaId, maximo])).rows;

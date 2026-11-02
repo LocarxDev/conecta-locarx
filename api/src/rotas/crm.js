@@ -214,6 +214,7 @@ crm.patch('/oportunidades/:id', loja, rota(async (req, res) => {
 // ---------- tarefas ----------
 function tarefaPublica(t) {
   return { id: t.id, titulo: t.titulo, venceEm: t.vence_em, feitaEm: t.feita_em, automatica: t.automatica, contatoId: t.contato_id, contatoNome: t.contato_nome || null, conversaId: t.conversa_id,
+    tipo: t.tipo || 'geral', detalhes: t.detalhes || null, reservaCodigo: t.reserva_codigo || null,
     responsavel: t.responsavel_id ? { id: t.responsavel_id, nome: t.responsavel_nome } : null };
 }
 

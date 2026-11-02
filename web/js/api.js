@@ -94,6 +94,7 @@ const real = {
 
   // etapa 3 — assistente e base de conhecimento
   assistente: () => chamar('GET', '/loja/assistente'),
+  expediente: () => chamar('GET', '/loja/assistente/expediente'),
   salvarAssistente: (d) => chamar('PUT', '/loja/assistente', d),
   salvarChaveIa: (d) => chamar('POST', '/loja/assistente/chave', d),
   removerChaveIa: () => chamar('DELETE', '/loja/assistente/chave'),
@@ -139,6 +140,8 @@ const real = {
   ultimaCotacao: (conversaId) => chamar('GET', `/loja/cotacao/ultima?conversa=${encodeURIComponent(conversaId)}`),
   precoCotacao: (d) => chamar('POST', '/loja/cotacao/preco', d),
   reservarEquipe: (d) => chamar('POST', '/loja/reservas', d),
+  cotacaoDaLia: (conversaId) => chamar('GET', `/loja/conversas/${encodeURIComponent(conversaId)}/cotacao`),
+  recalcularCotacao: (conversaId, d) => chamar('POST', `/loja/conversas/${encodeURIComponent(conversaId)}/cotacao/recalcular`, d),
   pagamentos: () => chamar('GET', '/loja/pagamentos'),
   cobrancas: (q) => chamar('GET', '/loja/cobrancas?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
   verificarCobranca: (id) => chamar('POST', `/loja/cobrancas/${encodeURIComponent(id)}/verificar`, {}),

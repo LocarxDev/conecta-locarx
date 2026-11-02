@@ -3,6 +3,7 @@
 import { api } from '../api.js';
 import { html, render, $, $$, icone, iniciais, avisar, abrirModal, comBotao, chipEtiqueta, preferencia, telefoneBr } from '../util.js';
 import { abrirCotacao } from './cotacao.js';
+import { montarCartaoCotacao } from './cotacao-lia.js';
 import { montarPainelCliente } from './painel-cliente.js';
 
 // ---------------------------------------------------------------------
@@ -97,9 +98,11 @@ const ESTADO = {
   assistente: html`<span class="selo neutro">Com o assistente</span>`,
   encerrada: html`<span class="selo neutro">Encerrada</span>`,
 };
+const pendenteEquipe = (c) => !!c.pendenteEquipeEm && c.estado !== 'encerrada';
 const FILTROS = [
   ['abertas', 'Abertas', (c) => c.estado !== 'encerrada'],
   ['aguardando', 'Aguardando', (c) => c.estado === 'aguardando'],
+  ['pendentes', 'Pendentes para a equipe', pendenteEquipe],
   ['minhas', 'Minhas', (c, eu) => c.estado === 'humano' && c.atendente?.id === eu.id],
   ['assistente', 'Assistente', (c) => c.estado === 'assistente'],
   ['encerradas', 'Encerradas', (c) => c.estado === 'encerrada'],
@@ -142,11 +145,11 @@ export async function montar(alvo, ctx) {
   const caixa = $('#caixa', alvo), listaEl = $('#lista-conversas', alvo), chatEl = $('#chat', alvo), lateralEl = $('#lateral', alvo);
   const telaLarga = () => matchMedia('(min-width: 1280px)').matches;
   let lateralAberta = telaLarga() && preferencia.ler('painel-cliente') !== 'fechado';
-  let painel = null;
+  let painel = null, cartaoCotacao = null;
 
   // ---------- painel do cliente (funil, etiquetas, informações) ----------
   function desenharLateral() {
-    painel?.destruir(); painel = null;
+    painel?.destruir(); painel = null; cartaoCotacao?.destruir(); cartaoCotacao = null;
     const mostrar = !!aberta && lateralAberta;
     lateralEl.hidden = !mostrar;
     caixa.classList.toggle('com-lateral', mostrar);
@@ -155,7 +158,11 @@ export async function montar(alvo, ctx) {
     render(lateralEl, html`<div class="lateral-cab"><strong>Dados do cliente</strong>
       <span><a class="btn btn-texto" href="#/clientes/${aberta.contato.id}">Ficha</a>
       <button class="btn btn-texto btn-icone" data-fechar-lateral aria-label="Fechar dados do cliente">${icone('fechar')}</button></span></div>
-      <div class="lateral-corpo" id="lateral-corpo"></div>`);
+      <div class="lateral-corpo"><div id="lateral-cotacao" hidden></div><div id="lateral-corpo"></div></div>`);
+    // cotação feita pela Lia nesta conversa (grupo, proteção, adicionais, total; atualizar preço e reservar)
+    if (aberta.estado !== 'encerrada' && ctx.usuario.loja?.modulos?.cotacao !== false) {
+      cartaoCotacao = montarCartaoCotacao($('#lateral-cotacao', lateralEl), { ctx, conversa: aberta, aoUsarTexto: usarTextoNaMensagem, aoReservar: aoReservarDaCotacao });
+    }
     painel = montarPainelCliente($('#lateral-corpo', lateralEl), aberta.contato.id, { comLinkFicha: false });
     $('[data-fechar-lateral]', lateralEl).addEventListener('click', () => alternarLateral(false));
   }
@@ -187,7 +194,8 @@ export async function montar(alvo, ctx) {
     const todas = [...store.mapa.values()];
     render($('#filtros', alvo), html`${FILTROS.map(([id, rotulo, regra]) => {
       const n = id === 'encerradas' ? 0 : todas.filter((c) => regra(c, eu)).length;
-      return html`<button role="tab" data-filtro="${id}" class="${filtro === id ? 'ativo' : ''}" aria-selected="${filtro === id}">${rotulo}${n ? html` <span class="n">${n}</span>` : ''}</button>`;
+      if (id === 'pendentes' && !n && filtro !== id) return '';   // só aparece quando há pendência
+      return html`<button role="tab" data-filtro="${id}" class="${filtro === id ? 'ativo' : ''}${id === 'pendentes' ? ' pendentes' : ''}" aria-selected="${filtro === id}">${rotulo}${n ? html` <span class="n">${n}</span>` : ''}</button>`;
     })}`);
     $$('[data-filtro]', alvo).forEach((b) => b.addEventListener('click', () => { filtro = b.dataset.filtro; desenharFiltros(); desenharLista(); }));
   }
@@ -204,6 +212,7 @@ export async function montar(alvo, ctx) {
       <a class="item-conversa${c.naoLidas ? ' nao-lida' : ''}${aberta?.id === c.id ? ' ativa' : ''}" href="#/conversas/${c.id}" data-id="${c.id}">
         <span class="avatar">${c.contato.nome ? iniciais(c.contato.nome) : '#'}</span>
         <span class="meio"><span class="nome">${nomeDe(c)}${c.canal === 'site' ? html` <span class="selo neutro sem-ponto" title="Veio pelo chat do site">Site</span>` : c.canal === 'instagram' ? html` <span class="selo neutro sem-ponto" title="Veio pelo Instagram">Instagram</span>` : ''}</span><span class="previa">${c.previa || ''}</span>
+          ${pendenteEquipe(c) ? html`<span class="etiquetas-conversa"><span class="selo alerta sem-ponto" title="A Lia pediu um atendente e não havia ninguém disponível">${c.pendenteMotivo || 'Pendente para a equipe'}</span>${c.estado === 'assistente' ? html`<span class="selo neutro sem-ponto">Lia atendendo</span>` : ''}</span>` : ''}
           ${c.etiquetas?.length ? html`<span class="etiquetas-conversa">${c.etiquetas.slice(0, 3).map((e) => chipEtiqueta(e))}${c.etiquetas.length > 3 ? html`<span class="sub">+${c.etiquetas.length - 3}</span>` : ''}</span>` : ''}</span>
         <span class="lado"><span class="hora">${quandoCurto(c.ultimaMensagemEm)}</span>
           ${c.naoLidas ? html`<span class="bolinha">${c.naoLidas > 99 ? '99+' : c.naoLidas}</span>` : html`<span class="marca-estado ${c.estado}" title="${c.estado}"></span>`}</span>
@@ -215,11 +224,11 @@ export async function montar(alvo, ctx) {
     if (aberta) {
       const nova = store.mapa.get(aberta.id);
       if (nova && mudadas?.some((m) => m.id === aberta.id)) {
-        const mudouEstado = nova.estado !== aberta.estado || nova.atendente?.id !== aberta.atendente?.id;
+        const mudouEstado = nova.estado !== aberta.estado || nova.atendente?.id !== aberta.atendente?.id || nova.pendenteEquipeEm !== aberta.pendenteEquipeEm || nova.pendenteMotivo !== aberta.pendenteMotivo;
         aberta = nova;
         if (mudouEstado) desenharCabecalho();
         if (nova.naoLidas && !document.hidden) marcarLida();
-        painel?.recarregar();
+        painel?.recarregar(); cartaoCotacao?.recarregar();
       }
     }
   };
@@ -230,7 +239,7 @@ export async function montar(alvo, ctx) {
   // ---------- conversa aberta ----------
   function chatVazio() {
     caixa.classList.remove('com-conversa');
-    painel?.destruir(); painel = null; lateralEl.hidden = true; caixa.classList.remove('com-lateral');
+    painel?.destruir(); painel = null; cartaoCotacao?.destruir(); cartaoCotacao = null; lateralEl.hidden = true; caixa.classList.remove('com-lateral');
     render(chatEl, html`<div class="chat-vazio">${icone('conversas')}<h3>Escolha uma conversa</h3><p>As mensagens do WhatsApp da loja aparecem aqui.</p></div>`);
   }
 
@@ -239,42 +248,64 @@ export async function montar(alvo, ctx) {
     if (!cab || !aberta) return;
     const c = aberta, minha = c.estado === 'humano' && c.atendente?.id === eu.id;
     render(cab, html`
-      <a class="btn btn-texto btn-icone voltar" href="#/conversas" aria-label="Voltar para a lista">${icone('voltar')}</a>
-      <span class="avatar">${c.contato.nome ? iniciais(c.contato.nome) : '#'}</span>
-      <div class="quem"><strong>${nomeDe(c)}</strong><span>${contatoDe(c)}${c.atendente ? ` · com ${c.atendente.nome}` : ''}${c.transferida ? (c.transferida.atendimento.id === ctx.usuario.loja?.id ? ` · 📍 veio de ${c.transferida.origem.nome}` : ` · 📍 atendida por ${c.transferida.atendimento.nome}`) : ''}</span></div>
+      <div class="chat-cab-topo">
+        <a class="btn btn-texto btn-icone voltar" href="#/conversas" aria-label="Voltar para a lista">${icone('voltar')}</a>
+        <span class="avatar">${c.contato.nome ? iniciais(c.contato.nome) : '#'}</span>
+        <div class="quem"><strong>${nomeDe(c)}</strong><span>${contatoDe(c)}${c.canal === 'site' ? ' · chat do site' : c.canal === 'instagram' ? ' · Instagram' : ' · WhatsApp'}${c.atendente ? ` · com ${c.atendente.nome}` : ''}${c.transferida ? (c.transferida.atendimento.id === ctx.usuario.loja?.id ? ` · 📍 veio de ${c.transferida.origem.nome}` : ` · 📍 atendida por ${c.transferida.atendimento.nome}`) : ''}</span></div>
+        <span class="estado-chat">${pendenteEquipe(c) ? html`<span class="selo alerta" title="${c.pendenteMotivo || ''}">Pendente para a equipe</span>` : ESTADO[c.estado]}</span>
+      </div>
       <div class="acoes-chat">
-        ${ESTADO[c.estado]}
-        <button class="btn btn-contorno" data-lateral aria-pressed="${lateralAberta}" title="Funil, etiquetas e informações do cliente">${icone('painel')}<span class="rotulo-lateral">Dados do cliente</span></button>
-        ${c.estado !== 'encerrada' && ctx.usuario.loja?.modulos?.cotacao !== false ? html`<button class="btn btn-contorno" data-cotacao title="Consultar valores da tabela vigente e enviar ao cliente, sem sair da conversa">${icone('busca')}<span class="rotulo-lateral">Cotação</span></button>` : ''}
         ${!minha && c.estado !== 'encerrada' ? html`<button class="btn btn-primario" data-acao="assumir">Assumir</button>` : ''}
-        ${c.estado === 'humano' ? html`<button class="btn btn-contorno" data-acao="devolver" title="O assistente virtual entra na etapa 3">Devolver ao assistente</button>` : ''}
+        <button class="btn btn-contorno" data-lateral aria-pressed="${lateralAberta}" title="Cotação da Lia, funil, etiquetas e informações do cliente">${icone('painel')}<span class="rotulo-lateral">Dados do cliente</span></button>
+        ${c.estado !== 'encerrada' && ctx.usuario.loja?.modulos?.cotacao !== false ? html`<button class="btn btn-contorno" data-cotacao title="Consultar valores da tabela vigente e enviar ao cliente, sem sair da conversa">${icone('busca')}<span class="rotulo-lateral">Cotação</span></button>` : ''}
+        ${c.estado === 'humano' ? html`<button class="btn btn-contorno" data-acao="devolver" title="O assistente virtual volta a atender">${icone('robo')}<span class="rotulo-lateral">Devolver à Lia</span></button>` : ''}
         ${c.estado !== 'encerrada' && (eu.perfil === 'dono' || minha) ? html`<button class="btn btn-contorno" data-acao="transferir">Transferir</button>` : ''}
         ${c.estado !== 'encerrada' ? html`<button class="btn btn-contorno" data-acao="encerrar">Encerrar</button>` : ''}
       </div>`);
     $$('[data-acao]', cab).forEach((b) => b.addEventListener('click', () => acao(b.dataset.acao, b)));
     $('[data-lateral]', cab).addEventListener('click', () => alternarLateral());
+    desenharFaixaPendente();
     $('[data-cotacao]', cab)?.addEventListener('click', () => {
       if (!canalOk) return avisar('O WhatsApp da loja está desconectado.', 'erro');
-      abrirCotacao({
-        ctx, conversa: c,
-        // "Enviar ao cliente": o texto vai para o campo de mensagem, como o assistente faria — o atendente revisa e manda
-        aoUsarTexto: (texto) => {
-          const campo = $('#texto-msg', chatEl); if (!campo) return;
-          if ($('#modo-nota', chatEl)?.checked) $('#modo-nota', chatEl).click();
-          campo.value = (campo.value.trim() ? campo.value.trimEnd() + '\n\n' : '') + texto;
-          campo.dispatchEvent(new Event('input'));
-          campo.focus(); campo.setSelectionRange(campo.value.length, campo.value.length);
-          avisar('Texto colocado na mensagem. Revise e clique em Enviar.');
-        },
-        // reserva criada pela equipe: o evento aparece no histórico e a conversa passa a ser deste atendente
-        aoReservar: async () => {
-          await buscarNovas();
-          if (aberta?.estado !== 'humano' || aberta.atendente?.id !== eu.id) {
-            try { aberta = await api.acaoConversa(aberta.id, 'assumir'); store.mapa.set(aberta.id, aberta); desenharCabecalho(); desenharLista(); } catch { /* segue */ }
-          }
-        },
-      });
+      abrirCotacao({ ctx, conversa: c, aoUsarTexto: usarTextoNaMensagem, aoReservar: aoReservarDaCotacao });
     });
+  }
+
+  // "Enviar ao cliente": o texto vai para o campo de mensagem, como o assistente faria — o atendente revisa e manda
+  function usarTextoNaMensagem(texto) {
+    const campo = $('#texto-msg', chatEl); if (!campo) return;
+    if ($('#modo-nota', chatEl)?.checked) $('#modo-nota', chatEl).click();
+    campo.value = (campo.value.trim() ? campo.value.trimEnd() + '\n\n' : '') + texto;
+    campo.dispatchEvent(new Event('input'));
+    campo.focus(); campo.setSelectionRange(campo.value.length, campo.value.length);
+    avisar('Texto colocado na mensagem. Revise e clique em Enviar.');
+  }
+  // reserva criada pela equipe: o evento aparece no histórico e a conversa passa a ser deste atendente
+  async function aoReservarDaCotacao() {
+    await buscarNovas();
+    if (aberta?.estado !== 'humano' || aberta.atendente?.id !== eu.id) {
+      try { aberta = await api.acaoConversa(aberta.id, 'assumir'); store.mapa.set(aberta.id, aberta); desenharCabecalho(); desenharLista(); } catch { /* segue */ }
+    }
+    cartaoCotacao?.recarregar();
+  }
+
+  // faixa amarela: a Lia pediu um atendente, ninguém estava disponível e ela continua atendendo
+  function desenharFaixaPendente() {
+    const area = $('#faixa-pendente', chatEl);
+    if (!area || !aberta) return;
+    if (!pendenteEquipe(aberta)) { area.hidden = true; return render(area, ''); }
+    const em = new Date(aberta.pendenteEquipeEm);
+    const quando = `${em.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' })} ${em.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+    area.hidden = false;
+    render(area, html`${icone('alerta')}<span>A Lia pediu um atendente em ${quando}${aberta.pendenteMotivo ? ` (${aberta.pendenteMotivo})` : ''}, mas não havia ninguém disponível. ${aberta.estado === 'assistente' ? 'Ela continua atendendo até alguém assumir.' : ''}<span id="faixa-abertura"></span></span>`);
+    if (expedienteCache === undefined) { expedienteCache = null; api.expediente().then((e) => { expedienteCache = e; preencherAbertura(); }).catch(() => {}); }
+    else preencherAbertura();
+  }
+  let expedienteCache;
+  function preencherAbertura() {
+    const el = $('#faixa-abertura', chatEl);
+    if (!el || !expedienteCache) return;
+    el.textContent = expedienteCache.equipeDisponivel ? ' A equipe está disponível agora.' : expedienteCache.abertoAgora ? ' A loja está no horário, mas ninguém está marcado como "Disponível".' : expedienteCache.proximaAbertura ? ` Próxima abertura da loja: ${expedienteCache.proximaAbertura.texto}.` : '';
   }
 
   async function acao(nome, botao) {
@@ -397,6 +428,7 @@ export async function montar(alvo, ctx) {
       store.mapa.set(aberta.id, { ...store.mapa.get(aberta.id), ...aberta });
       render(chatEl, html`
         <div class="chat-cab" id="chat-cab"></div>
+        <div class="faixa-pendente" id="faixa-pendente" hidden></div>
         ${aberta.canal === 'instagram'
           ? (instagramOk ? '' : html`<div class="aviso-desconectado">${icone('alerta')}<span>O Instagram da loja está desconectado. Dá para ler, mas não para responder.${eu.perfil === 'dono' ? html` <a href="#/whatsapp">Conectar</a>` : ''}</span></div>`)
           : (canalOk ? '' : html`<div class="aviso-desconectado">${icone('alerta')}<span>O WhatsApp da loja está desconectado. Dá para ler, mas não para responder.${eu.perfil === 'dono' ? html` <a href="#/whatsapp">Conectar</a>` : ''}</span></div>`)}
@@ -547,6 +579,6 @@ export async function montar(alvo, ctx) {
       if (!id) { clearTimeout(timerMsgs); aberta = null; store.ativa = null; chatVazio(); desenharLista(); return; }
       if (id !== aberta?.id) abrir(id);
     },
-    limpar: () => { clearTimeout(timerMsgs); store.ouvintes.delete(aoMudarLista); store.ativa = null; painel?.destruir(); },
+    limpar: () => { clearTimeout(timerMsgs); store.ouvintes.delete(aoMudarLista); store.ativa = null; painel?.destruir(); cartaoCotacao?.destruir(); },
   };
 }

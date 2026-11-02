@@ -145,6 +145,70 @@ async function guardarCotacaoEquipe(req, conversaId, mudar) {
   });
 }
 
+// cálculo de preço da equipe (proteções + adicionais) com o texto pronto para o WhatsApp
+async function precoDaEquipe({ loja, periodo, fleetId, protecoes: codigos, adicionais = [] }) {
+  const protecoes = cotacao.normalizarProtecoes(codigos);
+  let r;
+  try { r = await locarx.calcularPreco({ branchId: loja.branch_id, fleetId, retirada: periodo.retirada, devolucao: periodo.devolucao, protecoes, adicionais }); } catch (e) { throw erroLocarx(e); }
+  const rotulo = cotacao.rotuloGrupo({ grupo: r.grupo }, 1);
+  const nomes = cotacao.nomesDasProtecoes(protecoes);
+  const ad = r.adicionais || [];
+  return {
+    fleetId, grupo: r.grupo, letra: rotulo.letra, nome: rotulo.nome, total: r.total, diaria: r.diaria, diarias: r.diarias, taxas: r.taxas, protecoes: nomes, codigos: protecoes, caucao: r.caucao,
+    adicionais: ad, adicionaisDisponiveis: r.adicionaisDisponiveis || [],
+    periodo: { retirada: periodo.retirada, devolucao: periodo.devolucao },
+    textoWhatsapp: `*${rotulo.letra} – ${rotulo.nome}*\n📅 Retirada: ${cotacao.dataBr(periodo.retirada)}\n📅 Devolução: ${cotacao.dataBr(periodo.devolucao)}\n🛡️ Proteção: ${nomes.join(', ')}${ad.length ? `\n➕ Adicionais: ${ad.map((x) => `${x.nome}${x.qtd > 1 ? ' x' + x.qtd : ''}`).join(', ')}` : ''}\n💰 Total: *${cotacao.reais(r.total)}* (pagamento na loja, na retirada)${r.caucao != null ? `\n💳 Caução: ${cotacao.reais(r.caucao)} (pré-autorização no cartão, liberada após a devolução)` : ''}`,
+  };
+}
+
+// ---------- cotação da Lia no painel da conversa (v14 Parte C) ----------
+// O que a Lia consultou/cotou nesta conversa (conversas.opcoes e conversas.cotacao) + o último recálculo da equipe.
+const COTACAO_LIA_VALIDADE_MS = 24 * 3_600_000;
+function cotacaoDaLia(cv) {
+  const op = cv.opcoes || null, ct = cv.cotacao || null;
+  const periodoDe = (x) => (x?.retirada?.date ? { retirada: x.retirada, devolucao: x.devolucao } : x?.periodo?.data_retirada ? { retirada: { date: x.periodo.data_retirada, time: x.periodo.hora_retirada }, devolucao: { date: x.periodo.data_devolucao, time: x.periodo.hora_devolucao } } : null);
+  const periodo = periodoDe(ct) || periodoDe(op);
+  if (!periodo) return null;
+  const em = ct?.em || op?.em || null;
+  const vencida = !em || Date.now() - new Date(em) > COTACAO_LIA_VALIDADE_MS || cotacao.instante(periodo.retirada) <= new Date();
+  const grupos = (op?.grupos || []).map((g) => ({ fleetId: g.fleet_id, letra: g.letra, grupo: g.grupo, total: g.total }));
+  if (ct?.fleetId && !grupos.some((g) => String(g.fleetId) === String(ct.fleetId))) grupos.unshift({ fleetId: ct.fleetId, letra: cotacao.rotuloGrupo({ grupo: ct.grupo }, 1).letra, grupo: ct.grupo, total: ct.total });
+  const diarias = ct?.diarias ?? Math.max(1, Math.ceil((cotacao.instante(periodo.devolucao) - cotacao.instante(periodo.retirada)) / 86_400_000));
+  return {
+    em, vencida, periodo, diarias, filial: ct?.filialNome || op?.filialNome || null, branchId: ct?.branchId || op?.branchId || null,
+    grupos, adicionaisDisponiveis: op?.adicionais || [],
+    cotacao: ct ? { fleetId: ct.fleetId, grupo: ct.grupo, letra: cotacao.rotuloGrupo({ grupo: ct.grupo }, 1).letra, protecoes: ct.protecoes || [], nomesProtecoes: ct.nomesProtecoes || cotacao.nomesDasProtecoes(ct.protecoes || []), adicionais: ct.adicionais || [], total: ct.total, caucao: ct.caucao ?? null, resumoEnviado: !!cv.resumo_enviado_em } : null,
+  };
+}
+
+reservas.get('/conversas/:id/cotacao', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
+  if (!zUuid.safeParse(req.params.id).success) throw erro(404, 'Conversa não encontrada.');
+  const cv = await comContexto(ctx(req), async (c) => (await c.query('SELECT id, opcoes, cotacao, cotacao_equipe, resumo_enviado_em FROM conversas WHERE id = $1 AND (loja_id = $2 OR loja_atendimento_id = $2)', [req.params.id, req.usuario.loja_id])).rows[0]);
+  if (!cv) throw erro(404, 'Conversa não encontrada.');
+  const lia = cotacaoDaLia(cv);
+  const eq = cotacaoValida(cv.cotacao_equipe) ? cv.cotacao_equipe : null;
+  res.json({ lia, equipe: eq?.preco || null, equipeEm: eq?.em || null });
+}));
+
+// Recalcula o preço da cotação da Lia com outro grupo/proteções/adicionais e guarda em cotacao_equipe (vale 24 h).
+reservas.post('/conversas/:id/cotacao/recalcular', exigirPerfil('dono', 'atendente'), limiteCotacao, rota(async (req, res) => {
+  if (!zUuid.safeParse(req.params.id).success) throw erro(404, 'Conversa não encontrada.');
+  const d = validar(z.object({ fleetId: z.coerce.number().int().positive(), protecoes: z.array(z.string().max(30)).max(5).default([]), adicionais: z.array(z.object({ id: z.union([z.string().max(40), z.number()]), qtd: z.coerce.number().int().min(1).max(10).default(1) })).max(10).default([]), }), req.body);
+  const cv = await comContexto(ctx(req), async (c) => (await c.query('SELECT id, loja_id, opcoes, cotacao, cotacao_equipe, resumo_enviado_em FROM conversas WHERE id = $1 AND (loja_id = $2 OR loja_atendimento_id = $2)', [req.params.id, req.usuario.loja_id])).rows[0]);
+  if (!cv) throw erro(404, 'Conversa não encontrada.');
+  const lia = cotacaoDaLia(cv);
+  if (!lia) throw erro(409, 'A Lia ainda não fez nenhuma consulta nesta conversa. Use o botão Cotação para consultar.');
+  if (lia.vencida) throw erro(409, 'A cotação da Lia venceu (mais de 24 h ou retirada já passada). Faça uma consulta nova pelo botão Cotação.');
+  if (!lia.grupos.some((g) => String(g.fleetId) === String(d.fleetId))) throw erro(422, 'Escolha um dos grupos que a Lia mostrou ao cliente.', { fleetId: 'Grupo fora da consulta.' });
+  let periodo;
+  try { periodo = cotacao.validarPeriodo({ data_retirada: lia.periodo.retirada.date, hora_retirada: lia.periodo.retirada.time, data_devolucao: lia.periodo.devolucao.date, hora_devolucao: lia.periodo.devolucao.time }, { antecedenciaHoras: 0 }); } catch (e) { throw erro(409, `Período da cotação inválido: ${e.message}`); }
+  const loja = await lojaDoUsuario(req, lia.branchId ? String(lia.branchId) : undefined).catch(() => lojaDoUsuario(req));
+  const preco = await precoDaEquipe({ loja, periodo, fleetId: d.fleetId, protecoes: d.protecoes, adicionais: d.adicionais });
+  const entrada = { dataRetirada: periodo.retirada.date, horaRetirada: periodo.retirada.time, dataDevolucao: periodo.devolucao.date, horaDevolucao: periodo.devolucao.time };
+  await guardarCotacaoEquipe(req, cv.id, (atual) => ({ ...(atual && atual.entrada?.dataRetirada === entrada.dataRetirada ? atual : { resultado: null }), em: new Date().toISOString(), por: req.usuario.nome, filial: loja.filial || null, entrada, periodo: preco.periodo, origem: 'painel', preco: { ...preco, em: new Date().toISOString() } }));
+  res.json({ ...preco, entrada, filialId: loja.filial?.id || null });
+}));
+
 reservas.get('/cotacao/ultima', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
   const { conversa } = validar(z.object({ conversa: zUuid }), req.query);
   const cv = await comContexto(ctx(req), async (c) => (await c.query('SELECT cotacao_equipe FROM conversas WHERE id = $1 AND loja_id = $2', [conversa, req.usuario.loja_id])).rows[0]);
@@ -176,18 +240,10 @@ reservas.post('/cotacao', exigirPerfil('dono', 'atendente'), limiteCotacao, rota
 }));
 
 reservas.post('/cotacao/preco', exigirPerfil('dono', 'atendente'), limiteCotacao, rota(async (req, res) => {
-  const d = validar(z.object({ ...zPeriodo, fleetId: z.coerce.number().int().positive(), filialId: z.string().max(60).optional(), protecoes: z.array(z.string().max(30)).max(5).default([]), conversaId: zUuid.optional() }), req.body);
+  const d = validar(z.object({ ...zPeriodo, fleetId: z.coerce.number().int().positive(), filialId: z.string().max(60).optional(), protecoes: z.array(z.string().max(30)).max(5).default([]), adicionais: z.array(z.object({ id: z.union([z.string().max(40), z.number()]), qtd: z.coerce.number().int().min(1).max(10).default(1) })).max(10).default([]), conversaId: zUuid.optional() }), req.body);
   const periodo = periodoDaEquipe(d);
   const loja = await lojaDoUsuario(req, d.filialId);
-  const protecoes = cotacao.normalizarProtecoes(d.protecoes);
-  let r;
-  try { r = await locarx.calcularPreco({ branchId: loja.branch_id, fleetId: d.fleetId, retirada: periodo.retirada, devolucao: periodo.devolucao, protecoes }); } catch (e) { throw erroLocarx(e); }
-  const rotulo = cotacao.rotuloGrupo({ grupo: r.grupo }, 1);
-  const nomes = cotacao.nomesDasProtecoes(protecoes);
-  const resposta = {
-    fleetId: d.fleetId, grupo: r.grupo, letra: rotulo.letra, nome: rotulo.nome, total: r.total, diaria: r.diaria, diarias: r.diarias, taxas: r.taxas, protecoes: nomes, codigos: protecoes, caucao: r.caucao,
-    textoWhatsapp: `*${rotulo.letra} – ${rotulo.nome}*\n📅 Retirada: ${cotacao.dataBr(periodo.retirada)}\n📅 Devolução: ${cotacao.dataBr(periodo.devolucao)}\n🛡️ Proteção: ${nomes.join(', ')}\n💰 Total: *${cotacao.reais(r.total)}* (pagamento na loja, na retirada)${r.caucao != null ? `\n💳 Caução: ${cotacao.reais(r.caucao)} (pré-autorização no cartão, liberada após a devolução)` : ''}`,
-  };
+  const resposta = await precoDaEquipe({ loja, periodo, fleetId: d.fleetId, protecoes: d.protecoes, adicionais: d.adicionais });
   // guarda o cálculo junto da cotação da conversa (se for do mesmo período)
   await guardarCotacaoEquipe(req, d.conversaId, (atual) => (atual && atual.entrada?.dataRetirada === d.dataRetirada && atual.entrada?.horaRetirada === d.horaRetirada && atual.entrada?.dataDevolucao === d.dataDevolucao && atual.entrada?.horaDevolucao === d.horaDevolucao ? { ...atual, preco: { ...resposta, em: new Date().toISOString() } } : atual));
   res.json(resposta);
@@ -201,6 +257,7 @@ const zReservaEquipe = z.object({
   fleetId: z.coerce.number().int().positive(),
   filialId: z.string().max(60).optional(),
   protecoes: z.array(z.string().max(30)).max(5).default([]),
+  adicionais: z.array(z.object({ id: z.union([z.string().max(40), z.number()]), qtd: z.coerce.number().int().min(1).max(10).default(1) })).max(10).default([]),
   nome: z.string().trim().min(2, 'Informe o nome completo.').max(120).refine((v) => v.split(/\s+/).length >= 2, 'Informe o nome completo.'),
   cpf: z.string().trim().max(20).refine((v) => cpfValido(v), 'CPF inválido.'),
   email: z.string().trim().toLowerCase().max(254).email('Informe um e-mail válido.'),
@@ -235,7 +292,7 @@ reservas.post('/reservas', exigirPerfil('dono', 'atendente'), limiteCotacao, rot
   const base = { lojaId: loja.id, usuarioId: req.usuario.id, conversaId: vinculo.conversa?.id || null, origem: 'equipe', tipo: 'reserva' };
   const contexto = { fleetId: d.fleetId, protecoes, periodo: { retirada: periodo.retirada, devolucao: periodo.devolucao }, passo: d.confirmar ? 'confirmar' : 'resumo' };
   let preco;
-  try { preco = await locarx.calcularPreco({ branchId: loja.branch_id, fleetId: d.fleetId, retirada: periodo.retirada, devolucao: periodo.devolucao, protecoes }); } catch (e) {
+  try { preco = await locarx.calcularPreco({ branchId: loja.branch_id, fleetId: d.fleetId, retirada: periodo.retirada, devolucao: periodo.devolucao, protecoes, adicionais: d.adicionais }); } catch (e) {
     const amigavel = erroLocarx(e);
     await registrarOcorrencia({ ...base, nivel: 'erro', mensagem: `Reserva não criada (cálculo do preço): ${amigavel.message}`, detalhes: detalhesDoErro(e, contexto) });
     throw amigavel;
@@ -243,8 +300,8 @@ reservas.post('/reservas', exigirPerfil('dono', 'atendente'), limiteCotacao, rot
   const rotulo = cotacao.rotuloGrupo({ grupo: preco.grupo }, 1);
   const nomes = cotacao.nomesDasProtecoes(protecoes);
   if (d.pagamento === 'pix' && !(await cobrancas.contaDaLoja(req.usuario.loja_id)).disponivel) throw erro(409, 'Pagamento Pix não está disponível para esta loja.');
-  const resumo = `*Resumo da reserva*\n🚗 ${rotulo.letra} – ${rotulo.nome}${loja.filial && !loja.filial.principal ? `\n📍 Filial: ${loja.filial.nome}` : ''}\n📅 Retirada: ${cotacao.dataBr(periodo.retirada)}\n📅 Devolução: ${cotacao.dataBr(periodo.devolucao)}\n🛡️ Proteção: ${nomes.join(', ')}\n💰 Total: *${cotacao.reais(preco.total)}* (${d.pagamento === 'pix' ? 'pagamento via Pix pelo WhatsApp' : 'pagamento na loja, na retirada'})${preco.caucao != null ? `\n💳 Caução: ${cotacao.reais(preco.caucao)} (pré-autorização no cartão, liberada após a devolução)` : ''}\n👤 ${cliente.nome} · CPF final ${cliente.cpf.slice(-2)} · ${cliente.email}`;
-  if (!d.confirmar) return res.json({ passo: 'resumo', grupo: preco.grupo, letra: rotulo.letra, nome: rotulo.nome, total: preco.total, diarias: preco.diarias, protecoes: nomes, resumo, pagamento: d.pagamento });
+  const resumo = `*Resumo da reserva*\n🚗 ${rotulo.letra} – ${rotulo.nome}${loja.filial && !loja.filial.principal ? `\n📍 Filial: ${loja.filial.nome}` : ''}\n📅 Retirada: ${cotacao.dataBr(periodo.retirada)}\n📅 Devolução: ${cotacao.dataBr(periodo.devolucao)}\n🛡️ Proteção: ${nomes.join(', ')}${(preco.adicionais || []).length ? `\n➕ Adicionais: ${preco.adicionais.map((x) => `${x.nome}${x.qtd > 1 ? ' x' + x.qtd : ''}`).join(', ')}` : ''}\n💰 Total: *${cotacao.reais(preco.total)}* (${d.pagamento === 'pix' ? 'pagamento via Pix pelo WhatsApp' : 'pagamento na loja, na retirada'})${preco.caucao != null ? `\n💳 Caução: ${cotacao.reais(preco.caucao)} (pré-autorização no cartão, liberada após a devolução)` : ''}\n👤 ${cliente.nome} · CPF final ${cliente.cpf.slice(-2)} · ${cliente.email}`;
+  if (!d.confirmar) return res.json({ passo: 'resumo', grupo: preco.grupo, letra: rotulo.letra, nome: rotulo.nome, total: preco.total, diarias: preco.diarias, protecoes: nomes, adicionais: preco.adicionais || [], resumo, pagamento: d.pagamento, avisoAdicionais: (preco.adicionais || []).length && !config.locarx?.reservaAdicionais ? 'Os adicionais ainda não vão pela API: entram nas observações da reserva para a equipe incluir na retirada.' : null });
 
   // Pix: gera a cobrança; a reserva no portal é criada quando o webhook confirmar o pagamento
   if (d.pagamento === 'pix') {
@@ -269,7 +326,7 @@ reservas.post('/reservas', exigirPerfil('dono', 'atendente'), limiteCotacao, rot
   }
 
   let reserva;
-  try { reserva = await locarx.criarReserva({ branchId: loja.branch_id, fleetId: d.fleetId, retirada: periodo.retirada, devolucao: periodo.devolucao, protecoes, cliente }); } catch (e) {
+  try { reserva = await locarx.criarReserva({ branchId: loja.branch_id, fleetId: d.fleetId, retirada: periodo.retirada, devolucao: periodo.devolucao, protecoes, adicionais: d.adicionais, cliente }); } catch (e) {
     const amigavel = erroLocarx(e);
     await registrarOcorrencia({ ...base, nivel: 'erro', mensagem: `Reserva não criada: ${amigavel.message}`, detalhes: detalhesDoErro(e, contexto) });
     throw amigavel;
@@ -282,7 +339,7 @@ reservas.post('/reservas', exigirPerfil('dono', 'atendente'), limiteCotacao, rot
   try {
     reservaId = await registrarReserva(
       { lojaId: loja.id, branchId: loja.branch_id, contatoId, conversaId: vinculo.conversa?.id || null, origem: 'equipe' },
-      reserva, { ini: periodo.ini, fim: periodo.fim }, cliente, { fleetId: d.fleetId, protecoes, porUsuarioId: req.usuario.id },
+      reserva, { ini: periodo.ini, fim: periodo.fim }, cliente, { fleetId: d.fleetId, protecoes, adicionais: preco.adicionais || [], porUsuarioId: req.usuario.id },
     );
     await comContexto(ctx(req), async (c) => {
       if (vinculo.conversa) {

@@ -37,7 +37,9 @@ export async function montar(alvo, ctx) {
         <li><strong>Proteção</strong>: toda reserva tem Proteção X ou Super X; não existe "sem proteção". Terceiros, Vidros e Vidros e Pneus são opcionais.</li>
         <li><strong>Antecedência</strong>: reserva pelo assistente só com retirada a partir de 24 h; antes disso, chama atendente.</li>
         <li><strong>Mesma filial</strong>: retirada e devolução sempre na mesma filial. Períodos acima de 90 dias vão para atendente.</li>
-        <li><strong>Cancelamento</strong>: sempre com atendente; nunca pelo assistente.</li>
+        <li><strong>Cancelamento</strong>: sempre com a equipe; a Lia só registra o pedido (tarefa "Cancelamento") e avisa que a equipe confirma. Nunca cancela.</li>
+        <li><strong>Alteração de reserva</strong>: a Lia registra o pedido (tarefa "Alteração") e pode cotar as datas novas; quem confirma é a equipe.</li>
+        <li><strong>Sem atendente disponível</strong> (fora do horário, feriado): a Lia avisa quando a equipe volta e continua atendendo, se a loja deixou essa opção ligada.</li>
         <li><strong>Valores</strong>: preços, totais e disponibilidade vêm só da API LocarX; a Lia nunca calcula nem promete desconto por conta própria.</li>
         <li><strong>Não inventar</strong>: caução, coparticipação, franquia, multa, taxa, idade, documentos — só o que estiver aqui, na base de conhecimento ou na API.</li>
         <li><strong>Aplicativos e frota</strong>: não aluga para motorista de aplicativo; frota/empresa vai para atendente.</li>

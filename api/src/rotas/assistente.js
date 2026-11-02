@@ -12,6 +12,7 @@ import * as locarx from '../servicos/locarx/api-locarx.js';
 import { resolverFilial, filiaisDaLoja, filiaisComPortal, filialPublica } from '../servicos/locarx/filiais.js';
 import { rota, erro, validar, zUuid, exigirPerfil, registrar } from '../http.js';
 import { moduloLigado } from '../servicos/modulos.js';
+import { situacaoDaEquipe } from '../servicos/crm/expediente.js';
 
 export const assistente = Router();   // /api/loja/...
 export const conhecimento = Router(); // /api/conhecimento
@@ -28,6 +29,7 @@ function publico(a) {
     horario: a.horario, foraHorario: a.fora_horario, palavrasAtendente: a.palavras_atendente, retornoHoras: a.retorno_horas,
     provedor: a.provedor, modelo: a.modelo, temChave: !!a.chave_cifrada, chaveFinal: a.chave_final || null, temChaveAudio: !!a.chave_audio_cifrada,
     limiteDiario: a.limite_diario, silencioInicio: a.silencio_inicio, silencioFim: a.silencio_fim,
+    diasFechados: Array.isArray(a.dias_fechados) ? a.dias_fechados : [], continuarSemEquipe: a.continuar_sem_equipe !== false,
   };
 }
 
@@ -52,6 +54,20 @@ assistente.get('/assistente', exigirPerfil('dono'), rota(async (req, res) => {
 
 const zHorario = z.record(z.enum(DIAS), z.tuple([z.string().regex(HORA), z.string().regex(HORA)]).nullable())
   .refine((h) => Object.values(h).every((f) => !f || f[0] < f[1]), 'O horário de fechar precisa ser depois do de abrir.');
+const DATA = /^\d{4}-\d{2}-\d{2}$/;
+const dataOk = (d) => DATA.test(d) && !Number.isNaN(Date.parse(`${d}T00:00:00Z`)) && new Date(`${d}T00:00:00Z`).toISOString().slice(0, 10) === d;
+// dias fechados e feriados: { de, ate, motivo, abre?, fecha? } — com abre e fecha é horário especial; sem eles, fechado
+const zDiaFechado = z.object({
+  de: z.string().refine(dataOk, 'Data inválida.'),
+  ate: z.string().refine(dataOk, 'Data inválida.'),
+  motivo: z.string().trim().max(80, 'Motivo com no máximo 80 caracteres.').default(''),
+  abre: z.string().regex(HORA).nullable().optional().default(null),
+  fecha: z.string().regex(HORA).nullable().optional().default(null),
+}).refine((f) => f.de <= f.ate, 'A data final precisa ser igual ou depois da inicial.')
+  .refine((f) => (!f.abre && !f.fecha) || (f.abre && f.fecha), 'Informe os dois horários (abre e fecha) ou nenhum.')
+  .refine((f) => !f.abre || !f.fecha || f.abre < f.fecha, 'O horário de fechar precisa ser depois do de abrir.');
+const zDiasFechados = z.array(zDiaFechado).max(60, 'No máximo 60 períodos fechados.');
+const normalizarDias = (lista) => lista.map((f) => ({ de: f.de, ate: f.ate, motivo: f.motivo || '', abre: f.abre || null, fecha: f.fecha || null })).sort((a, b) => a.de.localeCompare(b.de));
 
 assistente.put('/assistente', exigirPerfil('dono'), rota(async (req, res) => {
   const d = validar(z.object({
@@ -68,20 +84,37 @@ assistente.put('/assistente', exigirPerfil('dono'), rota(async (req, res) => {
     limiteDiario: z.coerce.number().int().min(0).max(100000),
     silencioInicio: z.coerce.number().int().min(0).max(23),
     silencioFim: z.coerce.number().int().min(0).max(23),
+    diasFechados: zDiasFechados.optional(),
+    continuarSemEquipe: z.boolean().optional(),
   }), req.body);
   const a = await comContexto(ctx(req), async (c) => {
     const atual = await garantirAssistente(c, req.usuario.loja_id);
     if (d.ativo && !atual.chave_cifrada && !config.iaSimulada) throw erro(422, 'Cadastre a chave da IA antes de ligar o assistente.', { ativo: 'Cadastre a chave da IA antes de ligar.' });
+    const dias = d.diasFechados ? normalizarDias(d.diasFechados) : (Array.isArray(atual.dias_fechados) ? atual.dias_fechados : []);
     const r = (await c.query(
       `UPDATE assistentes SET ativo = $2, nome = $3, instrucoes = $4, boas_vindas = $5, msg_ausencia = $6, msg_repasse = $7, horario = $8,
-         fora_horario = $9, palavras_atendente = $10, retorno_horas = $11, limite_diario = $12, silencio_inicio = $13, silencio_fim = $14, atualizado_em = now()
+         fora_horario = $9, palavras_atendente = $10, retorno_horas = $11, limite_diario = $12, silencio_inicio = $13, silencio_fim = $14,
+         dias_fechados = $15, continuar_sem_equipe = $16, atualizado_em = now()
        WHERE loja_id = $1 RETURNING *`,
       [req.usuario.loja_id, d.ativo, d.nome, d.instrucoes, d.boasVindas, d.msgAusencia, d.msgRepasse, JSON.stringify(d.horario), d.foraHorario,
-        d.palavrasAtendente.map((p) => p.toLowerCase()), d.retornoHoras, d.limiteDiario, d.silencioInicio, d.silencioFim])).rows[0];
+        d.palavrasAtendente.map((p) => p.toLowerCase()), d.retornoHoras, d.limiteDiario, d.silencioInicio, d.silencioFim,
+        JSON.stringify(dias), d.continuarSemEquipe ?? atual.continuar_sem_equipe !== false])).rows[0];
     await registrar(c, req, 'configurou_assistente', { detalhes: { ativo: d.ativo } });
     return r;
   });
   res.json(publico(a));
+}));
+
+// Como a Lia vai responder agora: loja aberta ou fechada, alguém da equipe disponível e a próxima abertura
+assistente.get('/assistente/expediente', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
+  const sit = await comContexto(ctx(req), async (c) => {
+    const a = req.usuario.perfil === 'dono' ? await garantirAssistente(c, req.usuario.loja_id) : null;
+    return situacaoDaEquipe(c, req.usuario.loja_id, a);
+  });
+  res.json({
+    abertoAgora: sit.abertoAgora, equipeDisponivel: sit.equipeDisponivel, pessoasDisponiveis: sit.pessoas, continuarSemEquipe: sit.continuarSemEquipe,
+    proximaAbertura: sit.proximaAbertura ? { em: sit.proximaAbertura.em, texto: sit.proximaAbertura.texto, abertoAgora: sit.proximaAbertura.abertoAgora } : null,
+  });
 }));
 
 assistente.post('/assistente/chave', exigirPerfil('dono'), rota(async (req, res) => {
@@ -335,6 +368,17 @@ rede.get('/prompt/previa', exigirPerfil('admin', 'matriz'), rota(async (req, res
 
 // Conferir conflitos: a IA compara as regras da rede (texto que o admin está escrevendo) com a parte FIXA do prompt
 // e aponta contradições. Usa a chave de IA de uma loja ativa (a rede não tem chave própria). Só no clique.
+// v14 Parte D: só contradição real — complementos, repetições, estilo compatível e diferenças de formato não contam.
+export const SISTEMA_CONFLITOS = `Você revisa regras de negócio escritas pela administração de uma rede de locadoras para um assistente virtual. Receberá (1) o PROMPT FIXO do assistente, que não pode ser alterado, e (2) as REGRAS DA REDE escritas pela administração. Aponte SOMENTE contradições reais entre as regras e o prompt fixo (ex.: a regra diz "pode reservar com 12 h" e o fixo exige 24 h; a regra manda cancelar pelo assistente e o fixo proíbe). Ignore complementos, detalhes e estilo.
+Só aponte CONTRADIÇÃO REAL: a regra da rede manda fazer o oposto do fixo, ou algo que o fixo proíbe. NÃO aponte:
+(a) regras que completam o fixo (ex.: "se não pagar pelo Pix, paga na loja");
+(b) regras que repetem o fixo com outras palavras;
+(c) regras de estilo compatíveis com o roteiro (ex.: "uma pergunta por vez" × a pergunta da forma de pagamento, que é uma pergunta só);
+(d) diferenças de formato que o fixo já resolve (ex.: "no máximo 3 opções" × enviar o texto_para_cliente como veio).
+Na dúvida, não aponte.
+Exemplos calibrados: "Se o cliente não pagar pelo Pix, o pagamento é feito na loja" → SEM conflito (completa o fixo). "Uma pergunta por vez" → SEM conflito. "Ofereça um grupo mais econômico ou outras datas" → CONFLITO: o fixo proíbe procurar outras datas por conta própria (só se o próprio cliente pedir).
+Responda em JSON puro, sem markdown: {"conflitos":[{"regra":"trecho da regra","fixo":"o que o prompt fixo diz","efeito":"o que a Lia vai fazer na prática (o fixo prevalece)","sugestao":"como reescrever ou o que pedir ao desenvolvedor"}],"resumo":"uma frase"}. Se não houver contradição, "conflitos" vazio e o resumo diz isso.`;
+
 rede.post('/prompt/conflitos', exigirPerfil('admin', 'matriz'), rota(async (req, res) => {
   const d = validar(z.object({ texto: z.string().max(20000) }), req.body);
   if (!d.texto.trim()) return res.json({ conflitos: [], resumo: 'Nenhuma regra escrita ainda.' });
@@ -346,7 +390,7 @@ rede.post('/prompt/conflitos', exigirPerfil('admin', 'matriz'), rota(async (req,
     const fixo = montarSistema({ loja, a: { nome: 'Lia', instrucoes: '', boas_vindas: '' }, rede: { orientacoes_rede: '' }, contato: { nome: 'Cliente' }, historicoReservas: [], crm: null, pix: !!config.abacatepay, filiais: [] });
     return { a, fixo };
   });
-  const sistema = `Você revisa regras de negócio escritas pela administração de uma rede de locadoras para um assistente virtual. Receberá (1) o PROMPT FIXO do assistente, que não pode ser alterado, e (2) as REGRAS DA REDE escritas pela administração. Aponte SOMENTE contradições reais entre as regras e o prompt fixo (ex.: a regra diz "pode reservar com 12 h" e o fixo exige 24 h; a regra manda cancelar pelo assistente e o fixo proíbe). Ignore complementos, detalhes e estilo. Responda em JSON puro, sem markdown: {"conflitos":[{"regra":"trecho da regra","fixo":"o que o prompt fixo diz","efeito":"o que a Lia vai fazer na prática (o fixo prevalece)","sugestao":"como reescrever ou o que pedir ao desenvolvedor"}],"resumo":"uma frase"}. Se não houver contradição, "conflitos" vazio e o resumo diz isso.`;
+  const sistema = SISTEMA_CONFLITOS;
   const pergunta = `PROMPT FIXO:\n"""\n${r.fixo}\n"""\n\nREGRAS DA REDE:\n"""\n${d.texto}\n"""`;
   const { decifrar } = await import('../servicos/seguranca.js');
   if (config.iaSimulada) return res.json({ conflitos: [], resumo: 'IA simulada: sem análise real.', usandoChaveDe: r.a.nome });

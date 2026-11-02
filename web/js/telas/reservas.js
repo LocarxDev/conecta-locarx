@@ -7,7 +7,9 @@ const dataHora = (iso) => (iso ? new Date(iso).toLocaleString('pt-BR', { day: '2
 const SITUACAO = { confirmada: 'ok', 'em andamento': 'marca', concluida: 'neutro', cancelada: 'erro' };
 
 export async function montar(alvo, ctx) {
-  let periodo = 'proximas', busca = '', lista = [], espera = null, variasFiliais = false, filial = '', escopo = 'minhas', destino = '';
+  // #/reservas/<código> abre a lista já filtrada por esse código (botão "Abrir reserva" no painel da conversa)
+  const buscaInicial = ctx.params?.[0] ? decodeURIComponent(ctx.params[0]) : '';
+  let periodo = buscaInicial ? 'todas' : 'proximas', busca = buscaInicial, lista = [], espera = null, variasFiliais = false, filial = '', escopo = 'minhas', destino = '';
   api.filiais().then((f) => {
     variasFiliais = f.length > 1;
     if (!variasFiliais) return;
@@ -23,7 +25,7 @@ export async function montar(alvo, ctx) {
     <div id="cobrancas-pix" hidden></div>
     <section class="painel">
       <div class="painel-cab">
-        <label class="busca"><span class="sr-only">Buscar</span>${icone('busca')}<input id="busca-res" type="search" placeholder="Código, nome ou telefone"></label>
+        <label class="busca"><span class="sr-only">Buscar</span>${icone('busca')}<input id="busca-res" type="search" placeholder="Código, nome ou telefone" value="${buscaInicial}"></label>
         <div class="abas" id="abas-escopo" hidden>${[['minhas', 'Desta loja'], ['central', 'Vindas da Central']].map(([v, t]) => html`<button data-e="${v}" class="${v === escopo ? 'ativa' : ''}">${t}</button>`)}</div>
         <div class="abas" id="abas-periodo">${[['proximas', 'Próximas'], ['passadas', 'Anteriores'], ['todas', 'Todas']].map(([v, t]) => html`<button data-p="${v}" class="${v === periodo ? 'ativa' : ''}">${t}</button>`)}</div>
       </div>
