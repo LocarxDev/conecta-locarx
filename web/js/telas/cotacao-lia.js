@@ -9,15 +9,20 @@ const reais = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { st
 const dataBr = (x) => (x?.date ? `${x.date.split('-').reverse().slice(0, 2).join('/')} · ${x.time}` : '—');
 const hora = (iso) => new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 const nomeDoGrupo = (grupo) => String(grupo || '').replace(/^\s*[A-Z0-9]{1,3}\s*[-–.]\s*/i, '') || grupo;
-const BASICAS = [['PROTECAO_X', 'Proteção X'], ['PROTECAO_SUPER_X', 'Super X']];
-const OPCIONAIS = [['TERCEIROS', 'Terceiros'], ['VIDROS', 'Vidros'], ['VIDROS_E_PNEUS', 'Vidros e pneus']];
+// Só para cotações antigas (antes da v14.1), que não guardaram as proteções do grupo: nomes sem valor.
+const RESERVA = [
+  { codigo: 'PROTECAO_X', nome: 'Proteção X', base: true }, { codigo: 'PROTECAO_SUPER_X', nome: 'Super X', base: true },
+  { codigo: 'TERCEIROS', nome: 'Terceiros' }, { codigo: 'VIDROS', nome: 'Vidros' }, { codigo: 'VIDROS_E_PNEUS', nome: 'Vidros e pneus' },
+];
+const ehBasica = (p) => p.base || /^PROTECAO_(SUPER_)?X$/.test(p.codigo);
+const comValor = (p) => (p.diaria != null ? ` · ${reais(p.diaria)}/diária` : '');
 
 /**
  * @param {HTMLElement} el
  * @param {{ ctx, conversa, aoUsarTexto?: (texto) => void, aoReservar?: () => void }} op
  */
 export function montarCartaoCotacao(el, { ctx, conversa, aoUsarTexto, aoReservar }) {
-  let d = null, preco = null, precoEm = null, vivo = true, mexeu = false;
+  let d = null, preco = null, precoEm = null, vivo = true, mexeu = false, escolha = null;   // escolha: o que o atendente marcou, mantido ao trocar de grupo
 
   async function carregar() {
     try {
@@ -28,7 +33,7 @@ export function montarCartaoCotacao(el, { ctx, conversa, aoUsarTexto, aoReservar
       // preço mais recente: o recálculo da equipe (se for do mesmo período) ou a cotação da Lia
       preco = r.equipe && r.equipe.periodo?.retirada?.date === d.periodo.retirada.date ? r.equipe : null;
       precoEm = preco ? (preco.em || r.equipeEm) : d.cotacao?.em || null;
-      mexeu = false;
+      mexeu = false; escolha = null;
       el.hidden = false;
       desenhar();
     } catch (err) { if (vivo) { el.hidden = true; render(el, ''); if (err.status === 401) ctx.sessaoExpirou?.(); } }
@@ -36,18 +41,23 @@ export function montarCartaoCotacao(el, { ctx, conversa, aoUsarTexto, aoReservar
 
   const selecao = () => {
     const fleetId = $('[name="cl-grupo"]', el)?.value;
-    const basica = $('[name="cl-basica"]', el)?.value || 'PROTECAO_X';
+    const basica = $('[name="cl-basica"]', el)?.value;
     const opc = $$('[name="cl-opc"]:checked', el).map((i) => i.value);
     const adicionais = $$('[data-ad]:checked', el).map((i) => { const a = d.adicionaisDisponiveis.find((x) => String(x.id) === i.dataset.ad); const qtd = Number($(`[data-qtd="${i.dataset.ad}"]`, el)?.value || 1) || 1; return { id: a.id, nome: a.nome, qtd: a.maximo ? Math.min(qtd, a.maximo) : qtd, valor: a.diaria }; });
-    return { fleetId, protecoes: [basica, ...opc], adicionais };
+    return { fleetId, protecoes: [basica, ...opc].filter(Boolean), adicionais };
   };
 
   function desenhar() {
     const c = d.cotacao;
-    const fleetSel = preco?.fleetId ?? c?.fleetId ?? d.grupos[0]?.fleetId;
-    const prot = preco?.codigos || c?.protecoes || ['PROTECAO_X'];
-    const basica = prot.find((p) => /^PROTECAO_(SUPER_)?X$/.test(p)) || 'PROTECAO_X';
-    const adSel = preco?.adicionais || c?.adicionais || [];
+    const fleetSel = escolha?.fleetId ?? preco?.fleetId ?? c?.fleetId ?? d.grupos[0]?.fleetId;
+    // proteções do grupo escolhido, como o portal ofereceu (recálculo da equipe > consulta da Lia > lista de reserva)
+    const doGrupo = (preco && String(preco.fleetId) === String(fleetSel) && preco.protecoesDisponiveis?.length) ? preco.protecoesDisponiveis
+      : (d.grupos.find((g) => String(g.fleetId) === String(fleetSel))?.protecoes || []);
+    const listaProt = doGrupo.length ? doGrupo : RESERVA;
+    const basicas = listaProt.filter(ehBasica), opcionais = listaProt.filter((p) => !ehBasica(p));
+    const prot = (escolha?.protecoes || preco?.codigos || c?.protecoes || []).filter((x) => listaProt.some((p) => p.codigo === x));
+    const basica = prot.find((x) => basicas.some((p) => p.codigo === x)) || basicas.find((p) => p.padrao)?.codigo || basicas[0]?.codigo;
+    const adSel = escolha?.adicionais || preco?.adicionais || c?.adicionais || [];
     const total = preco?.total ?? c?.total ?? null;
     const grupoDe = (fid) => d.grupos.find((g) => String(g.fleetId) === String(fid));
     render(el, html`<section class="pc-bloco cl-cartao" aria-label="Cotação da Lia">
@@ -61,9 +71,10 @@ export function montarCartaoCotacao(el, { ctx, conversa, aoUsarTexto, aoReservar
       </div>
       <div class="form-linha">
         <div class="campo"><label for="cl-grupo">Grupo</label><select id="cl-grupo" name="cl-grupo">${d.grupos.map((g) => html`<option value="${g.fleetId}" ${String(g.fleetId) === String(fleetSel) ? 'selected' : ''}>${g.letra} – ${nomeDoGrupo(g.grupo)}${g.total != null ? ` · ${reais(g.total)}` : ''}</option>`)}</select></div>
-        <div class="campo"><label for="cl-basica">Proteção</label><select id="cl-basica" name="cl-basica">${BASICAS.map(([v, t]) => html`<option value="${v}" ${v === basica ? 'selected' : ''}>${t}</option>`)}</select></div>
+        <div class="campo"><label for="cl-basica">Proteção</label><select id="cl-basica" name="cl-basica">${basicas.map((p) => html`<option value="${p.codigo}" ${p.codigo === basica ? 'selected' : ''}>${p.nome}${comValor(p)}</option>`)}</select></div>
       </div>
-      <div class="cl-opcionais">${OPCIONAIS.map(([v, t]) => html`<label class="checkbox"><input type="checkbox" name="cl-opc" value="${v}" ${prot.includes(v) ? 'checked' : ''}> ${t}</label>`)}</div>
+      ${opcionais.length ? html`<div class="cl-opcionais">${opcionais.map((p) => html`<label class="checkbox"><input type="checkbox" name="cl-opc" value="${p.codigo}" ${prot.includes(p.codigo) ? 'checked' : ''}> ${p.nome}${p.diaria != null ? html` <span class="sub num">${reais(p.diaria)}/diária</span>` : ''}</label>`)}</div>` : ''}
+      <p class="sub">${doGrupo.length ? 'Proteções e valores por diária do portal para este grupo.' : 'Valores das proteções: clique em Atualizar preço.'}</p>
       <div class="campo"><label>Serviços adicionais <span class="sub">(valor por diária, da API)</span></label>
         ${d.adicionaisDisponiveis.length ? html`<div class="cl-adicionais">${d.adicionaisDisponiveis.map((a) => { const s = adSel.find((x) => String(x.id) === String(a.id)); return html`<label class="checkbox"><input type="checkbox" data-ad="${a.id}" ${s ? 'checked' : ''}> <span class="cl-ad-nome">${a.nome}</span>${a.maximo && a.maximo > 1 ? html`<input type="number" class="cl-qtd" data-qtd="${a.id}" min="1" max="${a.maximo}" value="${s?.qtd || 1}" aria-label="Quantidade de ${a.nome}">` : ''}<span class="sub num" title="por diária">${a.diaria != null ? reais(a.diaria) + '/diária' : 'valor na API'}</span></label>`; })}</div>`
           : html`<p class="sub">Nenhum serviço adicional veio da API nesta consulta.</p>`}
@@ -82,7 +93,9 @@ export function montarCartaoCotacao(el, { ctx, conversa, aoUsarTexto, aoReservar
       if (i.checked && (i.value === 'VIDROS' || i.value === 'VIDROS_E_PNEUS')) $$('[name="cl-opc"]', el).forEach((o) => { if (o !== i && /VIDROS/.test(o.value)) o.checked = false; });
       marcarMexeu();
     }));
-    $$('select, [data-ad], [data-qtd]', el).forEach((i) => i.addEventListener('change', marcarMexeu));
+    // trocar de grupo muda as proteções oferecidas: redesenha mantendo o que dá para manter
+    $('[name="cl-grupo"]', el).addEventListener('change', () => { escolha = selecao(); desenhar(); marcarMexeu(); });
+    $$('[name="cl-basica"], [data-ad], [data-qtd]', el).forEach((i) => i.addEventListener('change', marcarMexeu));
     $('#cl-atualizar', el).addEventListener('click', (e) => atualizar(e.currentTarget));
     $('#cl-reservar', el).addEventListener('click', () => reservar(grupoDe));
     $('#cl-usar', el)?.addEventListener('click', () => { if (preco?.textoWhatsapp) aoUsarTexto(preco.textoWhatsapp); });
@@ -99,7 +112,7 @@ export function montarCartaoCotacao(el, { ctx, conversa, aoUsarTexto, aoReservar
     await comBotao(botao, async () => {
       try {
         preco = await api.recalcularCotacao(conversa.id, { fleetId: s.fleetId, protecoes: s.protecoes, adicionais: s.adicionais.map((a) => ({ id: a.id, qtd: a.qtd })) });
-        precoEm = new Date().toISOString(); mexeu = false;
+        precoEm = new Date().toISOString(); mexeu = false; escolha = null;
         if (preco.adicionaisDisponiveis?.length) d.adicionaisDisponiveis = preco.adicionaisDisponiveis;
         desenhar();
         avisar(`Preço atualizado: ${reais(preco.total)}.`);

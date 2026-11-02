@@ -155,7 +155,7 @@ async function precoDaEquipe({ loja, periodo, fleetId, protecoes: codigos, adici
   const ad = r.adicionais || [];
   return {
     fleetId, grupo: r.grupo, letra: rotulo.letra, nome: rotulo.nome, total: r.total, diaria: r.diaria, diarias: r.diarias, taxas: r.taxas, protecoes: nomes, codigos: protecoes, caucao: r.caucao,
-    adicionais: ad, adicionaisDisponiveis: r.adicionaisDisponiveis || [],
+    adicionais: ad, adicionaisDisponiveis: r.adicionaisDisponiveis || [], protecoesDisponiveis: r.protecoesDisponiveis || [],
     periodo: { retirada: periodo.retirada, devolucao: periodo.devolucao },
     textoWhatsapp: `*${rotulo.letra} – ${rotulo.nome}*\n📅 Retirada: ${cotacao.dataBr(periodo.retirada)}\n📅 Devolução: ${cotacao.dataBr(periodo.devolucao)}\n🛡️ Proteção: ${nomes.join(', ')}${ad.length ? `\n➕ Adicionais: ${ad.map((x) => `${x.nome}${x.qtd > 1 ? ' x' + x.qtd : ''}`).join(', ')}` : ''}\n💰 Total: *${cotacao.reais(r.total)}* (pagamento na loja, na retirada)${r.caucao != null ? `\n💳 Caução: ${cotacao.reais(r.caucao)} (pré-autorização no cartão, liberada após a devolução)` : ''}`,
   };
@@ -171,7 +171,8 @@ function cotacaoDaLia(cv) {
   if (!periodo) return null;
   const em = ct?.em || op?.em || null;
   const vencida = !em || Date.now() - new Date(em) > COTACAO_LIA_VALIDADE_MS || cotacao.instante(periodo.retirada) <= new Date();
-  const grupos = (op?.grupos || []).map((g) => ({ fleetId: g.fleet_id, letra: g.letra, grupo: g.grupo, total: g.total }));
+  // protecoes: as que o portal ofereceu para cada grupo na consulta da Lia (código, nome, valor por diária) — vazio em cotações antigas
+  const grupos = (op?.grupos || []).map((g) => ({ fleetId: g.fleet_id, letra: g.letra, grupo: g.grupo, total: g.total, protecoes: g.protecoes || [] }));
   if (ct?.fleetId && !grupos.some((g) => String(g.fleetId) === String(ct.fleetId))) grupos.unshift({ fleetId: ct.fleetId, letra: cotacao.rotuloGrupo({ grupo: ct.grupo }, 1).letra, grupo: ct.grupo, total: ct.total });
   const diarias = ct?.diarias ?? Math.max(1, Math.ceil((cotacao.instante(periodo.devolucao) - cotacao.instante(periodo.retirada)) / 86_400_000));
   return {

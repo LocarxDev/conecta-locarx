@@ -211,12 +211,12 @@ export function ferramentasDaLoja(ctx) {
         if (!ctx.simulacao && ctx.conversaId) {
           const opcoes = { periodo: { data_retirada: a.data_retirada, hora_retirada: a.hora_retirada, data_devolucao: a.data_devolucao, hora_devolucao: a.hora_devolucao }, em: new Date().toISOString(),
             branchId: ctx.branchId, filialNome: ctx.filialNome || null, adicionais: adicionaisDisp,
-            grupos: [...(a.mais_opcoes ? (ctx.opcoesAnteriores || []) : []), ...mostrar.map((g, i) => ({ letra: rotuloGrupo(g, i + (a.mais_opcoes ? 4 : 1)).letra, fleet_id: g.fleetId, grupo: g.grupo, total: g.total }))] };
+            grupos: [...(a.mais_opcoes ? (ctx.opcoesAnteriores || []) : []), ...mostrar.map((g, i) => ({ letra: rotuloGrupo(g, i + (a.mais_opcoes ? 4 : 1)).letra, fleet_id: g.fleetId, grupo: g.grupo, total: g.total, protecoes: locarx.protecoesResumo(g.protecoes) }))] };
           await comoSistema((c) => c.query('UPDATE conversas SET opcoes = coalesce(opcoes, $3::jsonb) || $2::jsonb WHERE id = $1', [ctx.conversaId, opcoes, {}]));
         }
         if (ctx.simulacao && ctx.aoGuardar) {
           ctx.aoGuardar('opcoes', { periodo: { data_retirada: a.data_retirada, hora_retirada: a.hora_retirada, data_devolucao: a.data_devolucao, hora_devolucao: a.hora_devolucao }, em: new Date().toISOString(), branchId: ctx.branchId, filialNome: ctx.filialNome || null,
-            grupos: [...(a.mais_opcoes ? (ctx.opcoesAnteriores || []) : []), ...mostrar.map((g, i) => ({ letra: rotuloGrupo(g, i + (a.mais_opcoes ? 4 : 1)).letra, fleet_id: g.fleetId, grupo: g.grupo, total: g.total }))] });
+            grupos: [...(a.mais_opcoes ? (ctx.opcoesAnteriores || []) : []), ...mostrar.map((g, i) => ({ letra: rotuloGrupo(g, i + (a.mais_opcoes ? 4 : 1)).letra, fleet_id: g.fleetId, grupo: g.grupo, total: g.total, protecoes: locarx.protecoesResumo(g.protecoes) }))] });
         }
         // chat do site: os carros aparecem como cartões na tela; a IA só escreve uma frase de abertura
         if (ctx.canalSite && ctx.aoMostrar) {

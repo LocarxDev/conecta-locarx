@@ -322,6 +322,14 @@ export function acharGrupo(grupos, ref) {
 
 // Serviços adicionais pedidos ({ id | nome, qtd }) → [{ id, nome, qtd, valor, maximo }] válidos na lista da consulta.
 // Nome sem acento e por trecho ("cadeirinha" acha "Cadeirinha infantil"). Quantidade respeita o máximo da API.
+// Proteções que o portal oferece para um grupo, no formato guardado na conversa e mostrado no cartão da cotação
+// (código, nome, valor por diária e caução vindos da API; nada fixo no código).
+export function protecoesResumo(lista) {
+  return (lista || []).filter((p) => p && p.codigo).map((p) => ({
+    codigo: p.codigo, nome: p.nome || p.codigo, diaria: p.diaria ?? null, base: !!p.base, padrao: !!p.padrao, caucao: p.caucao ?? null,
+  }));
+}
+
 export function resolverAdicionais(pedidos, lista) {
   const semAcento = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
   const saida = [];
@@ -367,6 +375,7 @@ export async function calcularPreco({ branchId, fleetId, retirada, devolucao, pr
   return {
     adicionais: ad,                                   // os que entraram no cálculo (id, nome, qtd, valor)
     adicionaisDisponiveis,                            // todos os que a filial oferece nessas datas
+    protecoesDisponiveis: protecoesResumo(g.protecoes), // as proteções que o portal oferece para ESTE grupo (com valor por diária)
     totalAdicionais: num(d?.summary?.additionalServicesTotal ?? d?.summary?.totalAdditionalServices ?? d?.summary?.additionalServices),
     total: num(d?.summary?.totalWithTax),
     diaria: num(d?.period?.baseDailyRate),
