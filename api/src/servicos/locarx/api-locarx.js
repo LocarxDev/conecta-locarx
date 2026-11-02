@@ -393,9 +393,14 @@ export async function calcularPreco({ branchId, fleetId, retirada, devolucao, pr
 // POST /reservations/new — pagamento na loja (LOCAL_PAYMENT); a API recalcula o preço sozinha.
 export async function criarReserva({ branchId, fleetId, retirada, devolucao, protecoes = [], adicionais = [], cliente }) {
   const { g, ids, adicionais: ad } = await prepararGrupo({ branchId, fleetId, retirada, devolucao, protecoes, adicionais });
-  // adicionais: pela API só com LOCARX_RESERVA_ADICIONAIS ligado (formato a confirmar com a 4code); senão vão nas observações
+  // adicionais: no campo próprio da reserva só com LOCARX_RESERVA_ADICIONAIS ligado. SEMPRE vão também nas observações,
+  // para a equipe ver o que foi pedido mesmo se o portal não gravar (v14.2).
+  // Formato do POST /reservations/new (resposta do portal em 02/11): { additionalServiceId: número, quantity: número }
+  // — diferente do /prices/calculate, que aceita { id, qtd }.
   let enviarAdicionais = !!config.locarx?.reservaAdicionais && ad.length > 0;
-  const textoAdicionais = () => (ad.length && !enviarAdicionais ? `\nSERVIÇOS ADICIONAIS SOLICITADOS (confirmar e incluir na retirada): ${ad.map((a) => `${a.nome} x${a.qtd}`).join(', ')}.` : '');
+  const textoAdicionais = () => (ad.length
+    ? `\nSERVIÇOS ADICIONAIS SOLICITADOS${enviarAdicionais ? ' (enviados ao portal — conferir na retirada)' : ' (confirmar e incluir na retirada)'}: ${ad.map((a) => `${a.nome} x${a.qtd}`).join(', ')}.`
+    : '');
   let obsAdicionais = textoAdicionais();
   const corpo = (phone) => ({
       priceFleetId: g.priceFleetId,
@@ -409,7 +414,7 @@ export async function criarReserva({ branchId, fleetId, retirada, devolucao, pro
         ...(cliente.cnh ? { cnh: cliente.cnh } : {}),
       },
       protections: ids.map((id) => ({ fleetProtectionId: id })),
-      additionalServices: enviarAdicionais ? ad.map((a) => ({ id: a.id, qtd: a.qtd })) : [],
+      additionalServices: enviarAdicionais ? ad.map((a) => ({ additionalServiceId: Number(a.id), quantity: Number(a.qtd) || 1 })) : [],
       observations: ((cliente.observacoes || 'Reserva feita pelo Conecta LocarX (WhatsApp).') + obsAdicionais).slice(0, 1000),
       ...(cliente.referencia ? { assistanceNumber: String(cliente.referencia).slice(0, 60) } : {}),
   });
@@ -419,7 +424,7 @@ export async function criarReserva({ branchId, fleetId, retirada, devolucao, pro
     const resposta = JSON.stringify(e.resposta || '');
     // o portal recusou os adicionais (formato ainda não confirmado pela 4code): tenta uma vez sem eles, levando-os para as observações
     if (enviarAdicionais && e.status === 400 && /additional/i.test(resposta)) {
-      console.warn('[locarx] reserva recusou additionalServices; reenviando sem eles (vão nas observações):', resposta.slice(0, 200));
+      console.warn('[locarx] reserva recusou additionalServices; reenviando sem eles (vão nas observações):', resposta.slice(0, 1000));
       enviarAdicionais = false; obsAdicionais = textoAdicionais();
       d = await chamar('POST', '/reservations/new', { corpo: corpo(telefoneBr(cliente.telefone)) });
     } else {
@@ -432,6 +437,19 @@ export async function criarReserva({ branchId, fleetId, retirada, devolucao, pro
   const r = normalizarReserva(d?.reservation || d?.data || d);
   // o portal respondeu OK mas sem reserva reconhecível: melhor avisar do que seguir com código vazio
   if (!r || (!r.codigo && r.id == null)) throw new ErroLocarx('O portal LocarX não devolveu o código da reserva (formato de resposta inesperado).', 502, d);
+  // adicionais: o portal gravou mesmo? (confere na resposta; se ela não traz os detalhes, consulta a reserva)
+  r.adicionaisPedidos = ad.map((a) => ({ id: a.id, nome: a.nome, qtd: a.qtd }));
+  if (ad.length) {
+    let noPortal = r.detalhesAdicionais ? r.adicionais : null;
+    if (enviarAdicionais && noPortal == null && r.codigo) {
+      try { const conf = await buscarReserva(r.codigo); if (conf?.detalhesAdicionais) noPortal = conf.adicionais; } catch { /* sem confirmação */ }
+    }
+    const faltando = noPortal == null ? null : ad.filter((a) => !noPortal.some((x) => String(x.id) === String(a.id)));
+    r.adicionaisConfirmados = !enviarAdicionais ? false : faltando == null ? null : faltando.length === 0;
+    if (enviarAdicionais) console.log(`[locarx] reserva ${r.codigo}: adicionais ${r.adicionaisConfirmados === true ? 'gravados pelo portal' : r.adicionaisConfirmados === false ? `NÃO gravados pelo portal (${faltando.map((a) => a.nome).join(', ')})` : 'enviados (o portal não devolveu os detalhes para conferir)'}`);
+    r.avisoAdicionais = r.adicionaisConfirmados === true ? null
+      : `Serviços adicionais pedidos (${ad.map((a) => `${a.nome} x${a.qtd}`).join(', ')}) ${enviarAdicionais && r.adicionaisConfirmados == null ? 'foram enviados ao portal, mas não deu para conferir se entraram' : 'não estão na reserva do portal'}: estão nas observações — incluir na retirada.`;
+  }
   return r;
 }
 
@@ -472,6 +490,9 @@ export function normalizarReserva(r) {
   return {
     id: r.id ?? null,
     codigo: r.reservationCode || r.code || null,
+    // serviços adicionais gravados na reserva (GET /reservations: reservationDetails.additionalServices)
+    detalhesAdicionais: Array.isArray(r.reservationDetails?.additionalServices ?? r.additionalServices),
+    adicionais: (r.reservationDetails?.additionalServices ?? r.additionalServices ?? []).map((x) => ({ id: x.additionalServiceId ?? x.id ?? null, nome: x.name || null, qtd: x.quantity ?? x.qtd ?? 1 })),
     status: r.status?.reservation || r.status || null,
     pagamento: r.status?.payment || null,
     faturamento: r.billingType || null,   // LOCAL_PAYMENT (na loja), PARTIAL_BILLING ou TOTAL_BILLING — o portal pode sobrescrever pelo contrato do integrador

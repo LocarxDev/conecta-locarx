@@ -30,8 +30,10 @@ export function montarCartaoCotacao(el, { ctx, conversa, aoUsarTexto, aoReservar
       if (!vivo) return;
       d = r.lia;
       if (!d) { el.hidden = true; render(el, ''); return; }
-      // preço mais recente: o recálculo da equipe (se for do mesmo período) ou a cotação da Lia
-      preco = r.equipe && r.equipe.periodo?.retirada?.date === d.periodo.retirada.date ? r.equipe : null;
+      // preço mais recente: o recálculo da equipe (mesmo período e MAIS NOVO que a cotação da Lia) ou a cotação da Lia
+      const equipeEm = r.equipe ? new Date(r.equipe.em || r.equipeEm || 0).getTime() : 0;
+      const liaEm = d.cotacao ? new Date(d.cotacao.em || d.em || 0).getTime() : 0;
+      preco = r.equipe && r.equipe.periodo?.retirada?.date === d.periodo.retirada.date && equipeEm >= liaEm ? r.equipe : null;
       precoEm = preco ? (preco.em || r.equipeEm) : d.cotacao?.em || null;
       mexeu = false; escolha = null;
       el.hidden = false;
@@ -49,11 +51,12 @@ export function montarCartaoCotacao(el, { ctx, conversa, aoUsarTexto, aoReservar
 
   function desenhar() {
     const c = d.cotacao;
-    const fleetSel = escolha?.fleetId ?? preco?.fleetId ?? c?.fleetId ?? d.grupos[0]?.fleetId;
+    // sem cotação ainda (a Lia só mostrou as opções): nenhum grupo pré-escolhido — o atendente escolhe o que o cliente quer
+    const fleetSel = escolha?.fleetId || preco?.fleetId || c?.fleetId || null;
     // proteções do grupo escolhido, como o portal ofereceu (recálculo da equipe > consulta da Lia > lista de reserva)
     const doGrupo = (preco && String(preco.fleetId) === String(fleetSel) && preco.protecoesDisponiveis?.length) ? preco.protecoesDisponiveis
       : (d.grupos.find((g) => String(g.fleetId) === String(fleetSel))?.protecoes || []);
-    const listaProt = doGrupo.length ? doGrupo : RESERVA;
+    const listaProt = !fleetSel ? [] : doGrupo.length ? doGrupo : RESERVA;
     const basicas = listaProt.filter(ehBasica), opcionais = listaProt.filter((p) => !ehBasica(p));
     const prot = (escolha?.protecoes || preco?.codigos || c?.protecoes || []).filter((x) => listaProt.some((p) => p.codigo === x));
     const basica = prot.find((x) => basicas.some((p) => p.codigo === x)) || basicas.find((p) => p.padrao)?.codigo || basicas[0]?.codigo;
@@ -70,11 +73,11 @@ export function montarCartaoCotacao(el, { ctx, conversa, aoUsarTexto, aoReservar
         <div><span class="sub">Diárias</span><strong>${d.diarias ?? '—'}</strong></div>
       </div>
       <div class="form-linha">
-        <div class="campo"><label for="cl-grupo">Grupo</label><select id="cl-grupo" name="cl-grupo">${d.grupos.map((g) => html`<option value="${g.fleetId}" ${String(g.fleetId) === String(fleetSel) ? 'selected' : ''}>${g.letra} – ${nomeDoGrupo(g.grupo)}${g.total != null ? ` · ${reais(g.total)}` : ''}</option>`)}</select></div>
+        <div class="campo"><label for="cl-grupo">Grupo</label><select id="cl-grupo" name="cl-grupo">${fleetSel ? '' : html`<option value="" selected disabled>Escolha o grupo</option>`}${d.grupos.map((g) => html`<option value="${g.fleetId}" ${String(g.fleetId) === String(fleetSel) ? 'selected' : ''}>${g.letra} – ${nomeDoGrupo(g.grupo)}${g.total != null ? ` · ${reais(g.total)}` : ''}</option>`)}</select></div>
         <div class="campo"><label for="cl-basica">Proteção</label><select id="cl-basica" name="cl-basica">${basicas.map((p) => html`<option value="${p.codigo}" ${p.codigo === basica ? 'selected' : ''}>${p.nome}${comValor(p)}</option>`)}</select></div>
       </div>
       ${opcionais.length ? html`<div class="cl-opcionais">${opcionais.map((p) => html`<label class="checkbox"><input type="checkbox" name="cl-opc" value="${p.codigo}" ${prot.includes(p.codigo) ? 'checked' : ''}> ${p.nome}${p.diaria != null ? html` <span class="sub num">${reais(p.diaria)}/diária</span>` : ''}</label>`)}</div>` : ''}
-      <p class="sub">${doGrupo.length ? 'Proteções e valores por diária do portal para este grupo.' : 'Valores das proteções: clique em Atualizar preço.'}</p>
+      <p class="sub">${!fleetSel ? 'Escolha o grupo para ver as proteções e o preço.' : doGrupo.length ? 'Proteções e valores por diária do portal para este grupo.' : 'Valores das proteções: clique em Atualizar preço.'}</p>
       <div class="campo"><label>Serviços adicionais <span class="sub">(valor por diária, da API)</span></label>
         ${d.adicionaisDisponiveis.length ? html`<div class="cl-adicionais">${d.adicionaisDisponiveis.map((a) => { const s = adSel.find((x) => String(x.id) === String(a.id)); return html`<label class="checkbox"><input type="checkbox" data-ad="${a.id}" ${s ? 'checked' : ''}> <span class="cl-ad-nome">${a.nome}</span>${a.maximo && a.maximo > 1 ? html`<input type="number" class="cl-qtd" data-qtd="${a.id}" min="1" max="${a.maximo}" value="${s?.qtd || 1}" aria-label="Quantidade de ${a.nome}">` : ''}<span class="sub num" title="por diária">${a.diaria != null ? reais(a.diaria) + '/diária' : 'valor na API'}</span></label>`; })}</div>`
           : html`<p class="sub">Nenhum serviço adicional veio da API nesta consulta.</p>`}
@@ -82,8 +85,8 @@ export function montarCartaoCotacao(el, { ctx, conversa, aoUsarTexto, aoReservar
       <div class="cl-total"><span>Total (com proteção${adSel.length ? ', adicionais' : ''} e taxas)</span><strong class="num">${reais(total)}</strong>${preco?.caucao != null || c?.caucao != null ? html`<span class="sub">Caução: ${reais(preco?.caucao ?? c?.caucao)}</span>` : ''}</div>
       ${!preco && c?.resumoEnviado ? html`<p class="sub">A Lia já enviou o resumo ao cliente e está aguardando a confirmação.</p>` : ''}
       <div class="pc-acoes">
-        <button type="button" class="btn btn-contorno" id="cl-atualizar" ${d.vencida ? 'disabled' : ''}>Atualizar preço</button>
-        <button type="button" class="btn btn-primario" id="cl-reservar" ${d.vencida ? 'disabled' : ''}>Reservar</button>
+        <button type="button" class="btn btn-contorno" id="cl-atualizar" ${d.vencida || !fleetSel ? 'disabled' : ''}>Atualizar preço</button>
+        <button type="button" class="btn btn-primario" id="cl-reservar" ${d.vencida || !fleetSel ? 'disabled' : ''}>Reservar</button>
         ${preco?.textoWhatsapp && aoUsarTexto ? html`<button type="button" class="btn btn-texto" id="cl-usar" title="Coloca o texto do valor no campo de mensagem">${icone('whatsapp')}Enviar ao cliente</button>` : ''}
       </div>
     </section>`);

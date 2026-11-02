@@ -359,9 +359,15 @@ reservas.post('/reservas', exigirPerfil('dono', 'atendente'), limiteCotacao, rot
   // enviamos LOCAL_PAYMENT; se o portal gravou outro faturamento, é o contrato do integrador sobrescrevendo (configuração na LocarX)
   const faturamentoErrado = reserva.faturamento && reserva.faturamento !== 'LOCAL_PAYMENT';
   if (faturamentoErrado) await registrarOcorrencia({ ...base, nivel: 'aviso', mensagem: `Reserva ${reserva.codigo || ''} gravada no portal como ${reserva.faturamento} apesar de enviarmos LOCAL_PAYMENT: o contrato do integrador na LocarX está como faturamento parcial/total. Pedir ajuste do cadastro da empresa do token.`, detalhes: { codigo: reserva.codigo, faturamento: reserva.faturamento } });
+  // serviços adicionais que o portal não gravou: ficam nas observações e a equipe é avisada (v14.2)
+  if (reserva.avisoAdicionais) {
+    await registrarOcorrencia({ ...base, nivel: 'aviso', mensagem: `Reserva ${reserva.codigo || ''}: ${reserva.avisoAdicionais}`, detalhes: { ...contexto, codigo: reserva.codigo, adicionais: reserva.adicionaisPedidos } });
+    if (vinculo.conversa) await comContexto(ctx(req), (c) => c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto) VALUES ($1, $2, 'interna', 'sistema', 'evento', $3)`, [vinculo.conversa.id, loja.id, `Reserva ${reserva.codigo || ''}: ${reserva.avisoAdicionais}`])).catch(() => {});
+  }
   const divergente = reserva.valor != null && preco.total != null && Math.abs(reserva.valor - preco.total) > 1;
   res.status(201).json({
     passo: 'criada', id: reservaId, codigo: reserva.codigo, total: reserva.valor, status: reserva.status,
+    avisoAdicionais: reserva.avisoAdicionais || null,
     atencao: avisoGravacao || (faturamentoErrado ? `Atenção: o portal gravou esta reserva como ${reserva.faturamento === 'PARTIAL_BILLING' ? 'faturamento parcial' : reserva.faturamento}, não como pagamento na loja. É o contrato do integrador na LocarX — avise a administração.` : null) || (divergente ? `O portal fechou a reserva em ${cotacao.reais(reserva.valor)} (a cotação mostrava ${cotacao.reais(preco.total)}).` : null),
     textoWhatsapp: `✅ *Reserva confirmada!*\nCódigo: *${reserva.codigo || '—'}*\n🚗 ${rotulo.letra} – ${rotulo.nome}\n📅 Retirada: ${cotacao.dataBr(periodo.retirada)}\n📅 Devolução: ${cotacao.dataBr(periodo.devolucao)}\n🛡️ ${nomes.join(', ')}\n💰 Total: *${cotacao.reais(reserva.valor)}*, pagamento na loja, na retirada.\nQualquer dúvida é só chamar por aqui!`,
   });

@@ -843,3 +843,19 @@ select option, select optgroup { background: var(--superficie); color: var(--tex
 .cl-total { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; margin: 10px 0 4px; padding-top: 8px; border-top: 1px solid var(--borda); font-size: 13.5px; }
 .cl-total strong { font-size: 18px; }
 .cl-total .sub { flex-basis: 100%; }
+
+/* v14.2 — Assistente virtual em abas, campos alinhados e barra de salvar fixa no rodapé do conteúdo */
+.abas-assistente { display: flex; flex-wrap: wrap; width: fit-content; max-width: 100%; margin: 0; }
+.abas-assistente button { white-space: nowrap; }
+.pilha-aba { display: grid; gap: 16px; }
+#form-assistente { display: grid; gap: 16px; }
+.form-linha { align-items: start; }
+.form-linha.campos-tres { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 760px) { .form-linha.campos-tres { grid-template-columns: minmax(0, 1fr); } }
+.campo-com-unidade { display: flex; align-items: center; gap: 8px; }
+.campo-com-unidade input { width: 110px; }
+.teste-chat.teste-chat-largo { height: min(70vh, 640px); }
+.barra-salvar.barra-salvar-fixa { z-index: 5; justify-content: space-between; align-items: center; gap: 12px; margin-top: 16px; padding: 12px 16px; background: var(--superficie); border: 1px solid var(--borda); border-radius: var(--raio-g); box-shadow: 0 -4px 12px rgba(0,0,0,.06); }
+.barra-salvar-fixa .estado-salvar { font-size: 13px; }
+.barra-salvar-fixa.pendente { border-color: var(--alerta); background: var(--alerta-fundo); }
+.barra-salvar-fixa.pendente .estado-salvar { color: var(--alerta); font-weight: 600; }

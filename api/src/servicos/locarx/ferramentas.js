@@ -408,6 +408,10 @@ export function ferramentasDaLoja(ctx) {
             reserva.avisoGravacao = 'A reserva foi criada no portal, mas não ficou registrada no Conecta. Informe o código ao cliente e avise a equipe no chamar_atendente.';
           }
         }
+        if (!ctx.simulacao && reserva.avisoAdicionais) {
+          await registrarOcorrencia({ lojaId: ctx.lojaId, conversaId: ctx.conversaId, origem: 'assistente', tipo: 'reserva', nivel: 'aviso', mensagem: `Reserva ${reserva.codigo || ''}: ${reserva.avisoAdicionais}`, detalhes: { codigo: reserva.codigo, adicionais: reserva.adicionaisPedidos } });
+          await comoSistema((c) => c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto) VALUES ($1, $2, 'interna', 'sistema', 'evento', $3)`, [ctx.conversaId, ctx.lojaId, `Reserva ${reserva.codigo || ''}: ${reserva.avisoAdicionais}`])).catch(() => {});
+        }
         const divergente = reserva.valor != null && cotacao.total != null && Math.abs(reserva.valor - cotacao.total) > 1;
         if (!ctx.simulacao && reserva.faturamento && reserva.faturamento !== 'LOCAL_PAYMENT') {
           await registrarOcorrencia({ lojaId: ctx.lojaId, conversaId: ctx.conversaId, origem: 'assistente', tipo: 'reserva', nivel: 'aviso', mensagem: `Reserva ${reserva.codigo || ''} gravada no portal como ${reserva.faturamento} apesar de enviarmos LOCAL_PAYMENT: contrato do integrador na LocarX. Pedir ajuste do cadastro da empresa do token.`, detalhes: { codigo: reserva.codigo, faturamento: reserva.faturamento } });

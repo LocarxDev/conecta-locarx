@@ -3,7 +3,11 @@
 // para o atendente revisar e, se quiser, reserva pela API com o mesmo resumo e confirmação do assistente.
 // A mesma peça aparece na tela Cotação (#/cotacao) e numa janela dentro da conversa (botão "Cotação").
 import { api } from '../api.js';
-import { html, render, $, $$, icone, avisar, abrirModal, comBotao, marcarErros, dadosDoForm, telefoneBr, buscavel } from '../util.js';
+import { html, render, $, $$, icone, avisar, abrirModal, comBotao, marcarErros, dadosDoForm, telefoneBr, buscavel, confirmar } from '../util.js';
+
+// dados do condutor digitados no Reservar, guardados por conversa enquanto a página está aberta:
+// quem envia o resumo ao cliente e volta depois não precisa digitar tudo de novo (o CPF não sai deste navegador)
+const rascunhos = new Map();
 
 const reais = (v) => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }));
 const ROTULOS_PROTECAO = { PROTECAO_X: 'Proteção X', PROTECAO_SUPER_X: 'Super X', TERCEIROS: 'Terceiros', VIDROS: 'Vidros', VIDROS_E_PNEUS: 'Vidros e pneus' };
@@ -200,13 +204,18 @@ export function reservaModal({ ctx, conversa, periodo, g, protecoes, adicionais 
     </form>`,
     rodape: html`<button class="btn btn-contorno" data-fechar>Cancelar</button>
       <button class="btn btn-primario" type="submit" form="form-reserva" id="ver-resumo">Ver resumo</button>
-      <button class="btn btn-primario" id="confirmar-reserva" hidden>Confirmar reserva</button>`,
+      <button class="btn btn-contorno" id="enviar-resumo" hidden>${icone('whatsapp')}Enviar resumo ao cliente</button>
+      <button class="btn btn-primario" id="confirmar-reserva" hidden>Criar reserva no portal</button>`,
   });
-  const f = $('#form-reserva', m.el), resumoEl = $('#resumo-reserva', m.el), btnResumo = $('#ver-resumo', m.el), btnConfirmar = $('#confirmar-reserva', m.el);
+  const f = $('#form-reserva', m.el), resumoEl = $('#resumo-reserva', m.el), btnResumo = $('#ver-resumo', m.el), btnConfirmar = $('#confirmar-reserva', m.el), btnEnviar = $('#enviar-resumo', m.el);
+  let ultimoResumo = null;
+  // volta com os dados que o atendente já tinha digitado nesta conversa
+  const chaveRascunho = conversa?.id || null, rasc = chaveRascunho ? rascunhos.get(chaveRascunho) : null;
+  if (rasc) for (const [k, v] of Object.entries(rasc)) { const campo = f.elements[k]; if (campo && v && campo.type !== 'radio') campo.value = v; }
   f.elements.cpf.addEventListener('input', (e) => { e.target.value = mascaraCpf(e.target.value); });
   const dadosReserva = () => ({ ...periodo, fleetId: g.fleetId, protecoes, adicionais, ...dadosDoForm(f), contatoId: ct.id || undefined, conversaId: conversa?.id || undefined });
   // qualquer mudança nos dados invalida o resumo mostrado
-  f.addEventListener('input', () => { resumoEl.hidden = true; btnConfirmar.hidden = true; btnResumo.hidden = false; });
+  f.addEventListener('input', () => { resumoEl.hidden = true; btnConfirmar.hidden = true; btnEnviar.hidden = true; btnResumo.hidden = false; ultimoResumo = null; });
 
   f.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -214,8 +223,10 @@ export function reservaModal({ ctx, conversa, periodo, g, protecoes, adicionais 
       try {
         const r = await api.reservarEquipe({ ...dadosReserva(), confirmar: false });
         render(resumoEl, html`<div class="total-cotacao resumo-reserva">${r.resumo}</div>${r.avisoAdicionais ? html`<p class="ajuda">${r.avisoAdicionais}</p>` : ''}<p class="ajuda">${r.pagamento === 'pix' ? 'Confira com o cliente. Ao confirmar, o Pix é gerado e colocado na mensagem para você enviar; a reserva entra no portal quando o pagamento for confirmado.' : 'Confira com o cliente antes de confirmar. A reserva sai com pagamento na loja.'}</p>`);
-        btnConfirmar.textContent = r.pagamento === 'pix' ? 'Gerar Pix' : 'Confirmar reserva';
-        resumoEl.hidden = false; btnResumo.hidden = true; btnConfirmar.hidden = false; btnConfirmar.focus();
+        ultimoResumo = r;
+        resumoEl.insertAdjacentHTML('beforeend', `<p class="alerta-caixa aviso aviso-portal">${r.pagamento === 'pix' ? 'Ao gerar o Pix, a cobrança vai para o cliente agora e a reserva é criada no portal LocarX quando o pagamento cair.' : 'Ao criar, a reserva vai <strong>direto para o portal LocarX</strong> e gera o código na hora. Para o cliente conferir antes, use <strong>Enviar resumo ao cliente</strong>.'}</p>`);
+        btnConfirmar.textContent = r.pagamento === 'pix' ? 'Gerar Pix' : 'Criar reserva no portal';
+        resumoEl.hidden = false; btnResumo.hidden = true; btnConfirmar.hidden = false; btnEnviar.hidden = !usar || !conversa; btnConfirmar.focus();
       } catch (err) {
         if (err.status === 401) return ctx.sessaoExpirou();
         if (err.campos) marcarErros(f, err.campos);
@@ -223,7 +234,26 @@ export function reservaModal({ ctx, conversa, periodo, g, protecoes, adicionais 
       }
     });
   });
-  btnConfirmar.addEventListener('click', () => comBotao(btnConfirmar, async () => {
+  // Enviar resumo ao cliente: só coloca o resumo no campo de mensagem. NÃO cria reserva.
+  btnEnviar.addEventListener('click', () => {
+    if (!ultimoResumo?.resumo || !usar) return;
+    if (chaveRascunho) rascunhos.set(chaveRascunho, dadosDoForm(f));
+    usar(`${ultimoResumo.resumo}\n\nPosso confirmar a reserva com esses dados?`);
+    avisar('Resumo colocado no campo de mensagem. A reserva ainda NÃO foi criada: quando o cliente confirmar, abra Reservar de novo (os dados ficam guardados).');
+    m.fechar();
+  });
+  btnConfirmar.addEventListener('click', async () => {
+    const r0 = ultimoResumo;
+    const pix = r0?.pagamento === 'pix';
+    const ok = await confirmar({
+      titulo: pix ? 'Gerar o Pix agora?' : 'Criar a reserva no portal LocarX?',
+      texto: `${r0 ? `${r0.letra || g.letra} – ${r0.nome || g.nome} · ${dataBr({ date: periodo.dataRetirada, time: periodo.horaRetirada })} → ${dataBr({ date: periodo.dataDevolucao, time: periodo.horaDevolucao })} · total ${reais(r0.total)}. ` : ''}${pix ? 'O código Pix vai para o cliente agora; a reserva é criada quando o pagamento cair.' : 'A reserva será criada agora no portal e o código vai aparecer aqui. Para desfazer, só cancelando pela equipe.'}`,
+      botao: pix ? 'Gerar Pix' : 'Criar reserva',
+    });
+    if (!ok) return;
+    criar();
+  });
+  const criar = () => comBotao(btnConfirmar, async () => {
     try {
       const r = await api.reservarEquipe({ ...dadosReserva(), confirmar: true });
       if (r.passo === 'pix') {
@@ -233,8 +263,10 @@ export function reservaModal({ ctx, conversa, periodo, g, protecoes, adicionais 
         m.fechar(); aoConcluir?.();
         return;
       }
+      if (chaveRascunho) rascunhos.delete(chaveRascunho);
       avisar(`Reserva ${r.codigo || ''} criada no portal LocarX.`.replace('  ', ' '));
       if (r.atencao) avisar(r.atencao, 'erro');
+      if (r.avisoAdicionais) avisar(r.avisoAdicionais, 'erro');
       usar(r.textoWhatsapp);
       aoReservar?.(r);
       m.fechar(); aoConcluir?.();
@@ -243,7 +275,7 @@ export function reservaModal({ ctx, conversa, periodo, g, protecoes, adicionais 
       if (err.campos) marcarErros(f, err.campos);
       avisar(err.message, 'erro');
     }
-  }));
+  });
 }
 
 /**

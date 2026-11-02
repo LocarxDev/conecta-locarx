@@ -43,7 +43,7 @@ test('calcularPreco manda additionalServices [{ id, qtd }] e devolve os adiciona
   assert.equal(r.adicionaisDisponiveis.length, 3);
 });
 
-test('criarReserva: sem LOCARX_RESERVA_ADICIONAIS os adicionais vão nas observações; com a flag, no additionalServices', async (t) => {
+test('criarReserva: sem LOCARX_RESERVA_ADICIONAIS os adicionais vão nas observações; com a flag, no additionalServices (additionalServiceId/quantity) e também nas observações', async (t) => {
   const cliente = { nome: 'Ana Souza', cpf: '52998224725', cnh: '', email: 'ana@exemplo.com', telefone: '5571999990000', observacoes: 'Pagamento: na loja.' };
   let chamadas = stub(t);
   await locarx.criarReserva({ branchId: 12, fleetId: 5, ...periodo, protecoes: ['PROTECAO_X'], adicionais: [{ id: 3, qtd: 2 }], cliente });
@@ -56,8 +56,10 @@ test('criarReserva: sem LOCARX_RESERVA_ADICIONAIS os adicionais vão nas observa
   chamadas = stub(t);
   await locarx.criarReserva({ branchId: 12, fleetId: 5, ...periodo, protecoes: ['PROTECAO_X'], adicionais: [{ id: 3, qtd: 2 }], cliente });
   corpo = chamadas.find((c) => c.url.includes('/reservations/new')).corpo;
-  assert.deepEqual(corpo.additionalServices, [{ id: 3, qtd: 2 }]);
-  assert.doesNotMatch(corpo.observations, /SOLICITADOS/);
+  // formato que o portal exige na criação (resposta de 02/11): additionalServiceId + quantity
+  assert.deepEqual(corpo.additionalServices, [{ additionalServiceId: 3, quantity: 2 }]);
+  // e sempre também nas observações, para a equipe ver mesmo se o portal não gravar
+  assert.match(corpo.observations, /SERVIÇOS ADICIONAIS SOLICITADOS \(enviados ao portal.*Cadeirinha infantil x2/);
 });
 
 test('ferramentas: consultar_disponibilidade expõe adicionais_disponiveis; calcular_preco aceita adicionais e põe no texto', async (t) => {
