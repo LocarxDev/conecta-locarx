@@ -38,6 +38,19 @@ const PERIODO = {
 /**
  * @param {object} ctx { lojaId, branchId, conversaId, contatoId, simulacao, aoChamarAtendente(args), equipeDisponivel() → situação da equipe, aoPendenteEquipe(args) }
  */
+// v14.3 — o motivo do chamar_atendente é só a campanha/etiqueta/anúncio? (não repassa; a Lia segue atendendo)
+const semAcento = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const MOTIVO_DA_EQUIPE = /reclam|acident|sinistr|multa|cobran|contrat|document|frota|empresa|cnpj|reserva criada|criou a reserva|irritad|nervos|pediu (um |uma |para |pra )?(atendente|pessoa|humano)|quer (falar com )?(um |uma )?(atendente|pessoa|humano)|cancel|altera|pagamento|pix|erro|24 ?h|menos de 24|sem carro|indisponiv|aplicativo|uber|hoje|amanha|urgente/;
+const MOTIVO_CAMPANHA = /campanha|promoc|promo\b|anuncio|desconto|\d+ ?% ?off|\boff\b|black|cupom|interessad|mais informac|lead/;
+export function repasseSoPorCampanha(motivo, ctx = {}) {
+  const m = semAcento(motivo);
+  if (!m || MOTIVO_DA_EQUIPE.test(m)) return false;
+  const nomes = (ctx.etiquetas || []).filter((e) => e.descricao_bot).map((e) => semAcento(e.nome).trim()).filter((n) => n.length >= 3);
+  if (nomes.some((n) => m.includes(n))) return true;
+  if (MOTIVO_CAMPANHA.test(m)) return true;
+  return false;
+}
+
 export function ferramentasDaLoja(ctx) {
   // Várias filiais (ctx.filiais = [{ id, branchId, nome, principal }]): a IA escolhe pelo nome; a escolha fica na conversa
   // (conversas.opcoes.branchId) e vale para cotação, preço e reserva. Com uma filial só, nada muda.
@@ -548,7 +561,8 @@ export function ferramentasDaLoja(ctx) {
             if (ctx.conversaId) await c.query('UPDATE conversas SET atualizada_em = now() WHERE id = $1', [ctx.conversaId]);
           });
         }
-        return achadas.length ? `Etiqueta(s) aplicada(s): ${achadas.map((e) => e.nome).join(', ')}. Continue o atendimento normalmente.` : 'Nenhuma etiqueta da lista corresponde. Use só os nomes da lista ETIQUETAS.';
+        if (achadas.length) ctx.etiquetasNestaResposta = [...(ctx.etiquetasNestaResposta || []), ...achadas.map((e) => e.nome)];
+        return achadas.length ? `Etiqueta(s) aplicada(s): ${achadas.map((e) => e.nome).join(', ')}. Continue o atendimento normalmente: responda o cliente e siga o roteiro (se ainda não tem as datas, pergunte). Não chame atendente por causa da etiqueta.` : 'Nenhuma etiqueta da lista corresponde. Use só os nomes da lista ETIQUETAS.';
       },
     },
     {
@@ -598,6 +612,11 @@ export function ferramentasDaLoja(ctx) {
       descricao: 'Passa a conversa para um atendente humano da loja. Use quando o cliente pedir, quando não houver informação oficial, em reclamações, multas, acidentes, cobranças, contratos, ou depois de criar uma reserva.',
       parametros: { type: 'object', properties: { motivo: { type: 'string' }, sem_resposta: { type: 'boolean', description: 'true se for porque a informação não estava na base' }, pergunta: { type: 'string', description: 'a pergunta que ficou sem resposta' } }, required: ['motivo'] },
       executar: async (a) => {
+        // v14.3: etiqueta, campanha ou anúncio não é motivo para passar a conversa — a Lia etiqueta e segue atendendo.
+        if (repasseSoPorCampanha(a?.motivo, ctx)) {
+          console.log(`[assistente] chamar_atendente recusado (campanha/etiqueta): "${String(a?.motivo || '').slice(0, 120)}"`);
+          return { ok: false, instrucao: 'NÃO chame atendente por causa de etiqueta, campanha, promoção ou anúncio. Continue o atendimento AGORA, nesta resposta: cumprimente o cliente, diga que pode ajudar com a locação e pergunte as datas e horários de retirada e devolução para cotar. Se ele perguntou condições da campanha que você não tem, diga que as condições da campanha são confirmadas pela equipe na reserva.' };
+        }
         // Sem ninguém da equipe disponível (fora do horário, feriado, todos offline) e com "continuar sem equipe" ligado:
         // não repassa; registra o pedido e a Lia segue atendendo (Parte A, v14).
         if (ctx.equipeDisponivel && !ctx.simulacao) {
