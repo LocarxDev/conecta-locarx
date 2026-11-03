@@ -65,3 +65,9 @@ test('multiloja: rotas de troca de loja, transferência e acessos exigem login',
   assert.equal((await post('/api/conversas/00000000-0000-0000-0000-000000000000/transferir-loja', { lojaId: '00000000-0000-0000-0000-000000000000' })).status, 401);
   assert.equal((await get('/api/admin/lojas/00000000-0000-0000-0000-000000000000/acessos')).status, 401);
 });
+
+test('v14.4: as rotas do cartão "Cotação da Lia" respeitam o módulo cotacao', async () => {
+  const fs = await import('node:fs');
+  const app = fs.readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
+  assert.match(app, /app\.use\('\/api\/loja\/conversas', exigirModulo\('cotacao'\)\)/);
+});

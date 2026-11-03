@@ -17,6 +17,8 @@ import * as baseTela from './telas/base.js';
 import * as redeTela from './telas/rede.js';
 import * as promptTela from './telas/prompt.js';
 import * as reservasTela from './telas/reservas.js';
+import * as termosTela from './telas/termos.js';
+import * as campanhasTela from './telas/campanhas.js';
 import * as clientesTela from './telas/clientes.js';
 import * as funilTela from './telas/funil.js';
 import * as tarefasTela from './telas/tarefas.js';
@@ -33,7 +35,7 @@ const app = document.getElementById('app');
 const estado = { usuario: null, destino: null };
 
 // módulo do plano que cada tela/menu exige (lojas sem o módulo não veem o item; a API também barra)
-const MODULO_DA_ROTA = { cotacao: 'cotacao', funil: 'funil', tarefas: 'funil', clientes: 'clientes', relatorios: 'relatorios', pagamentos: 'pix', respostas: 'automacoes', modelos: 'automacoes', assistente: 'assistente', base: 'base' };
+const MODULO_DA_ROTA = { cotacao: 'cotacao', funil: 'funil', tarefas: 'funil', clientes: 'clientes', relatorios: 'relatorios', campanhas: 'relatorios', pagamentos: 'pix', respostas: 'automacoes', modelos: 'automacoes', assistente: 'assistente', base: 'base' };
 const moduloLiberado = (chave) => !chave || !estado.usuario?.loja || estado.usuario.loja.modulos?.[chave] !== false;
 
 const MODULOS_LOJA = [
@@ -64,6 +66,7 @@ function menuDoPerfil(perfilUsuario) {
       { rota: 'rede', rotulo: 'Base da rede', icone: 'assistente' },
       { rota: 'padroes', rotulo: 'Padrões do CRM', icone: 'ajustes' },
       { rota: 'relatorios-rede', rotulo: 'Relatórios', icone: 'relatorios' },
+      { rota: 'campanhas-rede', rotulo: 'Campanhas', icone: 'etiqueta' },
       { rota: 'pagamentos-rede', rotulo: 'Repasses Pix', icone: 'reservas' },
       ...(perfilUsuario === 'admin' ? [{ rota: 'acessos', rotulo: 'Acessos da rede', icone: 'escudo' }] : []),
     ];
@@ -84,6 +87,7 @@ function menuDoPerfil(perfilUsuario) {
       { rota: 'assistente', rotulo: 'Assistente virtual', icone: 'assistente' },
       { rota: 'base', rotulo: 'Base de conhecimento', icone: 'info' },
       { rota: 'relatorios', rotulo: 'Relatórios', icone: 'relatorios' },
+      { rota: 'campanhas', rotulo: 'Campanhas', icone: 'etiqueta' },
       { rota: 'pagamentos', rotulo: 'Pagamentos online', icone: 'reservas' },
       { rota: 'atendentes', rotulo: 'Atendentes', icone: 'atendentes' },
     );
@@ -101,6 +105,7 @@ const ROTAS = [
   { padrao: /^esqueci-senha$/, tela: acesso.esqueciSenha, publica: true },
   { padrao: /^definir-senha$/, tela: acesso.definirSenha, publica: true },
   { padrao: /^inicio$/, tela: inicio.montar },
+  { padrao: /^termos$/, tela: termosTela.montar },
   { padrao: /^atendentes$/, tela: equipe.montar, perfis: ['dono'] },
   { padrao: /^lojas$/, tela: lojas.lista, perfis: ['admin', 'matriz'] },
   { padrao: /^lojas\/([\w-]+)$/, tela: lojas.detalhe, perfis: ['admin', 'matriz'] },
@@ -122,6 +127,8 @@ const ROTAS = [
   { padrao: /^modelos$/, tela: modelosTela.montar, perfis: ['dono'] },
   { padrao: /^relatorios$/, tela: relatoriosTela.loja, perfis: ['dono'] },
   { padrao: /^relatorios-rede$/, tela: relatoriosTela.rede, perfis: ['admin', 'matriz'] },
+  { padrao: /^campanhas$/, tela: campanhasTela.loja, perfis: ['dono'] },
+  { padrao: /^campanhas-rede$/, tela: campanhasTela.rede, perfis: ['admin', 'matriz'] },
   { padrao: /^pagamentos$/, tela: pagamentosTela.loja, perfis: ['dono'] },
   { padrao: /^pagamentos-rede$/, tela: pagamentosTela.rede, perfis: ['admin', 'matriz'] },
   { padrao: /^acessos$/, tela: acessosTela.montar, perfis: ['admin'] },
@@ -154,6 +161,9 @@ async function despachar() {
     return navegar('login');
   }
   if (achada.publica && estado.usuario && ['login', 'verificacao'].includes(caminho)) return navegar('inicio');
+  // v14.5: termo de adesão/privacidade pendente → só a tela do termo (e sair) até aceitar
+  if (estado.usuario?.termosPendentes > 0 && caminho !== 'termos') return navegar('termos');
+  if (estado.usuario && !(estado.usuario.termosPendentes > 0) && caminho === 'termos') return navegar('inicio');
   if (achada.perfis && !achada.perfis.includes(estado.usuario.perfil)) {
     avisar('Você não tem acesso a essa tela.', 'erro');
     return navegar('inicio');
@@ -190,7 +200,7 @@ async function despachar() {
     guardar(await achada.tela(app, ctx));
   } else {
     desenharEstrutura(caminho);
-    if (['dono', 'atendente'].includes(estado.usuario.perfil)) { conversas.iniciarVigia(ctx); conversas.atualizarContadores(); }
+    if (['dono', 'atendente'].includes(estado.usuario.perfil) && !(estado.usuario.termosPendentes > 0)) { conversas.iniciarVigia(ctx); conversas.atualizarContadores(); }
     const area = $('#conteudo');
     area.classList.toggle('conteudo-largo', /^conversas/.test(caminho));
     area.classList.toggle('conteudo-amplo', !!achada.largo);
@@ -338,6 +348,7 @@ async function iniciar() {
     estado.usuario = null;
   }
   window.addEventListener('hashchange', despachar);
+  window.addEventListener('termos-pendentes', () => { if (estado.usuario && !(estado.usuario.termosPendentes > 0)) { estado.usuario = { ...estado.usuario, termosPendentes: 1 }; conversas.pararVigia(); navegar('termos'); } });
   despachar();
 }
 

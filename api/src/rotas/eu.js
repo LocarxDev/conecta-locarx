@@ -1,5 +1,6 @@
 // Meu perfil: dados, senha e verificação em 2 etapas do próprio usuário.
 import { Router } from 'express';
+import { SQL_TERMOS_PENDENTES } from '../servicos/termos.js';
 import { z } from 'zod';
 import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js';
 import { distribuirPendentes } from '../servicos/crm/roleta.js';
@@ -13,7 +14,8 @@ const OBRIGATORIO_2FA = ['admin', 'matriz', 'dono'];
 async function euComLoja(c, id) {
   return (await c.query(
     `SELECT u.*, l.nome AS loja_nome, l.cidade AS loja_cidade, l.uf AS loja_uf, l.modulos AS loja_modulos,
-            (SELECT count(*)::int FROM usuario_lojas ul JOIN lojas lx ON lx.id = ul.loja_id AND lx.ativa WHERE ul.usuario_id = u.id) AS qtd_lojas
+            (SELECT count(*)::int FROM usuario_lojas ul JOIN lojas lx ON lx.id = ul.loja_id AND lx.ativa WHERE ul.usuario_id = u.id) AS qtd_lojas,
+            ${SQL_TERMOS_PENDENTES} AS termos_pendentes
        FROM usuarios u LEFT JOIN lojas l ON l.id = u.loja_id WHERE u.id = $1`, [id])).rows[0];
 }
 

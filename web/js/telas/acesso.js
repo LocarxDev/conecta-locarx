@@ -58,7 +58,7 @@ export function login(alvo, ctx) {
         <span class="etiqueta">Modo demonstração · entrar como</span>
         <div class="demo-botoes">
           <button type="button" class="btn btn-contorno" data-demo="silas@auniti.com.br">Administração</button>
-          <button type="button" class="btn btn-contorno" data-demo="dono.ssa@exemplo.com.br">Dono da loja</button>
+          <button type="button" class="btn btn-contorno" data-demo="dono.ssa@exemplo.com.br">Gestor de loja</button>
           <button type="button" class="btn btn-contorno" data-demo="rafael.ssa@exemplo.com.br">Atendente</button>
         </div>
         <p class="ajuda">Senha de todos: ${api.SENHA_DEMO}. Na administração, o código de verificação é ${api.CODIGO_2FA_DEMO}.</p>

@@ -2,6 +2,7 @@
 import { z } from 'zod';
 import { config } from './config.js';
 import { moduloLigado, normalizarModulos } from './servicos/modulos.js';
+import { SQL_TERMOS_PENDENTES } from './servicos/termos.js';
 import { comoSistema } from './banco/conexao.js';
 import { hashToken, iguais } from './servicos/seguranca.js';
 
@@ -70,9 +71,10 @@ export async function carregarSessao(req, res, next) {
   try {
     const achado = await comoSistema(async (c) => {
       const { rows } = await c.query(
-        `SELECT s.id AS sessao_id, s.csrf, s.ultimo_uso, u.*, coalesce(s.loja_id, u.loja_id) AS loja_id, u.loja_id AS loja_principal_id, coalesce(ul.perfil, u.perfil) AS perfil,
+        `SELECT s.id AS sessao_id, s.csrf, s.ultimo_uso, u.*, coalesce(s.loja_id, u.loja_id) AS loja_id, u.loja_id AS loja_principal_id, u.perfil AS perfil_base, coalesce(ul.perfil, u.perfil) AS perfil,
                 l.nome AS loja_nome, l.cidade AS loja_cidade, l.uf AS loja_uf, l.ativa AS loja_ativa, l.modulos AS loja_modulos,
-                (SELECT count(*)::int FROM usuario_lojas ul JOIN lojas lx ON lx.id = ul.loja_id AND lx.ativa WHERE ul.usuario_id = u.id) AS qtd_lojas
+                (SELECT count(*)::int FROM usuario_lojas ul JOIN lojas lx ON lx.id = ul.loja_id AND lx.ativa WHERE ul.usuario_id = u.id) AS qtd_lojas,
+                ${SQL_TERMOS_PENDENTES} AS termos_pendentes
            FROM sessoes s JOIN usuarios u ON u.id = s.usuario_id LEFT JOIN lojas l ON l.id = coalesce(s.loja_id, u.loja_id)
            LEFT JOIN usuario_lojas ul ON ul.usuario_id = u.id AND ul.loja_id = coalesce(s.loja_id, u.loja_id) AND u.perfil IN ('dono', 'atendente')
           WHERE s.token_hash = $1 AND s.tipo = 'sessao' AND s.expira_em > now()
@@ -123,6 +125,13 @@ export const exigirModulo = (chave) => (req, res, next) => {
   next(erro(403, 'Este recurso não está liberado para a sua loja. Fale com a administração da rede.'));
 };
 
+// v14.5: com termo pendente, a API só atende o que é preciso para aceitar (ou sair)
+export const exigirTermosAceitos = (req, res, next) => {
+  if (!req.usuario || !(Number(req.usuario.termos_pendentes) > 0)) return next();
+  if (/^\/(termos|auth|eu)(\/|$)/.test(req.path)) return next();
+  next(erro(403, 'Para continuar, leia e aceite o termo de uso apresentado na tela.', { termosPendentes: true }));
+};
+
 export const exigirPerfil = (...perfis) => (req, res, next) => {
   if (!perfis.includes(req.usuario?.perfil)) return next(erro(403, 'Você não tem acesso a esta área.'));
   next();
@@ -136,6 +145,7 @@ export function usuarioPublico(u) {
     ...(u.loja_id ? { disponivel: !!u.disponivel, naRoleta: u.na_roleta !== false } : {}),
     ...(u.loja_nome !== undefined ? { loja: u.loja_id ? { id: u.loja_id, nome: u.loja_nome, cidade: u.loja_cidade, uf: u.loja_uf, modulos: normalizarModulos(u.loja_modulos) } : null } : {}),
     ...(u.qtd_lojas > 1 ? { variasLojas: true } : {}),
+    termosPendentes: Number(u.termos_pendentes) || 0,   // v14.5: precisa aceitar o termo antes de usar o sistema
   };
 }
 

@@ -229,3 +229,117 @@ relatorioRede.delete('/demonstracao', exigirPerfil('admin'), rota(async (req, re
   });
   res.status(204).end();
 }));
+
+// =====================================================================
+// v14.5 — Campanhas (etiquetas): quantos clientes cada etiqueta marcou no período, quantos viraram cotação e reserva,
+// valor reservado, quem aplicou (Lia × equipe) e a evolução diária. Serve para medir campanhas (BLACK X, anúncios por cidade).
+// =====================================================================
+const DATA_ISO = /^\d{4}-\d{2}-\d{2}$/;
+const hojeBahia = () => new Date(Date.now() - 3 * 3_600_000).toISOString().slice(0, 10);
+const zPeriodoDatas = z.object({ de: z.string().regex(DATA_ISO).optional(), ate: z.string().regex(DATA_ISO).optional() })
+  .transform((q) => {
+    const ate = q.ate || hojeBahia();
+    const de = q.de || new Date(Date.parse(ate + 'T00:00:00Z') - 29 * 86_400_000).toISOString().slice(0, 10);
+    return { de, ate };
+  })
+  .refine((p) => p.de <= p.ate, 'A data inicial precisa ser antes da final.')
+  .refine((p) => (Date.parse(p.ate) - Date.parse(p.de)) / 86_400_000 <= 370, 'Período de no máximo um ano.');
+
+// Números de uma loja. Cada "cliente marcado" é um par (contato, etiqueta) aplicado no período; cotação/reserva contam
+// quando aconteceram depois da marcação (até 1 dia antes, para a etiqueta aplicada logo após a reserva ainda contar).
+async function campanhasDaLoja(c, lojaId, { de, ate }) {
+  const params = [lojaId, de, ate];
+  const base = `FROM contato_etiquetas ce JOIN etiquetas e ON e.id = ce.etiqueta_id
+                 WHERE ce.loja_id = $1 AND (ce.aplicada_em AT TIME ZONE 'America/Bahia')::date BETWEEN $2::date AND $3::date`;
+  const porEtiqueta = (await c.query(`
+    SELECT e.id, e.nome, e.cor, (e.loja_id IS NULL) AS da_rede, e.descricao_bot IS NOT NULL AS pela_lia_configurada,
+           count(*)::int AS clientes,
+           count(*) FILTER (WHERE ce.pelo_assistente)::int AS pela_lia,
+           count(*) FILTER (WHERE NOT ce.pelo_assistente)::int AS pela_equipe,
+           count(*) FILTER (WHERE EXISTS (SELECT 1 FROM conversas cv WHERE cv.contato_id = ce.contato_id))::int AS com_conversa,
+           count(*) FILTER (WHERE EXISTS (SELECT 1 FROM oportunidades o WHERE o.contato_id = ce.contato_id AND o.cotou_em >= ce.aplicada_em - interval '1 day')
+                               OR EXISTS (SELECT 1 FROM conversas cv WHERE cv.contato_id = ce.contato_id AND cv.cotacao IS NOT NULL AND (cv.cotacao->>'em')::timestamptz >= ce.aplicada_em - interval '1 day')
+                               OR EXISTS (SELECT 1 FROM reservas r WHERE r.contato_id = ce.contato_id AND r.status <> 'cancelada' AND r.criada_em >= ce.aplicada_em - interval '1 day'))::int AS cotacoes,
+           count(*) FILTER (WHERE EXISTS (SELECT 1 FROM reservas r WHERE r.contato_id = ce.contato_id AND r.status <> 'cancelada' AND r.criada_em >= ce.aplicada_em - interval '1 day'))::int AS reservas,
+           coalesce(sum((SELECT sum(r.valor) FROM reservas r WHERE r.contato_id = ce.contato_id AND r.status <> 'cancelada' AND r.criada_em >= ce.aplicada_em - interval '1 day')), 0)::numeric AS valor,
+           count(*) FILTER (WHERE EXISTS (SELECT 1 FROM oportunidades o WHERE o.contato_id = ce.contato_id AND o.resultado = 'perdido' AND o.fechada_em >= ce.aplicada_em))::int AS perdidos
+      ${base} GROUP BY e.id, e.nome, e.cor, e.loja_id, e.descricao_bot ORDER BY clientes DESC, e.nome`, params)).rows;
+  const porDia = (await c.query(`
+    SELECT to_char((ce.aplicada_em AT TIME ZONE 'America/Bahia')::date, 'YYYY-MM-DD') AS dia, e.id AS etiqueta_id,
+           count(*)::int AS clientes,
+           count(*) FILTER (WHERE EXISTS (SELECT 1 FROM reservas r WHERE r.contato_id = ce.contato_id AND r.status <> 'cancelada' AND r.criada_em >= ce.aplicada_em - interval '1 day'))::int AS reservas
+      ${base} GROUP BY 1, 2 ORDER BY 1`, params)).rows;
+  const geral = (await c.query(`
+    SELECT (SELECT count(*)::int FROM contatos k WHERE k.loja_id = $1 AND (k.criado_em AT TIME ZONE 'America/Bahia')::date BETWEEN $2::date AND $3::date) AS clientes_novos,
+           (SELECT count(*)::int FROM contatos k WHERE k.loja_id = $1 AND (k.criado_em AT TIME ZONE 'America/Bahia')::date BETWEEN $2::date AND $3::date
+              AND NOT EXISTS (SELECT 1 FROM contato_etiquetas ce WHERE ce.contato_id = k.id)) AS clientes_sem_etiqueta,
+           (SELECT count(*)::int FROM reservas r WHERE r.loja_id = $1 AND r.status <> 'cancelada' AND (r.criada_em AT TIME ZONE 'America/Bahia')::date BETWEEN $2::date AND $3::date) AS reservas_total,
+           (SELECT count(*)::int FROM reservas r WHERE r.loja_id = $1 AND r.status <> 'cancelada' AND (r.criada_em AT TIME ZONE 'America/Bahia')::date BETWEEN $2::date AND $3::date
+              AND EXISTS (SELECT 1 FROM contato_etiquetas ce WHERE ce.contato_id = r.contato_id AND ce.aplicada_em <= r.criada_em + interval '1 day')) AS reservas_com_etiqueta`, params)).rows[0];
+  return {
+    etiquetas: porEtiqueta.map((x) => ({ id: x.id, nome: x.nome, cor: x.cor, daRede: x.da_rede, pelaLiaConfigurada: x.pela_lia_configurada, clientes: x.clientes, pelaLia: x.pela_lia, pelaEquipe: x.pela_equipe, comConversa: x.com_conversa, cotacoes: x.cotacoes, reservas: x.reservas, valor: Number(x.valor), perdidos: x.perdidos,
+      conversaoCotacao: x.clientes ? Math.round((x.cotacoes / x.clientes) * 1000) / 10 : 0, conversaoReserva: x.clientes ? Math.round((x.reservas / x.clientes) * 1000) / 10 : 0, ticket: x.reservas ? Math.round(Number(x.valor) / x.reservas) : 0 })),
+    porDia: porDia.map((d) => ({ dia: d.dia, etiquetaId: d.etiqueta_id, clientes: d.clientes, reservas: d.reservas })),
+    geral: { clientesNovos: geral.clientes_novos, clientesSemEtiqueta: geral.clientes_sem_etiqueta, reservasTotal: geral.reservas_total, reservasComEtiqueta: geral.reservas_com_etiqueta },
+  };
+}
+
+const totaisDe = (etiquetas) => etiquetas.reduce((t, e) => ({ clientes: t.clientes + e.clientes, pelaLia: t.pelaLia + e.pelaLia, cotacoes: t.cotacoes + e.cotacoes, reservas: t.reservas + e.reservas, valor: t.valor + e.valor }), { clientes: 0, pelaLia: 0, cotacoes: 0, reservas: 0, valor: 0 });
+
+relatorioLoja.get('/relatorio/etiquetas', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
+  const periodo = validar(zPeriodoDatas, req.query);
+  const r = await comContexto(ctx(req), (c) => campanhasDaLoja(c, req.usuario.loja_id, periodo));
+  res.json({ periodo, ...r, totais: totaisDe(r.etiquetas) });
+}));
+
+const csvCampanhas = (linhas) => {
+  const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const cab = ['loja', 'etiqueta', 'origem', 'clientes_marcados', 'pela_lia', 'pela_equipe', 'cotacoes', 'reservas', 'valor_reservado', 'conversao_reserva_pct', 'perdidos'];
+  return '﻿' + [cab.join(';'), ...linhas.map((l) => [l.loja, l.nome, l.daRede ? 'rede' : 'loja', l.clientes, l.pelaLia, l.pelaEquipe, l.cotacoes, l.reservas, String(l.valor).replace('.', ','), String(l.conversaoReserva).replace('.', ','), l.perdidos].map(esc).join(';'))].join('\r\n');
+};
+const enviarCsv = (res, nome, texto) => { res.set('Content-Type', 'text/csv; charset=utf-8'); res.set('Content-Disposition', `attachment; filename="${nome}"`); res.send(texto); };
+
+relatorioLoja.get('/relatorio/etiquetas.csv', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
+  const periodo = validar(zPeriodoDatas, req.query);
+  const r = await comContexto(ctx(req), (c) => campanhasDaLoja(c, req.usuario.loja_id, periodo));
+  enviarCsv(res, `campanhas-${periodo.de}-a-${periodo.ate}.csv`, csvCampanhas(r.etiquetas.map((e) => ({ ...e, loja: req.usuario.loja_nome || '' }))));
+}));
+
+// rede: a mesma conta para cada loja (ou uma loja escolhida), somada por nome de etiqueta
+async function campanhasDaRede(periodo, lojaId = null) {
+  return comoSistema(async (c) => {
+    const lojas = (await c.query(`SELECT id, nome, cidade, uf FROM lojas WHERE ativa AND ($1::uuid IS NULL OR id = $1) ORDER BY nome`, [lojaId])).rows;
+    const porLoja = [];
+    for (const l of lojas) porLoja.push({ loja: { id: l.id, nome: l.nome, cidade: l.cidade, uf: l.uf }, ...(await campanhasDaLoja(c, l.id, periodo)) });
+    // soma por nome de etiqueta (as da rede têm o mesmo id em todas as lojas; as da loja somam pelo nome)
+    const mapa = new Map();
+    for (const pl of porLoja) for (const e of pl.etiquetas) {
+      const k = e.nome.toLowerCase();
+      const a = mapa.get(k) || { nome: e.nome, cor: e.cor, daRede: e.daRede, clientes: 0, pelaLia: 0, pelaEquipe: 0, cotacoes: 0, reservas: 0, valor: 0, perdidos: 0, lojas: 0 };
+      a.clientes += e.clientes; a.pelaLia += e.pelaLia; a.pelaEquipe += e.pelaEquipe; a.cotacoes += e.cotacoes; a.reservas += e.reservas; a.valor += e.valor; a.perdidos += e.perdidos; a.lojas += 1;
+      mapa.set(k, a);
+    }
+    const etiquetas = [...mapa.values()].map((e) => ({ ...e, conversaoCotacao: e.clientes ? Math.round((e.cotacoes / e.clientes) * 1000) / 10 : 0, conversaoReserva: e.clientes ? Math.round((e.reservas / e.clientes) * 1000) / 10 : 0, ticket: e.reservas ? Math.round(e.valor / e.reservas) : 0 })).sort((a, b) => b.clientes - a.clientes);
+    // evolução diária somada por nome
+    const dias = new Map();
+    for (const pl of porLoja) for (const d of pl.porDia) {
+      const nome = pl.etiquetas.find((e) => e.id === d.etiquetaId)?.nome.toLowerCase(); if (!nome) continue;
+      const k = `${d.dia}|${nome}`; const a = dias.get(k) || { dia: d.dia, etiqueta: nome, clientes: 0, reservas: 0 };
+      a.clientes += d.clientes; a.reservas += d.reservas; dias.set(k, a);
+    }
+    return { etiquetas, porDia: [...dias.values()].sort((a, b) => a.dia.localeCompare(b.dia)), porLoja: porLoja.map((pl) => ({ loja: pl.loja, totais: totaisDe(pl.etiquetas), etiquetas: pl.etiquetas, geral: pl.geral })) };
+  });
+}
+
+relatorioRede.get('/relatorio/etiquetas', exigirPerfil('admin', 'matriz'), rota(async (req, res) => {
+  const { loja } = validar(z.object({ loja: zUuid.optional() }), req.query);
+  const periodo = validar(zPeriodoDatas, req.query);
+  const r = await campanhasDaRede(periodo, loja || null);
+  res.json({ periodo, loja: loja || null, ...r, totais: totaisDe(r.etiquetas) });
+}));
+
+relatorioRede.get('/relatorio/etiquetas.csv', exigirPerfil('admin', 'matriz'), rota(async (req, res) => {
+  const periodo = validar(zPeriodoDatas, req.query);
+  const r = await campanhasDaRede(periodo);
+  enviarCsv(res, `campanhas-rede-${periodo.de}-a-${periodo.ate}.csv`, csvCampanhas(r.porLoja.flatMap((pl) => pl.etiquetas.map((e) => ({ ...e, loja: pl.loja.nome })))));
+}));

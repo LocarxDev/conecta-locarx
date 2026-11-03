@@ -32,6 +32,8 @@ async function chamar(metodo, caminho, corpo) {
     const e = new Error(dados?.mensagem || 'Não foi possível concluir. Tente de novo em instantes.');
     e.status = resp.status;
     if (dados?.campos) e.campos = dados.campos;
+    // v14.5: termo novo publicado durante a sessão → a tela do termo aparece de novo
+    if (resp.status === 403 && dados?.campos?.termosPendentes) window.dispatchEvent(new CustomEvent('termos-pendentes'));
     throw e;
   }
   return dados;
@@ -43,6 +45,15 @@ const real = {
   entrar: (d) => chamar('POST', '/auth/entrar', d),
   verificar2fa: (d) => chamar('POST', '/auth/2fa', d),
   sessao: () => chamar('GET', '/auth/sessao'),
+  // v14.5 — termos de adesão/privacidade
+  termosPendentes: () => chamar('GET', '/termos/pendentes'),
+  aceitarTermo: (id, hash) => chamar('POST', `/termos/${encodeURIComponent(id)}/aceitar`, { hash }),
+  termosAdmin: () => chamar('GET', '/admin/termos'),
+  termoAdmin: (id) => chamar('GET', `/admin/termos/${encodeURIComponent(id)}`),
+  publicarTermo: (tipo, d) => chamar('PUT', `/admin/termos/${encodeURIComponent(tipo)}`, d),
+  aceitesTermos: (q) => chamar('GET', '/admin/termos-aceites?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
+  urlAceitesCsv: () => '/api/admin/termos-aceites.csv',
+  termosPendentesAdmin: () => chamar('GET', '/admin/termos-pendentes'),
   sair: () => chamar('POST', '/auth/sair', {}),
   sairDeTodos: () => chamar('POST', '/auth/sair-de-todos', {}),
   pedirNovaSenha: (d) => chamar('POST', '/auth/esqueci-senha', d),
@@ -210,6 +221,11 @@ const real = {
   // etapa 6 — relatórios e rede
   relatorioLoja: (dias, filial) => chamar('GET', `/loja/relatorio?dias=${dias}${filial ? `&filial=${encodeURIComponent(filial)}` : ''}`),
   relatorioRede: (dias) => chamar('GET', `/admin/relatorio?dias=${dias}`),
+  // v14.5 — campanhas (etiquetas)
+  campanhasLoja: (q) => chamar('GET', '/loja/relatorio/etiquetas?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
+  urlCampanhasLojaCsv: (q) => '/api/loja/relatorio/etiquetas.csv?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v)),
+  campanhasRede: (q) => chamar('GET', '/admin/relatorio/etiquetas?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
+  urlCampanhasRedeCsv: (q) => '/api/admin/relatorio/etiquetas.csv?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v)),
   usuariosRede: () => chamar('GET', '/admin/usuarios'),
   convidarRede: (d) => chamar('POST', '/admin/usuarios', d),
   situacaoUsuarioRede: (id, status) => chamar('PATCH', `/admin/usuarios/${encodeURIComponent(id)}`, { status }),

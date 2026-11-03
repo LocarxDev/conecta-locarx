@@ -81,7 +81,7 @@ function abrirFormLoja(loja, aoSalvar) {
       try {
         const salva = await api.salvarLoja({ ...d, central: d.central ? true : undefined, id: loja?.id });
         modal.fechar();
-        avisar(loja ? 'Loja atualizada.' : 'Loja cadastrada. Agora convide o dono da loja.');
+        avisar(loja ? 'Loja atualizada.' : 'Loja cadastrada. Agora convide o gestor da loja.');
         aoSalvar(salva);
       } catch (err) {
         if (err.campos) marcarErros(form, err.campos); else avisar(err.message, 'erro');
@@ -121,11 +121,11 @@ export async function lista(alvo, ctx) {
     if (!vis.length) { render(area, html`<div class="estado">${icone('busca')}<h3>Nada encontrado</h3><p>Nenhuma loja corresponde a essa busca.</p></div>`); return; }
     const pg = paginar(vis, pagina, 20, { rotulo: 'lojas' }); pagina = pg.pagina;
     render(area, html`<div class="tabela-caixa"><table class="tabela">
-      <thead><tr><th>Loja</th><th class="col-opcional">Filial no portal</th><th class="col-opcional">Dono</th><th class="col-opcional">WhatsApp</th><th>Situação</th></tr></thead>
+      <thead><tr><th>Loja</th><th class="col-opcional">Filial no portal</th><th class="col-opcional">Gestor</th><th class="col-opcional">WhatsApp</th><th>Situação</th></tr></thead>
       <tbody>${pg.fatia.map((l) => html`<tr class="clicavel" data-id="${l.id}" tabindex="0">
         <td><strong>${l.nome}</strong><div class="sub">${l.cidade} · ${l.uf} · ${l.usuarios} ${l.usuarios === 1 ? 'pessoa' : 'pessoas'}</div></td>
         <td class="col-opcional">${filial(l.filial)}</td>
-        <td class="col-opcional">${l.dono || html`<span class="sub">Sem dono convidado</span>`}</td>
+        <td class="col-opcional">${l.dono || html`<span class="sub">Sem gestor convidado</span>`}</td>
         <td class="col-opcional">${seloWhats(l.whatsapp)}</td>
         <td>${seloAtiva(l.ativa)}</td>
       </tr>`)}</tbody></table></div>${pg.controles}`);
@@ -183,7 +183,7 @@ export async function detalhe(alvo, ctx) {
     </div>
     ${loja.filialPortal?.encontrada === false ? html`<div class="alerta-caixa erro">${icone('alerta')}<span><strong>Filial ${loja.filial.branchId} não existe no ambiente atual da API LocarX (${loja.filialPortal.ambiente}).</strong> Os ids mudam entre homologação e produção: edite a loja e escolha a filial de novo em "Buscar filiais no portal". Até lá, cotações e reservas desta loja falham.</span></div>` : ''}
     ${loja.filialPortal?.encontrada === null ? html`<div class="alerta-caixa info">${icone('info')}<span>Não foi possível conferir a filial no portal LocarX agora: ${loja.filialPortal.erro}</span></div>` : ''}
-    ${!temDono && ehAdmin ? html`<div class="alerta-caixa info">${icone('info')}<span>Esta loja ainda não tem dono com acesso. Convide o franqueado em “Convidar” na equipe abaixo, escolhendo a função Dono da loja.</span></div>` : ''}
+    ${!temDono && ehAdmin ? html`<div class="alerta-caixa info">${icone('info')}<span>Esta loja ainda não tem dono com acesso. Convide o franqueado em “Convidar” na equipe abaixo, escolhendo a função Gestor de loja.</span></div>` : ''}
     <section class="painel">
       <div class="painel-cab"><h2>Dados da loja</h2>${seloAtiva(loja.ativa)}</div>
       <div class="painel-corpo"><dl class="dados-grade">
@@ -223,8 +223,8 @@ export async function detalhe(alvo, ctx) {
         </tr>`)}</tbody></table></div>
     </section>`}
     <section class="painel" id="acessos-loja">
-      <div class="painel-cab"><div><h2>Donos vinculados de outras lojas</h2><span class="sub">Para quem tem mais de uma loja: escolha a pessoa na lista e ela passa a ver esta loja também (troca no topo da tela).</span></div>
-        ${ehAdmin ? html`<button class="btn btn-contorno" id="dar-acesso">${icone('mais')}Vincular dono</button>` : ''}</div>
+      <div class="painel-cab"><div><h2>Gestores vinculados de outras lojas</h2><span class="sub">Para quem tem mais de uma loja: escolha a pessoa na lista e ela passa a ver esta loja também (troca no topo da tela).</span></div>
+        ${ehAdmin ? html`<button class="btn btn-contorno" id="dar-acesso">${icone('mais')}Vincular gestor</button>` : ''}</div>
       <div id="lista-acessos"><div class="painel-corpo"><p class="sub">Carregando…</p></div></div>
     </section>
     <div id="equipe-loja"></div>`);
@@ -235,7 +235,7 @@ export async function detalhe(alvo, ctx) {
     try {
       const rows = await api.acessosLoja(lojaId);
       render(listaAcessos, rows.length ? html`<div class="tabela-caixa"><table class="tabela"><thead><tr><th>Pessoa</th><th>Nível aqui</th><th class="col-opcional">Loja principal</th><th><span class="sr-only">Ações</span></th></tr></thead>
-        <tbody>${rows.map((u) => html`<tr><td><strong>${u.nome}</strong><div class="sub">${u.email}</div></td><td>${u.perfil === 'dono' ? 'Dono da loja' : 'Atendente'}</td><td class="col-opcional">${u.loja_principal || '—'}</td>
+        <tbody>${rows.map((u) => html`<tr><td><strong>${u.nome}</strong><div class="sub">${u.email}</div></td><td>${u.perfil === 'dono' ? 'Gestor de loja' : 'Atendente'}</td><td class="col-opcional">${u.loja_principal || '—'}</td>
           <td><div class="acoes-linha">${ehAdmin ? html`<button class="btn btn-texto" data-tirar-acesso="${u.id}">Tirar acesso</button>` : ''}</div></td></tr>`)}</tbody></table></div>` : html`<div class="painel-corpo"><p class="sub">Ninguém de outra loja tem acesso a esta.</p></div>`);
       $$('[data-tirar-acesso]', listaAcessos).forEach((b) => b.addEventListener('click', async () => {
         if (!(await confirmar({ titulo: 'Tirar acesso', texto: 'A pessoa deixa de ver esta loja (continua na loja principal dela).', botao: 'Tirar acesso', perigo: true }))) return;
@@ -248,12 +248,12 @@ export async function detalhe(alvo, ctx) {
     let cand = [];
     try { cand = await api.candidatosAcessoLoja(lojaId); } catch (err) { avisar(err.message, 'erro'); return; }
     const m = abrirModal({
-      titulo: 'Vincular dono a esta loja',
+      titulo: 'Vincular gestor a esta loja',
       corpo: cand.length ? html`<form class="form" id="form-acesso" novalidate>
         <div class="campo"><label for="a-email">Quem passa a acessar esta loja</label>
           <select id="a-email" name="email" required>${cand.map((u) => html`<option value="${u.email}">${u.nome} (${u.perfil === 'dono' ? 'dono' : 'atendente'} em ${u.loja_principal || '—'}) · ${u.email}</option>`)}</select>
           <p class="ajuda">Depois de vincular, a pessoa entra com o mesmo login e troca de loja no topo da tela.</p></div>
-        <div class="campo"><label for="a-perfil">Nível nesta loja</label><select id="a-perfil" name="perfil"><option value="dono">Dono da loja</option><option value="atendente">Atendente</option></select></div>
+        <div class="campo"><label for="a-perfil">Nível nesta loja</label><select id="a-perfil" name="perfil"><option value="dono">Gestor de loja</option><option value="atendente">Atendente</option></select></div>
       </form>` : html`<p class="sub">Não há ninguém de outras lojas para vincular. Para cadastrar uma pessoa nova, use "Convidar" na equipe da loja.</p>`,
       rodape: cand.length ? html`<button class="btn btn-contorno" data-fechar>Cancelar</button><button class="btn btn-primario" form="form-acesso" type="submit">Vincular</button>` : html`<button class="btn btn-contorno" data-fechar>Fechar</button>`,
     });
@@ -400,10 +400,10 @@ export async function detalhe(alvo, ctx) {
   $('#pix-proprio', alvo)?.addEventListener('click', async () => {
     const ligar = !loja.pix?.proprio;
     const ok = await confirmar({ titulo: ligar ? 'Liberar conta própria' : 'Voltar para a conta da rede', texto: ligar
-      ? 'A loja passa a receber os Pix do WhatsApp na própria conta AbacatePay. O dono cadastra a chave da conta em "Pagamentos online"; até lá, o Pix fica indisponível para esta loja. Ela sai do relatório de repasse.'
+      ? 'A loja passa a receber os Pix do WhatsApp na própria conta AbacatePay. O gestor cadastra a chave da conta em "Pagamentos online"; até lá, o Pix fica indisponível para esta loja. Ela sai do relatório de repasse.'
       : 'Os próximos Pix desta loja voltam a cair na conta da rede (repasse pelo relatório). A chave cadastrada pela loja deixa de ser usada.', botao: ligar ? 'Liberar' : 'Voltar para a rede' });
     if (!ok) return;
-    try { await api.pixProprioLoja(lojaId, ligar); avisar(ligar ? 'Conta própria liberada. Avise o dono para cadastrar a chave.' : 'Loja de volta à conta da rede.'); detalhe(alvo, ctx); } catch (err) { avisar(err.message, 'erro'); }
+    try { await api.pixProprioLoja(lojaId, ligar); avisar(ligar ? 'Conta própria liberada. Avise o gestor para cadastrar a chave.' : 'Loja de volta à conta da rede.'); detalhe(alvo, ctx); } catch (err) { avisar(err.message, 'erro'); }
   });
 
   const NOMES_DIAG = { ambiente: 'Ambiente', locality: 'GET /locality', availabilities: 'GET /availabilities/external', prices_calculate: 'POST /prices/calculate', reservations: 'GET /reservations', reservations_new_TESTE: 'POST /reservations/new (reserva de teste, cancelada em seguida)' };

@@ -859,3 +859,28 @@ select option, select optgroup { background: var(--superficie); color: var(--tex
 .barra-salvar-fixa .estado-salvar { font-size: 13px; }
 .barra-salvar-fixa.pendente { border-color: var(--alerta); background: var(--alerta-fundo); }
 .barra-salvar-fixa.pendente .estado-salvar { color: var(--alerta); font-weight: 600; }
+/* v14.5: termo de adesão / privacidade no primeiro acesso */
+.sistema.so-termos { grid-template-columns: minmax(0, 1fr); }
+.sistema.so-termos .menu, .sistema.so-termos .menu-sombra, .sistema.so-termos .abrir-menu, .sistema.so-termos .disponibilidade { display: none; }
+.termo-pagina { max-width: 860px; margin: 0 auto; }
+.termo-caixa { display: grid; gap: 14px; padding-bottom: 16px; }
+.termo-caixa .alerta-caixa { margin: 0 16px; }
+.termo-texto { margin: 0 16px; max-height: 52vh; overflow-y: auto; padding: 16px; border: 1px solid var(--borda); border-radius: var(--raio); background: var(--superficie-2); white-space: pre-wrap; font-size: 14.5px; line-height: 1.55; }
+.termo-texto:focus { outline: 2px solid var(--vermelho); }
+.termo-confirmo { margin: 0 16px; font-weight: 600; }
+.termo-acoes { display: flex; justify-content: flex-end; gap: 8px; margin: 0 16px; flex-wrap: wrap; }
+.termo-editor textarea { min-height: 360px; font-family: var(--fonte-texto); }
+.termos-abas { display: flex; gap: 6px; flex-wrap: wrap; }
+/* v14.5: campanhas (etiquetas) */
+.periodo-campanhas { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+.campo-inline { display: inline-flex; align-items: center; gap: 6px; }
+.campo-inline input[type="date"] { min-height: 36px; padding: 4px 8px; border-radius: var(--raio); border: 1px solid var(--borda-forte); background: var(--superficie); color: var(--texto); font: 400 14px var(--fonte-texto); }
+.grafico-linhas svg { width: 100%; height: auto; display: block; color: var(--texto); }
+.legenda-linhas { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; font-size: 12.5px; color: var(--texto-2); }
+.legenda-linhas .leg { display: inline-flex; align-items: center; gap: 6px; }
+.legenda-linhas i { width: 12px; height: 12px; border-radius: 3px; background: var(--cor, var(--texto-3)); }
+.tabela-campanhas tbody tr { cursor: pointer; }
+.tabela-campanhas tbody tr:hover { background: var(--superficie-2); }
+.tabela-campanhas .barra-trilho.mini { height: 5px; margin-top: 6px; border-radius: 99px; background: var(--superficie-2); overflow: hidden; max-width: 180px; }
+.tabela-campanhas .barra-cheia { height: 100%; background: var(--vermelho); border-radius: 99px; }
+.resumo-item .valor small { font-size: 14px; color: var(--texto-3); font-weight: 400; }

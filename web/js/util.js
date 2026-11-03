@@ -28,7 +28,7 @@ export function seguro(texto) { return new HtmlSeguro(texto); }
 export const PERFIS = {
   admin: 'Administração Auniti',
   matriz: 'Matriz LocarX',
-  dono: 'Dono da loja',
+  dono: 'Gestor de loja',
   atendente: 'Atendente',
 };
 

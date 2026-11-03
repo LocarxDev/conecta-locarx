@@ -7,7 +7,7 @@ const SITUACAO = {
   convidado: html`<span class="selo alerta">Convite enviado</span>`,
   inativo: html`<span class="selo neutro">Desativado</span>`,
 };
-const PAPEL = { dono: 'Dono da loja', atendente: 'Atendente' };
+const PAPEL = { dono: 'Gestor de loja', atendente: 'Atendente' };
 
 export async function montar(alvo, ctx) {
   render(alvo, html`
@@ -44,7 +44,7 @@ async function painelRoleta(alvo, ctx) {
         <input id="r-limite" name="limite" type="number" min="0" max="100" value="${r.limite}" inputmode="numeric"><p class="ajuda">0 = sem limite. Quem chegar no limite deixa de receber até encerrar alguma.</p></div>
       <div class="tabela-caixa"><table class="tabela">
         <thead><tr><th>Pessoa</th><th>Situação</th><th class="col-opcional">Em andamento</th><th>Participa da roleta</th></tr></thead>
-        <tbody>${r.equipe.map((u) => html`<tr><td><strong>${u.nome}</strong>${u.id === ctx.usuario.id ? html` <span class="sub">(você)</span>` : ''}<br><span class="sub">${u.perfil === 'dono' ? 'Dono da loja' : 'Atendente'}</span>${u.perfil === 'dono' && !u.naRoleta ? html`<br><span class="sub">Fora da roleta: só atende quando assumir uma conversa.</span>` : ''}</td>
+        <tbody>${r.equipe.map((u) => html`<tr><td><strong>${u.nome}</strong>${u.id === ctx.usuario.id ? html` <span class="sub">(você)</span>` : ''}<br><span class="sub">${u.perfil === 'dono' ? 'Gestor de loja' : 'Atendente'}</span>${u.perfil === 'dono' && !u.naRoleta ? html`<br><span class="sub">Fora da roleta: só atende quando assumir uma conversa.</span>` : ''}</td>
           <td>${situacao(u)}</td><td class="col-opcional num">${u.emAndamento}</td>
           <td><label class="interruptor"><input type="checkbox" data-participa="${u.id}" ${u.naRoleta ? 'checked' : ''}><span class="sr-only">${u.nome} participa da roleta</span><span class="trilho"></span></label></td></tr>`)}</tbody></table></div>
       <div><button class="btn btn-primario" type="submit">Salvar roleta</button></div>
@@ -159,7 +159,7 @@ export function painelEquipe(alvo, { ctx, lojaId, podeGerir, podeConvidarDono, t
         <div class="campo"><label for="c-nome">Nome completo</label><input id="c-nome" name="nome" autocomplete="off" required></div>
         <div class="campo"><label for="c-email">E-mail</label><input id="c-email" name="email" type="email" inputmode="email" autocomplete="off" required>
           <p class="ajuda">A pessoa recebe neste e-mail o link para criar a senha.</p></div>
-        ${podeConvidarDono ? html`<div class="campo"><label for="c-perfil">Função</label><select id="c-perfil" name="perfil"><option value="atendente">Atendente</option><option value="dono">Dono da loja</option></select></div>` : ''}
+        ${podeConvidarDono ? html`<div class="campo"><label for="c-perfil">Função</label><select id="c-perfil" name="perfil"><option value="atendente">Atendente</option><option value="dono">Gestor de loja</option></select></div>` : ''}
       </form>`,
       rodape: html`<button class="btn btn-contorno" data-fechar>Cancelar</button><button class="btn btn-primario" form="form-convite" type="submit">Enviar convite</button>`,
     });
@@ -190,7 +190,7 @@ export function painelEquipe(alvo, { ctx, lojaId, podeGerir, podeConvidarDono, t
         <div class="campo"><label for="p-nome">Nome</label><input id="p-nome" name="nome" value="${p.nome}" required></div>
         <div class="campo"><label for="p-email">E-mail</label><input id="p-email" value="${p.email}" disabled><p class="ajuda">O e-mail é trocado pela própria pessoa, em Meu perfil.</p></div>
         <div class="campo"><label for="p-perfil">Nível de acesso</label>
-          <select id="p-perfil" name="perfil"><option value="atendente" ${p.perfil === 'atendente' ? 'selected' : ''}>Atendente — conversas, clientes, funil, cotação e reservas</option><option value="dono" ${p.perfil === 'dono' ? 'selected' : ''}>Dono da loja — tudo da loja: equipe, WhatsApp, assistente, relatórios e pagamentos</option></select>
+          <select id="p-perfil" name="perfil"><option value="atendente" ${p.perfil === 'atendente' ? 'selected' : ''}>Atendente — conversas, clientes, funil, cotação e reservas</option><option value="dono" ${p.perfil === 'dono' ? 'selected' : ''}>Gestor de loja — tudo da loja: equipe, WhatsApp, assistente, relatórios e pagamentos</option></select>
           <p class="ajuda">Ao mudar o nível, a pessoa é desconectada e entra de novo já com o acesso novo.</p></div>
         <div class="lista-simples painel">
           ${p.status === 'convidado' ? html`<div><span>Convite ainda não aceito</span><button type="button" class="btn btn-texto" data-reenviar>Reenviar convite</button></div>` : ''}

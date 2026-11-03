@@ -1185,3 +1185,59 @@ DO $$ BEGIN
     ALTER TABLE tarefas ADD CONSTRAINT tarefas_detalhes_tamanho CHECK (detalhes IS NULL OR length(detalhes) <= 1000);
   END IF;
 END $$;
+
+-- =====================================================================
+-- v14.5 — Termos de adesão (gestores de loja), de uso e de privacidade (gestores e atendentes), aceitos no primeiro acesso
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS termos (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tipo          text NOT NULL,
+  versao        integer NOT NULL CHECK (versao >= 1),
+  titulo        text NOT NULL CHECK (length(titulo) BETWEEN 3 AND 160),
+  texto         text NOT NULL CHECK (length(texto) BETWEEN 20 AND 60000),
+  publicado_em  timestamptz NOT NULL DEFAULT now(),
+  publicado_por uuid REFERENCES usuarios(id) ON DELETE SET NULL,
+  UNIQUE (tipo, versao)
+);
+-- registro de quem aceitou o quê (nunca é alterado ou apagado pela aplicação)
+CREATE TABLE IF NOT EXISTS aceites_termos (
+  id          bigserial PRIMARY KEY,
+  usuario_id  uuid NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+  termo_id    uuid NOT NULL REFERENCES termos(id) ON DELETE CASCADE,
+  tipo        text NOT NULL,
+  versao      integer NOT NULL,
+  loja_id     uuid,
+  nome        text,
+  email       text,
+  perfil      text,
+  aceito_em   timestamptz NOT NULL DEFAULT now(),
+  ip          text,
+  navegador   text,
+  hash_texto  text NOT NULL,
+  UNIQUE (usuario_id, termo_id)
+);
+CREATE INDEX IF NOT EXISTS aceites_termos_termo ON aceites_termos (termo_id, aceito_em DESC);
+-- três termos: adesão (gestores de loja), uso e privacidade (gestores e atendentes)
+ALTER TABLE termos DROP CONSTRAINT IF EXISTS termos_tipo_check;
+ALTER TABLE termos DROP CONSTRAINT IF EXISTS termos_tipo_ok;
+UPDATE termos SET tipo = 'adesao' WHERE tipo = 'adesao_dono';
+UPDATE termos SET tipo = 'privacidade' WHERE tipo = 'privacidade_atendente';
+UPDATE aceites_termos SET tipo = 'adesao' WHERE tipo = 'adesao_dono';
+UPDATE aceites_termos SET tipo = 'privacidade' WHERE tipo = 'privacidade_atendente';
+ALTER TABLE termos ADD CONSTRAINT termos_tipo_ok CHECK (tipo IN ('adesao', 'uso', 'privacidade'));
+GRANT SELECT, INSERT, UPDATE, DELETE ON termos TO conecta_app;
+GRANT SELECT, INSERT ON aceites_termos TO conecta_app;
+GRANT USAGE ON SEQUENCE aceites_termos_id_seq TO conecta_app;
+ALTER TABLE termos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE termos FORCE ROW LEVEL SECURITY;
+ALTER TABLE aceites_termos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aceites_termos FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS termos_ver ON termos;
+CREATE POLICY termos_ver ON termos FOR SELECT USING (true);   -- qualquer pessoa logada lê os termos
+DROP POLICY IF EXISTS termos_alterar ON termos;
+CREATE POLICY termos_alterar ON termos FOR ALL USING (ctx_perfil() IN ('admin', 'sistema')) WITH CHECK (ctx_perfil() IN ('admin', 'sistema'));
+DROP POLICY IF EXISTS aceites_ver ON aceites_termos;
+CREATE POLICY aceites_ver ON aceites_termos FOR SELECT
+  USING (ctx_perfil() IN ('admin', 'matriz', 'sistema') OR usuario_id = ctx_usuario() OR (ctx_perfil() = 'dono' AND loja_id = ctx_loja()));
+DROP POLICY IF EXISTS aceites_inserir ON aceites_termos;
+CREATE POLICY aceites_inserir ON aceites_termos FOR INSERT WITH CHECK (ctx_perfil() = 'sistema' OR usuario_id = ctx_usuario());

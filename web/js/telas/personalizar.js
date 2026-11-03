@@ -25,7 +25,7 @@ export async function montar(alvo, ctx) {
                   : 'Monte o funil de vendas da loja, as etiquetas dos clientes e as informações que o assistente anota na conversa.'}</p></div>
     </div>
     <div class="abas abas-pagina" role="tablist" aria-label="O que personalizar">
-      ${[['funis', rede ? 'Funil padrão' : 'Funis'], ['etiquetas', 'Etiquetas'], ['campos', 'Informações do cliente'], ...(rede ? [['mensagens', 'Mensagens automáticas']] : [])].map(([v, t]) =>
+      ${[['funis', rede ? 'Funil padrão' : 'Funis'], ['etiquetas', 'Etiquetas'], ['campos', 'Informações do cliente'], ...(rede ? [['mensagens', 'Mensagens automáticas'], ['termos', 'Termos de uso']] : [])].map(([v, t]) =>
         html`<button role="tab" data-aba="${v}" class="${aba === v ? 'ativa' : ''}" aria-selected="${aba === v}">${t}</button>`)}
     </div>
     <div id="aba-conteudo"></div>`);
@@ -34,10 +34,10 @@ export async function montar(alvo, ctx) {
   function trocar(nova) {
     aba = nova; preferencia.gravar('aba-personalizar', nova);
     $$('[data-aba]', alvo).forEach((b) => { b.classList.toggle('ativa', b.dataset.aba === nova); b.setAttribute('aria-selected', String(b.dataset.aba === nova)); });
-    ({ funis: rede ? funilPadrao : funisDaLoja, etiquetas, campos, mensagens })[nova](area, { escopo, ctx });
+    ({ funis: rede ? funilPadrao : funisDaLoja, etiquetas, campos, mensagens, termos })[nova](area, { escopo, ctx });
   }
   $$('[data-aba]', alvo).forEach((b) => b.addEventListener('click', () => trocar(b.dataset.aba)));
-  trocar(['funis', 'etiquetas', 'campos', ...(rede ? ['mensagens'] : [])].includes(aba) ? aba : 'funis');
+  trocar(['funis', 'etiquetas', 'campos', ...(rede ? ['mensagens', 'termos'] : [])].includes(aba) ? aba : 'funis');
 }
 
 const carregando = (area) => render(area, html`<section class="painel"><div class="painel-corpo"><div class="esqueleto"></div></div></section>`);
@@ -411,4 +411,89 @@ function editarModeloRede(m, aoSalvar) {
       catch (err) { if (err.campos) marcarErros(f, err.campos); else avisar(err.message, 'erro'); }
     });
   });
+}
+
+// =====================================================================
+// TERMOS (v14.5) — adesão (gestores), uso e privacidade (gestores e atendentes): publicar versões e ver quem aceitou
+// =====================================================================
+const PERFIS_TERMO = { dono: 'Gestor de loja', atendente: 'Atendente' };
+async function termos(area, { ctx }) {
+  carregando(area);
+  let d;
+  try { d = await api.termosAdmin(); } catch (err) { return falhou(area, err, ctx); }
+  const admin = ctx.usuario.perfil === 'admin';
+  const quando = (iso) => new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  render(area, html`
+    <div class="alerta-caixa info">${icone('info')}<span>Gestores de loja aceitam os três termos (adesão, uso e privacidade); atendentes aceitam uso e privacidade — no <strong>primeiro acesso</strong>. Ao publicar uma versão nova, todo mundo do perfil aceita de novo no próximo acesso. O aceite fica registrado com nome, e-mail, loja, data, hora, IP, navegador e a assinatura do texto.</span></div>
+    ${d.tipos.map((tipo) => { const v = d.vigentes.find((x) => x.tipo === tipo.tipo); const versoes = d.versoes.filter((x) => x.tipo === tipo.tipo); const pend = d.pendentes[tipo.tipo] || 0; return html`
+      <section class="painel">
+        <div class="painel-cab"><div><h2>${tipo.nome}</h2><span class="sub">${tipo.perfis.map((p) => (p === 'dono' ? 'gestores' : 'atendentes')).join(' e ')} · ${v ? `Versão vigente ${v.versao} · publicada em ${quando(v.publicadoEm)}` : 'Nenhuma versão publicada'} · ${pend ? html`<span class="selo alerta sem-ponto">${pend} pessoa(s) ainda sem aceitar</span>` : html`<span class="selo ok sem-ponto">todos aceitaram</span>`}</span></div>
+          <div class="filtros">${admin ? html`<button class="btn btn-contorno" data-editar-termo="${tipo.tipo}">${icone('editar')}Editar e publicar versão nova</button>` : ''}</div></div>
+        <div class="painel-corpo">
+          <details><summary class="sub">Ver o texto vigente</summary><div class="termo-texto" style="margin:8px 0 0">${v?.texto || '—'}</div></details>
+          ${versoes.length > 1 ? html`<p class="sub" style="margin-top:8px">Histórico: ${versoes.map((x) => `v${x.versao} (${quando(x.publicadoEm)}${x.publicadoPor ? ', ' + x.publicadoPor : ''}, ${x.aceites} aceite${x.aceites === 1 ? '' : 's'})`).join(' · ')}</p>` : ''}
+        </div>
+      </section>`; })}
+    <section class="painel">
+      <div class="painel-cab"><div><h2>Aceites registrados</h2><span class="sub">Quem aceitou, quando e de onde.</span></div>
+        <div class="filtros"><label class="busca"><span class="sr-only">Buscar</span>${icone('busca')}<input id="busca-aceite" type="search" placeholder="Nome ou e-mail"></label>
+          <select id="filtro-tipo-aceite"><option value="">Todos os termos</option>${d.tipos.map((t) => html`<option value="${t.tipo}">${t.nome}</option>`)}</select>
+          <a class="btn btn-contorno" href="${api.urlAceitesCsv()}" download>${icone('copiar')}Exportar CSV</a></div></div>
+      <div id="lista-aceites"><div class="painel-corpo"><div class="esqueleto"></div></div></div>
+    </section>
+    <section class="painel">
+      <div class="painel-cab"><div><h2>Ainda não aceitaram</h2><span class="sub">Pessoas ativas que vão ver o termo no próximo acesso.</span></div></div>
+      <div id="lista-pendentes-termo"><div class="painel-corpo"><div class="esqueleto"></div></div></div>
+    </section>`);
+
+  let busca = '', tipoF = '', espera = null;
+  async function carregarAceites() {
+    const el = $('#lista-aceites', area);
+    try {
+      const lista = await api.aceitesTermos({ busca: busca || undefined, tipo: tipoF || undefined });
+      if (!lista.length) return render(el, html`<div class="estado">${icone('vazio')}<h3>Nenhum aceite${busca || tipoF ? ' neste filtro' : ' ainda'}</h3></div>`);
+      render(el, html`<div class="tabela-caixa"><table class="tabela"><thead><tr><th>Pessoa</th><th>Perfil</th><th>Loja</th><th>Termo</th><th>Aceito em</th><th class="col-opcional">IP / navegador</th></tr></thead>
+        <tbody>${lista.map((a) => html`<tr><td><strong>${a.nome}</strong><div class="sub">${a.email}</div></td><td>${PERFIS_TERMO[a.perfil] || a.perfil}</td><td>${a.loja || '—'}</td><td>${a.titulo}<div class="sub">versão ${a.versao}</div></td><td class="nowrap">${quando(a.aceitoEm)}</td><td class="col-opcional sub">${a.ip || '—'}<div title="${a.navegador || ''}">${(a.navegador || '').slice(0, 60)}</div></td></tr>`)}</tbody></table></div>`);
+    } catch (err) { render(el, html`<div class="estado"><p>${err.message}</p></div>`); }
+  }
+  async function carregarPendentes() {
+    const el = $('#lista-pendentes-termo', area);
+    try {
+      const lista = await api.termosPendentesAdmin();
+      if (!lista.length) return render(el, html`<div class="estado">${icone('ok')}<h3>Todo mundo aceitou a versão vigente</h3></div>`);
+      render(el, html`<div class="tabela-caixa"><table class="tabela"><thead><tr><th>Pessoa</th><th>Perfil</th><th>Loja</th><th>Falta aceitar</th><th>Último acesso</th></tr></thead>
+        <tbody>${lista.map((u) => html`<tr><td><strong>${u.nome}</strong><div class="sub">${u.email}</div></td><td>${PERFIS_TERMO[u.perfil] || u.perfil}</td><td>${u.loja || '—'}</td><td class="sub">${(u.faltam || []).join(', ')}</td><td class="nowrap">${u.ultimoAcesso ? quando(u.ultimoAcesso) : 'nunca entrou'}</td></tr>`)}</tbody></table></div>`);
+    } catch (err) { render(el, html`<div class="estado"><p>${err.message}</p></div>`); }
+  }
+  $('#busca-aceite', area).addEventListener('input', (e) => { busca = e.target.value.trim(); clearTimeout(espera); espera = setTimeout(carregarAceites, 350); });
+  $('#filtro-tipo-aceite', area).addEventListener('change', (e) => { tipoF = e.target.value; carregarAceites(); });
+  carregarAceites(); carregarPendentes();
+
+  $$('[data-editar-termo]', area).forEach((b) => b.addEventListener('click', () => {
+    const tipo = b.dataset.editarTermo; const v = d.vigentes.find((x) => x.tipo === tipo); const nome = d.tipos.find((x) => x.tipo === tipo)?.nome;
+    const m = abrirModal({
+      titulo: `Nova versão — ${nome}`,
+      corpo: html`<form class="form termo-editor" id="form-termo" novalidate>
+        <div class="alerta-caixa aviso">${icone('alerta')}<span>Ao publicar, esta passa a ser a versão ${(v?.versao || 0) + 1} e <strong>todas as pessoas deste perfil precisarão aceitar de novo</strong> no próximo acesso. As versões anteriores e os aceites antigos ficam guardados.</span></div>
+        <div class="campo"><label for="t-titulo">Título</label><input id="t-titulo" name="titulo" maxlength="160" value="${v?.titulo || ''}" required></div>
+        <div class="campo"><label for="t-texto">Texto do termo <span class="sub contador" id="t-contador"></span></label><textarea id="t-texto" name="texto" maxlength="60000" required>${v?.texto || ''}</textarea>
+          <p class="ajuda">Texto simples; as quebras de linha são mantidas. Recomendação: revisão jurídica antes de publicar.</p></div>
+      </form>`,
+      rodape: html`<button class="btn btn-contorno" data-fechar>Cancelar</button><button class="btn btn-primario" type="submit" form="form-termo">Publicar versão ${(v?.versao || 0) + 1}</button>`,
+    });
+    m.el.querySelector('.modal').classList.add('modal-cotacao');
+    const f = $('#form-termo', m.el), ta = $('#t-texto', m.el), cont = $('#t-contador', m.el);
+    const mostrar = () => { cont.textContent = `${ta.value.length.toLocaleString('pt-BR')} / 60.000`; };
+    ta.addEventListener('input', mostrar); mostrar();
+    f.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const dados = { titulo: f.elements.titulo.value.trim(), texto: f.elements.texto.value.trim() };
+      if (!marcarErros(f, { ...(dados.titulo.length < 3 ? { titulo: 'Informe o título.' } : {}), ...(dados.texto.length < 20 ? { texto: 'O texto está curto demais.' } : {}) })) return;
+      if (!(await confirmar({ titulo: 'Publicar nova versão?', texto: 'Todas as pessoas deste perfil vão precisar aceitar de novo no próximo acesso.', botao: 'Publicar' }))) return;
+      await comBotao($('[type=submit]', m.el), async () => {
+        try { await api.publicarTermo(tipo, dados); m.fechar(); avisar('Versão publicada.'); termos(area, { ctx }); }
+        catch (err) { if (err.campos) marcarErros(f, err.campos); else avisar(err.message, 'erro'); }
+      });
+    });
+  }));
 }
