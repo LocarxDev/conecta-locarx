@@ -239,7 +239,7 @@ export async function detalhe(alvo, ctx) {
       </form>
     </section>` : ''}
     <section class="painel" id="cadastro-loja">
-      <div class="painel-cab"><div><h2>Cadastro e faturamento</h2><span class="sub">CNPJ, razão social, endereço, gestor responsável e cobrança. O gestor da loja também confere e corrige em "Dados da loja".</span></div>${seloCadastro(loja.cadastro)}</div>
+      <div class="painel-cab"><div><h2>Cadastro e faturamento</h2><span class="sub">CNPJ, razão social, endereço, gestor responsável e cobrança. O gestor da loja só confere, em "Dados da loja".</span></div>${seloCadastro(loja.cadastro)}</div>
       <div class="painel-corpo">${listaCadastro(loja.cadastro)}</div>
     </section>
     <section class="painel" id="modulos-loja">
@@ -520,7 +520,7 @@ export async function naLoja(alvo, ctx) {
 // ---------- v14.8: assinatura da loja (administração) ----------
 const reais = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const dia = (v) => data(typeof v === 'string' && v.length === 10 ? v + 'T12:00:00' : v);
-const ST = { pendente: ['Aguardando pagamento', 'alerta'], ativa: ['Ativa', 'ok'], atrasada: ['Atrasada', 'erro'], cancelada: ['Cancelada', ''], isenta: ['Isenta', 'ok'] };
+const ST = { pendente: ['Aguardando pagamento', 'alerta'], ativa: ['Ativa', 'ok'], atrasada: ['Atrasada', 'erro'], suspensa: ['Suspensa', 'erro'], cancelada: ['Cancelada', ''], isenta: ['Isenta', 'ok'] };
 const FT = { pendente: ['Em aberto', 'alerta'], paga: ['Paga', 'ok'], vencida: ['Vencida', 'erro'], cancelada: ['Cancelada', ''], falhou: ['Falhou', 'erro'] };
 async function painelAssinatura(area, lojaId, ctx) {
   if (!area) return;
@@ -541,7 +541,7 @@ async function painelAssinatura(area, lojaId, ctx) {
     </tbody></table></div>` : ''}
     <div class="acoes-linha">
       ${!a || !['isenta'].includes(a.status) ? html`<button class="btn btn-contorno" id="isentar">Isentar a loja (cortesia)</button>` : html`<button class="btn btn-contorno" id="tirar-isencao">Tirar a isenção</button>`}
-      ${a && ['ativa', 'atrasada', 'pendente'].includes(a.status) ? html`<button class="btn btn-texto" id="cancelar-ass">Cancelar assinatura</button>` : ''}
+      ${a && ['ativa', 'atrasada', 'suspensa', 'pendente'].includes(a.status) ? html`<button class="btn btn-texto" id="cancelar-ass">Cancelar assinatura</button>` : ''}
     </div>`);
   $('#isentar', area)?.addEventListener('click', async () => {
     const ok = await confirmar({ titulo: 'Isentar a loja', texto: 'A loja usa o Conecta sem pagar (plano completo). Você pode tirar a isenção depois.', botao: 'Isentar' });

@@ -909,7 +909,7 @@ select option, select optgroup { background: var(--superficie); color: var(--tex
 .ciclo-troca button { border: 0; background: transparent; border-radius: 999px; padding: 6px 14px; font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; color: var(--texto-2); display: inline-flex; gap: 6px; align-items: center; }
 .ciclo-troca button.ativo { background: var(--preto-marca); color: #fff; }
 .planos-grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
-.plano-cartao { position: relative; display: grid; gap: 12px; padding: 22px; text-align: left; font: inherit; color: inherit; cursor: pointer; border: 1.5px solid var(--borda); border-radius: var(--raio-g); background: var(--superficie); transition: border-color .15s, box-shadow .15s; max-width: 520px; }
+.plano-cartao { position: relative; display: grid; gap: 12px; padding: 22px; text-align: left; font: inherit; color: inherit; cursor: pointer; border: 1.5px solid var(--borda); border-radius: var(--raio-g); background: var(--superficie); transition: border-color .15s, box-shadow .15s; }
 .plano-cartao:hover:not([disabled]) { border-color: var(--borda-forte); }
 .plano-cartao.ativo { border-color: var(--vermelho); box-shadow: 0 0 0 3px var(--vermelho-suave); }
 .plano-cartao[disabled] { cursor: default; }
@@ -942,3 +942,22 @@ select option, select optgroup { background: var(--superficie); color: var(--tex
 .copia-linha { display: flex; gap: 8px; width: 100%; }
 .copia-linha input { flex: 1; min-width: 0; min-height: 42px; padding: 0 12px; border: 1px solid var(--borda-forte); border-radius: var(--raio); background: var(--superficie-2); color: var(--texto-2); font: 400 13px var(--fonte-texto); }
 .acoes-linha { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
+/* ---------- v14.8.1: tela de assinatura bloqueante com a moldura da marca ---------- */
+.sistema.so-assinatura .topo { display: none; }
+.sistema.so-assinatura .conteudo { max-width: none; padding: 0; gap: 0; }
+.assinatura-acesso { min-height: 100vh; grid-template-columns: minmax(0, .8fr) minmax(0, 1.6fr); }
+.assinatura-chamada { margin-top: 40px; }
+.assinatura-acesso .x-fundo { width: 115%; right: -42%; bottom: 10%; opacity: .07; }
+.resumo-assinatura > div.sub-linha { color: var(--texto-3); font-size: 13px; }
+.passos-assinatura { position: relative; display: grid; gap: 14px; margin-top: 36px; }
+.passo-item { display: flex; gap: 12px; align-items: center; color: #8E8A84; font-size: 14px; }
+.passo-item i { width: 26px; height: 26px; border-radius: 50%; border: 1.5px solid #484642; display: grid; place-items: center; font: 600 12px/1 var(--fonte-texto); font-style: normal; flex: none; }
+.passo-item.atual { color: #fff; } .passo-item.atual i { border-color: var(--vermelho); background: var(--vermelho); color: #fff; }
+.passo-item.feito { color: #D9D6D1; } .passo-item.feito i { border-color: var(--ok); background: var(--ok); color: #fff; }
+.assinatura-area { background: var(--fundo); padding-block: 40px 60px; padding-left: max(24px, env(safe-area-inset-left, 0px)); padding-right: max(24px, env(safe-area-inset-right, 0px)); }
+.assinatura-caixa { width: 100%; max-width: 900px; margin: 0 auto; display: grid; gap: 20px; }
+.loja-chip { display: inline-flex; align-items: center; gap: 10px; background: var(--superficie); border: 1px solid var(--borda); border-radius: 999px; padding: 6px 14px 6px 8px; font-size: 13.5px; width: fit-content; }
+.loja-chip b { font-weight: 600; } .loja-chip small { color: var(--texto-3); }
+.loja-chip .av { width: 28px; height: 28px; border-radius: 50%; background: var(--vermelho-suave); color: var(--vermelho); display: grid; place-items: center; font: 700 12px/1 var(--fonte-titulo); }
+@media (max-width: 900px) { .assinatura-acesso { grid-template-columns: 1fr; } .assinatura-acesso .acesso-marca { padding: 28px 24px; } .assinatura-acesso .x-fundo { display: none; } }

@@ -10,7 +10,8 @@ import { PLANOS, FORMAS, valorDoPlano, modulosComPlano, referenciaDe, somarCiclo
 const hoje = () => new Date().toISOString().slice(0, 10);
 const PIX_VALIDADE_SEGUNDOS = 5 * 24 * 3600;   // o código Pix da fatura vale 5 dias
 const DIAS_ANTES_DO_VENCIMENTO = 5;           // o Conecta gera a fatura Pix 5 dias antes
-const DIAS_TOLERANCIA = 5;                    // depois do vencimento sem pagar → "atrasada"
+const DIAS_TOLERANCIA = 5;                    // depois do vencimento sem pagar → "atrasada" (aviso)
+const diasBloqueio = () => config.pagarme?.diasBloqueio ?? 10;   // depois do vencimento sem pagar → "suspensa" (trava)
 
 export const faturaPublica = (f) => !f ? null : ({
   id: f.id, referencia: f.referencia, valor: f.valor_centavos / 100, forma: f.forma, formaNome: FORMAS[f.forma] || f.forma, status: f.status,
@@ -51,7 +52,7 @@ export async function contratar(c, { loja, usuario, plano, ciclo = 'mensal', for
     throw erro(422, 'Antes de assinar, a loja precisa ter CNPJ, razão social e e-mail de cobrança no cadastro. Peça à administração da rede para completar.', { cadastro: 'Cadastro fiscal incompleto.' });
   }
   const atual = (await c.query('SELECT * FROM assinaturas WHERE loja_id = $1', [loja.id])).rows[0];
-  if (atual && ['ativa', 'atrasada', 'isenta'].includes(atual.status)) throw erro(409, 'Esta loja já tem uma assinatura. Para trocar o plano, cancele a atual ou fale com a administração.');
+  if (atual && ['ativa', 'atrasada', 'suspensa', 'isenta'].includes(atual.status)) throw erro(409, 'Esta loja já tem uma assinatura. Para trocar o plano, cancele a atual ou fale com a administração.');
 
   const valor = valorDoPlano(plano, ciclo);
   const descricao = `Conecta LocarX — ${PLANOS[plano].nome} (${ciclo})`;
@@ -138,6 +139,17 @@ export async function isentar(c, lojaId, { isenta, plano = 'basico', observacao 
   return (await c.query(`UPDATE assinaturas SET status = 'cancelada', cancelada_em = now(), observacao = $2, atualizada_em = now() WHERE loja_id = $1 AND status = 'isenta' RETURNING *`, [lojaId, observacao])).rows[0] || null;
 }
 
+/** Pix novo para a fatura em aberto mais antiga (código vencido, ou loja atrasada/suspensa). */
+export async function novoPix(c, lojaId) {
+  const a = (await c.query('SELECT * FROM assinaturas WHERE loja_id = $1', [lojaId])).rows[0];
+  if (!a || !['pendente', 'ativa', 'atrasada', 'suspensa'].includes(a.status)) throw erro(404, 'Esta loja não tem assinatura em aberto.');
+  const f = (await c.query(`SELECT * FROM faturas_assinatura WHERE assinatura_id = $1 AND status IN ('pendente', 'vencida', 'falhou') ORDER BY vence_em NULLS LAST, criada_em LIMIT 1`, [a.id])).rows[0];
+  if (!f) throw erro(404, 'Não há fatura em aberto.');
+  const pedido = await pagarme.criarPedido({ clienteId: a.pagarme_cliente_id, forma: 'pix', valorCentavos: f.valor_centavos, descricao: `Conecta LocarX — ${PLANOS[a.plano].nome} (${f.referencia})`, codigo: `conecta-${a.loja_id.slice(0, 8)}-${f.referencia}-${Date.now().toString(36)}`, validadeSegundos: PIX_VALIDADE_SEGUNDOS, metadata: { loja_id: a.loja_id, referencia: f.referencia } });
+  return (await c.query(`UPDATE faturas_assinatura SET forma = 'pix', status = 'pendente', pagarme_pedido_id = $2, pagarme_cobranca_id = $3, pix_codigo = $4, pix_qr_url = $5, pix_expira_em = $6, boleto_url = NULL, boleto_linha = NULL WHERE id = $1 RETURNING *`,
+    [f.id, pedido.id, pedido.cobrancaId, pedido.pix?.codigo || null, pedido.pix?.qrUrl || null, pedido.pix?.expiraEm || null])).rows[0];
+}
+
 // ---------- webhook da Pagar.me ----------
 /** Trata um evento (charge.paid, order.paid, invoice.paid, charge.payment_failed, invoice.payment_failed, subscription.canceled). Idempotente. */
 export async function processarEvento(evento) {
@@ -179,8 +191,8 @@ export async function processarEvento(evento) {
 
 // ---------- rotina diária: faturas Pix e atraso ----------
 export async function rodarCiclos() {
-  if (!ligada()) return { geradas: 0, atrasadas: 0 };
-  let geradas = 0, atrasadas = 0;
+  if (!ligada()) return { geradas: 0, atrasadas: 0, suspensas: 0 };
+  let geradas = 0, atrasadas = 0, suspensas = 0;
   await comoSistema(async (c) => {
     // Pix: gera a fatura do próximo ciclo 5 dias antes do vencimento
     const pix = (await c.query(`SELECT a.*, l.razao_social FROM assinaturas a JOIN lojas l ON l.id = a.loja_id WHERE a.status IN ('ativa', 'atrasada') AND a.forma = 'pix' AND a.proxima_cobranca <= ($1::date + $2::int)`, [hoje(), DIAS_ANTES_DO_VENCIMENTO])).rows;
@@ -198,6 +210,11 @@ export async function rodarCiclos() {
     // atraso: fatura pendente vencida há mais de 5 dias → assinatura atrasada (fatura marcada vencida)
     const r = await c.query(`UPDATE faturas_assinatura SET status = 'vencida' WHERE status = 'pendente' AND vence_em < ($1::date - $2::int) RETURNING assinatura_id`, [hoje(), DIAS_TOLERANCIA]);
     for (const row of r.rows) { await c.query(`UPDATE assinaturas SET status = 'atrasada', atualizada_em = now() WHERE id = $1 AND status = 'ativa'`, [row.assinatura_id]); atrasadas++; }
+    // suspensão: fatura vencida/falhou há mais de N dias sem pagamento → suspensa (a loja cai na tela de assinatura até pagar)
+    const s = await c.query(`UPDATE assinaturas a SET status = 'suspensa', atualizada_em = now()
+       WHERE a.status = 'atrasada' AND EXISTS (SELECT 1 FROM faturas_assinatura f WHERE f.assinatura_id = a.id AND f.status IN ('vencida', 'falhou', 'pendente') AND f.vence_em < ($1::date - $2::int))
+       RETURNING a.id`, [hoje(), diasBloqueio()]);
+    suspensas = s.rowCount;
   });
-  return { geradas, atrasadas };
+  return { geradas, atrasadas, suspensas };
 }

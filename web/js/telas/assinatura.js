@@ -5,7 +5,7 @@ import { html, render, $, $$, icone, avisar, comBotao, confirmar, data } from '.
 
 const reais = (c) => Number(c || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const dia = (v) => data(typeof v === 'string' && v.length === 10 ? v + 'T12:00:00' : v);   // datas sem hora: meio-dia para não voltar um dia no fuso
-const STATUS = { pendente: ['Aguardando pagamento', 'alerta'], ativa: ['Ativa', 'ok'], atrasada: ['Pagamento atrasado', 'erro'], cancelada: ['Cancelada', ''], isenta: ['Isenta pela rede', 'ok'] };
+const STATUS = { pendente: ['Aguardando pagamento', 'alerta'], ativa: ['Ativa', 'ok'], atrasada: ['Pagamento atrasado', 'erro'], suspensa: ['Suspensa por falta de pagamento', 'erro'], cancelada: ['Cancelada', ''], isenta: ['Isenta pela rede', 'ok'] };
 const FATURA = { pendente: ['Em aberto', 'alerta'], paga: ['Paga', 'ok'], vencida: ['Vencida', 'erro'], cancelada: ['Cancelada', ''], falhou: ['Falhou', 'erro'] };
 const NOTAS = [
   'Os valores apresentados não incluem eventuais custos de reservas, taxas ou cobranças de integradores e plataformas parceiras, que poderão ser cobrados separadamente.',
@@ -15,7 +15,7 @@ const NOTAS = [
 export async function montar(alvo, ctx) {
   const bloqueando = !!ctx.usuario.assinatura?.pendente;
   const sistema = document.getElementById('sistema');
-  if (bloqueando) sistema?.classList.add('so-termos');
+  if (bloqueando) sistema?.classList.add('so-termos', 'so-assinatura');
   render(alvo, html`<div class="cabecalho-pagina"><div class="titulos"><h1>Assinatura do Conecta</h1><p>Carregando…</p></div></div><div class="painel"><div class="painel-corpo"><div class="esqueleto"></div></div></div>`);
   let s;
   try { s = await api.assinatura(); } catch (err) {
@@ -26,19 +26,41 @@ export async function montar(alvo, ctx) {
 
   function desenhar() {
     const a = s.assinatura;
-    const emDia = a && ['ativa', 'atrasada', 'isenta'].includes(a.status);
+    const emDia = a && ['ativa', 'atrasada', 'suspensa', 'isenta'].includes(a.status);
     const contratando = !emDia && s.podeContratar && s.ligada;
-    render(alvo, html`
-      <div class="cabecalho-pagina">
-        <div class="titulos"><h1>${bloqueando ? 'Ative o Conecta na sua loja' : 'Assinatura do Conecta'}</h1>
-          <p>${estado.passo === 'pronto' && estado.resultado ? 'Tudo certo com a assinatura da loja.' : bloqueando ? 'Escolha o plano e pague para liberar o acesso da loja.' : emDia ? `Plano ${a.planoNome} · ${a.ciclo === 'anual' ? 'anual' : 'mensal'} · ${a.formaNome}.` : 'A loja ainda não tem assinatura ativa.'}</p></div>
-        ${a ? html`<span class="selo ${STATUS[a.status]?.[1] || ''}">${STATUS[a.status]?.[0] || a.status}</span>` : ''}
-      </div>
+    const miolo = html`
       ${s.simulado ? html`<div class="alerta-caixa">${icone('info')}<span>Ambiente de teste: a Pagar.me está simulada — nada é cobrado de verdade.</span></div>` : ''}
       ${!s.ligada ? html`<div class="alerta-caixa info">${icone('info')}<span>A assinatura online ainda não está disponível. Fale com a administração da rede.</span></div>` : ''}
       ${a?.status === 'atrasada' ? html`<div class="alerta-caixa erro">${icone('alerta')}<span><strong>Pagamento atrasado.</strong> Regularize a fatura em aberto para manter o acesso da loja.</span></div>` : ''}
+      ${a?.status === 'suspensa' ? html`<div class="alerta-caixa erro">${icone('alerta')}<span><strong>Acesso suspenso por falta de pagamento.</strong> Pague a fatura em aberto abaixo e o acesso volta sozinho assim que o pagamento for confirmado.</span></div>` : ''}
       ${emDia ? situacao(a) : contratando ? (estado.passo === 'pronto' ? pronto() : estado.passo === 'pagamento' ? pagamento() : planos()) : a?.status === 'pendente' ? aguardando() : html`<section class="painel"><div class="painel-corpo"><p class="sub">${s.podeContratar ? '' : 'Só o gestor da loja contrata a assinatura.'}</p>${planosLista(false)}</div></section>`}
-      ${s.faturas?.length ? faturas() : ''}`);
+      ${s.faturas?.length ? faturas() : ''}`;
+    const titulo = estado.passo === 'pronto' && estado.resultado ? ['Tudo certo', 'Sua loja já está no Conecta.'] : emDia ? ['Assinatura do Conecta', `Plano ${a.planoNome} · ${a.ciclo === 'anual' ? 'anual' : 'mensal'} · ${a.formaNome}.`] : a?.status === 'pendente' ? ['Aguardando o pagamento', 'Assim que a Pagar.me confirmar, o acesso libera sozinho.'] : estado.passo === 'pagamento' ? ['Pagamento', 'Escolha como quer pagar. A cobrança é processada pela Pagar.me.'] : ['Escolha o plano da sua loja', 'Cobrança mensal ou anual, sem fidelidade no mensal. O acesso ao Conecta libera assim que o pagamento for confirmado.'];
+    if (!bloqueando) {
+      render(alvo, html`<div class="cabecalho-pagina"><div class="titulos"><h1>${titulo[0]}</h1><p>${titulo[1]}</p></div>${a ? html`<span class="selo ${STATUS[a.status]?.[1] || ''}">${STATUS[a.status]?.[0] || a.status}</span>` : ''}</div>${miolo}`);
+    } else {
+      // tela de entrada (sem menu): faixa preta da marca + passos, como a tela de acesso
+      const passo = estado.passo === 'pronto' || emDia ? 3 : estado.passo === 'pagamento' || a?.status === 'pendente' ? 2 : 1;
+      const loja = s.loja?.nome || ctx.usuario.loja?.nome || '';
+      render(alvo, html`<div class="acesso assinatura-acesso">
+        <aside class="acesso-marca">
+          <div>
+            <img class="logo" src="/assets/logo-locarx-branca.png" alt="LocarX" width="200">
+            <div class="chamada assinatura-chamada"><h1>Ative o <span>Conecta</span> na sua loja</h1><p>Atendimento pelo WhatsApp, assistente virtual Lia e CRM da rede LocarX. Pague e comece a usar hoje.</p></div>
+            <nav class="passos-assinatura" aria-label="Etapas">
+              ${[['Escolher o plano'], ['Pagamento'], ['Pronto para usar']].map(([n], i) => html`<div class="passo-item ${passo === i + 1 ? 'atual' : passo > i + 1 ? 'feito' : ''}"><i>${passo > i + 1 ? '✓' : i + 1}</i> ${n}</div>`)}
+            </nav>
+          </div>
+          <img class="x-fundo" src="/assets/icone-512.png" alt="">
+          <div class="rodape-marca">Conecta LocarX · Auniti Tecnologia · Pagamentos processados pela Pagar.me</div>
+        </aside>
+        <div class="assinatura-area"><div class="assinatura-caixa">
+          <header class="cabecalho-pagina"><div class="titulos"><h1>${titulo[0]}</h1><p>${titulo[1]}</p></div>${a ? html`<span class="selo ${STATUS[a.status]?.[1] || ''}">${STATUS[a.status]?.[0] || a.status}</span>` : ''}</header>
+          ${loja ? html`<div class="loja-chip"><span class="av">${loja.replace(/^LocarX\s*/i, '').slice(0, 2).toUpperCase()}</span><div><b>${loja}</b><br><small>Gestor: ${ctx.usuario.nome}</small></div></div>` : ''}
+          ${miolo}
+        </div></div>
+      </div>`);
+    }
     ligar();
   }
 
@@ -60,12 +82,13 @@ export async function montar(alvo, ctx) {
       </div>
       ${planosLista(true)}
       <div class="notas-plano">${NOTAS.map((n) => html`<p>${n}</p>`)}</div>
-      <div class="acoes-linha entre"><span></span><button class="btn btn-primario" id="ir-pagamento">Continuar →</button></div>
+      <div class="acoes-linha entre"><span></span><button class="btn btn-primario" id="ir-pagamento">Continuar com o ${s.planos.find((x) => x.chave === estado.plano)?.nome || 'plano'} →</button></div>
     </div></section>`;
   }
   function pagamento() {
     const p = s.planos.find((x) => x.chave === estado.plano);
     const total = estado.ciclo === 'anual' ? p.anual : p.mensal;
+    const hojeD = new Date(); const prox = new Date(hojeD); if (estado.ciclo === 'anual') prox.setFullYear(prox.getFullYear() + 1); else prox.setMonth(prox.getMonth() + 1);
     return html`<div class="assinatura-grade">
       <section class="painel"><form class="painel-corpo form" id="form-pagar" novalidate>
         <h2>Forma de pagamento</h2>
@@ -89,6 +112,8 @@ export async function montar(alvo, ctx) {
         <div><span>Plano</span><b>${p.nome}</b></div>
         <div><span>Ciclo</span><span>${estado.ciclo === 'anual' ? 'Anual' : 'Mensal'}</span></div>
         <div><span>Loja</span><span>${s.loja?.nome || ctx.usuario.loja?.nome || ''}</span></div>
+        <div><span>Primeira cobrança</span><span>hoje, ${hojeD.toLocaleDateString('pt-BR')}</span></div>
+        <div class="sub-linha"><span>Próxima</span><span>${estado.forma === 'cartao' || estado.forma === 'boleto' ? prox.toLocaleDateString('pt-BR') : prox.toLocaleDateString('pt-BR') + ' (Pix novo 5 dias antes)'}</span></div>
         <div class="total"><span>Total</span><span class="num">${reais(total / 100)}</span></div>
         <p class="sub">Você pode cancelar a qualquer momento nesta tela. A cobrança é feita pela Pagar.me em nome da Auniti Tecnologia.</p>
       </div></aside>
@@ -135,7 +160,11 @@ export async function montar(alvo, ctx) {
         <div class="dado"><dt>Desde</dt><dd>${a.inicioEm ? dia(a.inicioEm) : '—'}</dd></div>
       </dl>
       ${s.faturaAberta ? html`<div class="alerta-caixa ${a.status === 'atrasada' ? 'erro' : ''}">${icone('alerta')}<span><strong>Fatura ${s.faturaAberta.referencia} em aberto:</strong> ${reais(s.faturaAberta.valor)}${s.faturaAberta.venceEm ? `, vence ${dia(s.faturaAberta.venceEm)}` : ''}.</span></div>${s.faturaAberta.pix ? pixBloco(s.faturaAberta) : ''}${s.faturaAberta.boleto ? boletoBloco(s.faturaAberta) : ''}` : ''}
-      ${s.podeContratar && a.status !== 'isenta' ? html`<div class="acoes-linha"><button class="btn btn-texto" id="cancelar-assinatura">Cancelar assinatura</button></div>` : ''}
+      <div class="acoes-linha">
+        ${s.faturaAberta ? html`<button class="btn btn-contorno" id="conferir">Já paguei — conferir</button>` : ''}
+        ${s.faturaAberta && s.podeContratar && a.status !== 'isenta' ? html`<button class="btn btn-contorno" id="novo-pix">${s.faturaAberta.pix ? 'Gerar Pix novo' : 'Pagar com Pix'}</button>` : ''}
+        ${s.podeContratar && a.status !== 'isenta' ? html`<button class="btn btn-texto" id="cancelar-assinatura">Cancelar assinatura</button>` : ''}
+      </div>
     </div></section>`;
   }
   function faturas() {
@@ -147,17 +176,18 @@ export async function montar(alvo, ctx) {
   // ---------- ações ----------
   async function recarregar() { try { s = await api.assinatura(); } catch (err) { if (err.status === 401) return ctx.sessaoExpirou(); avisar(err.message, 'erro'); } desenhar(); }
   function liberar() {
-    sistema?.classList.remove('so-termos');
+    sistema?.classList.remove('so-termos', 'so-assinatura');
     ctx.atualizarUsuario({ ...ctx.usuario, assinatura: { ...(ctx.usuario.assinatura || {}), status: 'ativa', pendente: false }, loja: ctx.usuario.loja });
   }
   function ligar() {
     $$('[data-plano]', alvo).forEach((b) => b.addEventListener('click', () => { estado.plano = b.dataset.plano; desenhar(); }));
     $$('[data-ciclo]', alvo).forEach((b) => b.addEventListener('click', () => { estado.ciclo = b.dataset.ciclo; desenhar(); }));
     $$('[data-forma]', alvo).forEach((b) => b.addEventListener('click', () => { estado.forma = b.dataset.forma; desenhar(); }));
-    $('#ir-pagamento', alvo)?.addEventListener('click', () => { estado.passo = 'pagamento'; desenhar(); });
-    $('#voltar-plano', alvo)?.addEventListener('click', () => { estado.passo = 'plano'; desenhar(); });
     $('#entrar', alvo)?.addEventListener('click', () => { liberar(); ctx.navegar('inicio'); });
     $('#conferir', alvo)?.addEventListener('click', async () => { await recarregar(); if (['ativa', 'isenta'].includes(s.assinatura?.status)) { avisar('Pagamento confirmado!'); liberar(); } else avisar('Ainda não recebemos a confirmação. Tente de novo em instantes.'); });
+    $('#ir-pagamento', alvo)?.addEventListener('click', () => { estado.passo = 'pagamento'; desenhar(); window.scrollTo({ top: 0 }); });
+    $('#voltar-plano', alvo)?.addEventListener('click', () => { estado.passo = 'plano'; desenhar(); window.scrollTo({ top: 0 }); });
+    $('#novo-pix', alvo)?.addEventListener('click', async (e) => { await comBotao(e.currentTarget, async () => { try { await api.novoPixAssinatura(); avisar('Pix gerado. Pague e clique em "Já paguei".'); await recarregar(); } catch (err) { avisar(err.message, 'erro'); } }); });
     $('#recomecar', alvo)?.addEventListener('click', () => { s = { ...s, assinatura: null, faturaAberta: null }; estado.passo = 'plano'; desenhar(); });
     const copiar = (idInput, idBtn) => $(idBtn, alvo)?.addEventListener('click', async (e) => { const i = $(idInput, alvo); const b = e.currentTarget; try { await navigator.clipboard.writeText(i.value); } catch { i.select(); document.execCommand?.('copy'); } b.textContent = 'Copiado'; setTimeout(() => desenhar(), 1500); });
     copiar('#pix-codigo', '#pix-copiar'); copiar('#boleto-linha', '#boleto-copiar');
@@ -202,5 +232,5 @@ export async function montar(alvo, ctx) {
   }
 
   desenhar();
-  return { limpar: () => sistema?.classList.remove('so-termos') };
+  return { limpar: () => sistema?.classList.remove('so-termos', 'so-assinatura') };
 }

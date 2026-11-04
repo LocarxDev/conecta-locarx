@@ -78,6 +78,7 @@ export const config = {
     webhookSenha: process.env.PAGARME_WEBHOOK_SENHA?.trim() || null,
     descricaoFatura: (process.env.PAGARME_DESCRICAO || 'CONECTA LOCARX').trim().slice(0, 22),
     obrigatoria: process.env.ASSINATURA_OBRIGATORIA === '1',
+    diasBloqueio: Math.max(0, Number(process.env.ASSINATURA_DIAS_BLOQUEIO) || 10),   // dias após o vencimento para suspender (trava a loja)
   } : null,
   // Servidor MCP (LocarX Tools para outros sistemas, ex.: Lia I.A. e chat do site). Desligado sem MCP_TOKEN.
   mcpToken: process.env.MCP_TOKEN && process.env.MCP_TOKEN.length >= 32 ? process.env.MCP_TOKEN : null,

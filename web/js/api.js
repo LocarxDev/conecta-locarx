@@ -58,6 +58,7 @@ const real = {
   assinatura: () => chamar('GET', '/loja/assinatura'),
   contratarAssinatura: (d) => chamar('POST', '/loja/assinatura', d),
   cancelarAssinatura: (motivo) => chamar('POST', '/loja/assinatura/cancelar', { motivo }),
+  novoPixAssinatura: () => chamar('POST', '/loja/assinatura/novo-pix'),
   assinaturasAdmin: () => chamar('GET', '/admin/assinaturas'),
   assinaturaDaLoja: (id) => chamar('GET', `/admin/lojas/${encodeURIComponent(id)}/assinatura`),
   isentarAssinatura: (id, d) => chamar('POST', `/admin/lojas/${encodeURIComponent(id)}/assinatura/isentar`, d),

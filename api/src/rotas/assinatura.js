@@ -37,6 +37,12 @@ assinaturaLoja.post('/assinatura', exigirPerfil('dono'), rota(async (req, res) =
   res.status(201).json({ assinatura: assinatura.assinaturaPublica(r.assinatura), fatura: assinatura.faturaPublica(r.fatura) });
 }));
 
+// gera um Pix novo para a fatura em aberto (código expirado ou loja suspensa)
+assinaturaLoja.post('/assinatura/novo-pix', exigirPerfil('dono'), rota(async (req, res) => {
+  const f = await comContexto(ctx(req), (c) => assinatura.novoPix(c, req.usuario.loja_id));
+  res.json(assinatura.faturaPublica(f));
+}));
+
 assinaturaLoja.post('/assinatura/cancelar', exigirPerfil('dono'), rota(async (req, res) => {
   const { motivo } = validar(z.object({ motivo: z.string().trim().max(300).optional() }), req.body || {});
   const a = await comContexto(ctx(req), async (c) => {

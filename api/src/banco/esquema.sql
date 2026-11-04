@@ -1360,3 +1360,7 @@ DROP POLICY IF EXISTS faturas_assinatura_alterar ON faturas_assinatura;
 CREATE POLICY faturas_assinatura_alterar ON faturas_assinatura FOR ALL
   USING (ctx_perfil() IN ('admin', 'sistema') OR (loja_id = ctx_loja() AND ctx_perfil() = 'dono'))
   WITH CHECK (ctx_perfil() IN ('admin', 'sistema') OR (loja_id = ctx_loja() AND ctx_perfil() = 'dono'));
+
+-- v14.8.1 — assinatura "suspensa": atrasada há mais de ASSINATURA_DIAS_BLOQUEIO dias (padrão 10) → loja travada até pagar
+ALTER TABLE assinaturas DROP CONSTRAINT IF EXISTS assinaturas_status_check;
+ALTER TABLE assinaturas ADD CONSTRAINT assinaturas_status_check CHECK (status IN ('pendente', 'ativa', 'atrasada', 'suspensa', 'cancelada', 'isenta'));
