@@ -5,6 +5,7 @@ import { erro } from '../../http.js';
 import { config } from '../../config.js';
 import { normalizarModulos } from '../modulos.js';
 import * as pagarme from './pagarme.js';
+import { ErroPagarme } from './pagarme.js';
 import { PLANOS, FORMAS, valorDoPlano, modulosComPlano, referenciaDe, somarCiclo, planosPublicos, dataISO } from './planos.js';
 
 const hoje = () => new Date().toISOString().slice(0, 10);
@@ -61,13 +62,20 @@ export async function contratar(c, { loja, usuario, plano, ciclo = 'mensal', for
   if (!clienteId) clienteId = (await pagarme.criarCliente({ nome: loja.razao_social, email: loja.financeiro_email || loja.responsavel_email, cnpj: loja.cnpj, telefone: loja.responsavel_telefone, endereco: loja.endereco ? { line_1: loja.endereco, cidade: loja.cidade, uf: loja.uf } : null, cep: loja.cep, codigo: loja.id })).id;
 
   let cartao = null, sub = null, pedido = null;
-  if (forma === 'cartao') {
-    cartao = await pagarme.salvarCartao(clienteId, cardToken);
-    sub = await pagarme.criarAssinatura({ clienteId, cartaoId: cartao.id, forma, valorCentavos: valor, descricao, ciclo, codigo, metadata: { loja_id: loja.id, plano, ciclo } });
-  } else if (forma === 'boleto') {
-    sub = await pagarme.criarAssinatura({ clienteId, forma, valorCentavos: valor, descricao, ciclo, codigo, metadata: { loja_id: loja.id, plano, ciclo } });
-  } else {
-    pedido = await pagarme.criarPedido({ clienteId, forma: 'pix', valorCentavos: valor, descricao, codigo, validadeSegundos: PIX_VALIDADE_SEGUNDOS, metadata: { loja_id: loja.id, plano, ciclo } });
+  try {
+    if (forma === 'cartao') {
+      cartao = await pagarme.salvarCartao(clienteId, cardToken);
+      sub = await pagarme.criarAssinatura({ clienteId, cartaoId: cartao.id, forma, valorCentavos: valor, descricao, ciclo, codigo, metadata: { loja_id: loja.id, plano, ciclo } });
+    } else if (forma === 'boleto') {
+      sub = await pagarme.criarAssinatura({ clienteId, forma, valorCentavos: valor, descricao, ciclo, codigo, metadata: { loja_id: loja.id, plano, ciclo } });
+    } else {
+      pedido = await pagarme.criarPedido({ clienteId, forma: 'pix', valorCentavos: valor, descricao, codigo, validadeSegundos: PIX_VALIDADE_SEGUNDOS, metadata: { loja_id: loja.id, plano, ciclo } });
+    }
+  } catch (err) {
+    // guarda o cliente já criado para não duplicar na próxima tentativa; devolve o motivo da Pagar.me ao gestor
+    if (!atual?.pagarme_cliente_id) await c.query(`INSERT INTO assinaturas (loja_id, plano, ciclo, forma, status, valor_centavos, pagarme_cliente_id, criada_por) VALUES ($1, $2, $3, $4, 'cancelada', $5, $6, $7) ON CONFLICT (loja_id) DO UPDATE SET pagarme_cliente_id = EXCLUDED.pagarme_cliente_id`, [loja.id, plano, ciclo, forma, valor, clienteId, usuario?.id || null]).catch(() => {});
+    if (err instanceof ErroPagarme) { console.error('[assinatura] Pagar.me recusou:', err.message, JSON.stringify(err.corpo?.errors || {})); throw erro(422, err.message); }
+    throw err;
   }
   const ativaJa = forma === 'cartao' && sub?.status === 'active';
   const inicio = hoje();

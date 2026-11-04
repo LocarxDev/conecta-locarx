@@ -25,7 +25,9 @@ async function chamar(metodo, caminho, corpo) {
   const texto = await r.text();
   let json = null; try { json = texto ? JSON.parse(texto) : null; } catch { /* não era JSON */ }
   if (!r.ok) {
-    const msg = json?.message || json?.errors && JSON.stringify(json.errors) || texto.slice(0, 200) || `HTTP ${r.status}`;
+    // junta o motivo real: { errors: { "card.exp_year": ["..."] } } → "card.exp_year: ..."
+    const detalhes = json?.errors && typeof json.errors === 'object' ? Object.entries(json.errors).map(([k, v]) => `${k}: ${[].concat(v).join(', ')}`).join(' · ') : '';
+    const msg = [json?.message, detalhes].filter(Boolean).join(' — ') || texto.slice(0, 200) || `HTTP ${r.status}`;
     throw new ErroPagarme(`Pagar.me: ${msg}`, { status: r.status, corpo: json });
   }
   return json;
@@ -57,7 +59,7 @@ export async function criarAssinatura({ clienteId, cartaoId, forma, valorCentavo
   const r = await chamar('POST', '/subscriptions', {
     code: codigo, customer_id: clienteId,
     payment_method: forma === 'cartao' ? 'credit_card' : 'boleto',
-    card: forma === 'cartao' ? { card_id: cartaoId } : undefined,
+    card_id: forma === 'cartao' ? cartaoId : undefined,   // cartão já salvo no cliente (POST /customers/:id/cards)
     boleto_due_days: forma === 'boleto' ? 3 : undefined,
     interval: ciclo === 'anual' ? 'year' : 'month', interval_count: 1, billing_type: 'prepaid', installments: 1,
     statement_descriptor: cfg().descricaoFatura,
