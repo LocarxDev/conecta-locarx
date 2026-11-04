@@ -66,6 +66,19 @@ export const config = {
     chavePublica: process.env.ABACATEPAY_PUBLIC_KEY?.trim() || null,
     validadeMinutos: Number(process.env.PIX_VALIDADE_MINUTOS) || 30,
   } : null,
+  // v14.8 — Assinatura do Conecta pelos franqueados (Pagar.me, API v5). Sem PAGARME_SECRET_KEY a assinatura fica em modo
+  // simulado fora de produção (PAGARME_SIMULADO=1) ou desligada. ASSINATURA_OBRIGATORIA=1 bloqueia o gestor sem assinatura ativa.
+  pagarme: process.env.PAGARME_SECRET_KEY || (process.env.PAGARME_SIMULADO === '1' && !producao) ? {
+    chave: process.env.PAGARME_SECRET_KEY?.trim() || null,
+    chavePublica: process.env.PAGARME_PUBLIC_KEY?.trim() || null,          // pk_… usada pelo navegador para tokenizar o cartão
+    url: (process.env.PAGARME_URL || 'https://api.pagar.me/core/v5').trim().replace(/\/+$/, ''),
+    simulado: process.env.PAGARME_SIMULADO === '1' && !producao,
+    // webhook: no painel da Pagar.me, cadastre a URL …/api/webhooks/pagarme com autenticação Basic (usuário e senha abaixo)
+    webhookUsuario: process.env.PAGARME_WEBHOOK_USUARIO?.trim() || null,
+    webhookSenha: process.env.PAGARME_WEBHOOK_SENHA?.trim() || null,
+    descricaoFatura: (process.env.PAGARME_DESCRICAO || 'CONECTA LOCARX').trim().slice(0, 22),
+    obrigatoria: process.env.ASSINATURA_OBRIGATORIA === '1',
+  } : null,
   // Servidor MCP (LocarX Tools para outros sistemas, ex.: Lia I.A. e chat do site). Desligado sem MCP_TOKEN.
   mcpToken: process.env.MCP_TOKEN && process.env.MCP_TOKEN.length >= 32 ? process.env.MCP_TOKEN : null,
   // Chat do site (widget no site da LocarX). Origens dos sites que podem abrir o chat (ex.: https://www.locarx.com.br,https://teste.exemplo.com).

@@ -1,7 +1,27 @@
 // Lojas da rede (administração e matriz): lista, cadastro e detalhe com a equipe da loja.
-import { api } from '../api.js';
+import { api, lojaAtuando } from '../api.js';
 import { html, render, $, $$, icone, data, avisar, abrirModal, confirmar, dadosDoForm, marcarErros, comBotao, paginar, ligarPaginacao } from '../util.js';
 import { painelEquipe } from './equipe.js';
+import { camposCadastro, ligarMascaras, validarCadastro, listaCadastro, seloCadastro } from './cadastro-loja.js';
+import * as assistenteTela from './assistente.js';
+import * as baseTela from './base.js';
+import * as pagamentosTela from './pagamentos.js';
+import * as whatsappTela from './whatsapp.js';
+import * as personalizarTela from './personalizar.js';
+import * as respostasTela from './respostas.js';
+import * as modelosTela from './modelos.js';
+
+// v14.7 — telas da loja que a administração abre "de dentro" da loja (Lojas → loja → Configurar): mesmas telas do gestor,
+// com a API apontada para /admin/na-loja/:id. O gestor recebe a loja pronta; o que é da administração só aparece editável aqui.
+const TELAS_NA_LOJA = {
+  assistente: { titulo: 'Assistente virtual', tela: assistenteTela.montar, sub: 'Prompt, textos, horário, chave de IA e limite diário' },
+  base: { titulo: 'Base de conhecimento', tela: baseTela.montar, sub: 'O que a Lia sabe sobre a loja; importar do portal' },
+  pagamentos: { titulo: 'Pagamentos online', tela: pagamentosTela.loja, sub: 'Token do AbacatePay (conta própria) e relatório' },
+  whatsapp: { titulo: 'Canais da loja', tela: whatsappTela.montar, sub: 'WhatsApp (QR, trocar número) e Instagram' },
+  personalizar: { titulo: 'Funis, etiquetas e campos', tela: personalizarTela.montar, sub: 'Funil, regras automáticas, etiquetas, campos e roleta' },
+  respostas: { titulo: 'Respostas rápidas', tela: respostasTela.montar, sub: 'Atalhos da equipe' },
+  modelos: { titulo: 'Mensagens automáticas', tela: modelosTela.montar, sub: 'Textos e horários das automáticas desta loja' },
+};
 
 const UFS = 'AC AL AP AM BA CE DF ES GO MA MT MS MG PA PB PR PE PI RJ RN RS RO RR SC SP SE TO'.split(' ');
 
@@ -29,6 +49,7 @@ function formLoja(loja = {}) {
     <div class="campo"><label for="l-tipo">Tipo de loja</label><select id="l-tipo" name="tipo">
       <option ${f.tipo !== 'Aeroporto' ? 'selected' : ''}>Cidade</option><option ${f.tipo === 'Aeroporto' ? 'selected' : ''}>Aeroporto</option>
     </select><p class="ajuda">A filial liga a loja ao portal LocarX: o assistente só consulta e reserva carros dela.</p></div>
+    ${camposCadastro(loja.cadastro || {}, { prefixo: 'l' })}
   </form>`;
 }
 
@@ -38,7 +59,9 @@ function abrirFormLoja(loja, aoSalvar) {
     corpo: formLoja(loja || {}),
     rodape: html`<button class="btn btn-contorno" data-fechar>Cancelar</button><button class="btn btn-primario" type="submit" form="form-loja">${loja ? 'Salvar' : 'Cadastrar loja'}</button>`,
   });
+  modal.el.classList.add('modal-grande');
   const form = $('#form-loja', modal.el);
+  ligarMascaras(form);
   form.elements.branchCode.addEventListener('input', (e) => { e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
   // Central de Reservas: sem filial própria, os campos da filial somem
   const alternarCentral = () => {
@@ -76,6 +99,7 @@ function abrirFormLoja(loja, aoSalvar) {
     const central = !!d.central || !!loja?.central;
     if (!central || d.branchId) { if (!/^\d+$/.test(d.branchId)) erros.branchId = 'Use só números, ex.: 5.'; }
     if (!central || d.branchCode) { if (!/^[A-Z0-9]{2,6}$/.test(d.branchCode)) erros.branchCode = 'Use de 2 a 6 letras ou números.'; }
+    Object.assign(erros, validarCadastro(d));
     if (!marcarErros(form, erros)) return;
     await comBotao($('[type=submit]', modal.el), async () => {
       try {
@@ -198,6 +222,25 @@ export async function detalhe(alvo, ctx) {
           : html`<span class="selo neutro">Conta da rede</span> <span class="sub">repasse pelo relatório</span>`}
           ${ehAdmin ? html`<div><button class="btn btn-texto" id="pix-proprio">${loja.pix?.proprio ? 'Voltar para a conta da rede' : 'Liberar conta própria (AbacatePay da loja)'}</button></div>` : ''}</dd></div>
       </dl></div>
+    </section>
+    ${ehAdmin ? html`<section class="painel" id="assinatura-loja"><div class="painel-cab"><div><h2>Assinatura do Conecta</h2><span class="sub">Plano pago pela loja (Pagar.me). Isenção, confirmação manual e cancelamento ficam com você.</span></div></div><div class="painel-corpo"><div class="esqueleto"></div></div></section>` : ''}
+    ${ehAdmin ? html`<section class="painel" id="configurar-loja">
+      <div class="painel-cab"><div><h2>Configurar a loja</h2><span class="sub">Abre as telas da loja no seu acesso. O gestor recebe a loja pronta: prompt, chaves, base, pagamentos e número do WhatsApp só mudam por aqui.</span></div></div>
+      <div class="painel-corpo"><div class="grade-config">
+        ${Object.entries(TELAS_NA_LOJA).map(([k, t]) => html`<a class="cartao-config" href="#/lojas/${loja.id}/${k}"><strong>${t.titulo}</strong><span class="sub">${t.sub}</span></a>`)}
+      </div></div>
+      <form class="painel-corpo form" id="form-limites" novalidate>
+        <h3 class="form-secao">Limites da loja</h3>
+        <div class="form-linha">
+          <div class="campo"><label for="lim-at">Atendentes que o gestor pode convidar</label><input id="lim-at" name="limiteAtendentes" type="number" min="0" max="500" value="${loja.limites?.atendentes ?? 5}"><p class="ajuda">Ativos + convidados. A administração convida sem limite.</p></div>
+          <div class="campo"><label for="lim-env">Mensagens automáticas por hora</label><input id="lim-env" name="limiteEnviosHora" type="number" min="0" max="10000" value="${loja.limites?.enviosHora ?? 60}"><p class="ajuda">Reserva e etapa do funil. 0 = sem limite. O que passar fica para a hora seguinte.</p></div>
+        </div>
+        <div class="acoes-form"><button class="btn btn-primario" type="submit">Salvar limites</button></div>
+      </form>
+    </section>` : ''}
+    <section class="painel" id="cadastro-loja">
+      <div class="painel-cab"><div><h2>Cadastro e faturamento</h2><span class="sub">CNPJ, razão social, endereço, gestor responsável e cobrança. O gestor da loja também confere e corrige em "Dados da loja".</span></div>${seloCadastro(loja.cadastro)}</div>
+      <div class="painel-corpo">${listaCadastro(loja.cadastro)}</div>
     </section>
     <section class="painel" id="modulos-loja">
       <div class="painel-cab"><div><h2>Módulos do plano</h2><span class="sub">O que esta loja pode usar no Conecta. Desligado some do menu da loja e a API bloqueia. A equipe entra de novo ao salvar.</span></div>
@@ -397,13 +440,23 @@ export async function detalhe(alvo, ctx) {
     }).catch((err) => render(caixaCentral, html`<span class="sub">${err.message}</span>`));
   }
 
+  if (ehAdmin) painelAssinatura($('#assinatura-loja', alvo), lojaId, ctx);
+  $('#form-limites', alvo)?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target; const d = { limiteAtendentes: Number(f.elements.limiteAtendentes.value), limiteEnviosHora: Number(f.elements.limiteEnviosHora.value) };
+    const erros = {};
+    if (!Number.isInteger(d.limiteAtendentes) || d.limiteAtendentes < 0 || d.limiteAtendentes > 500) erros.limiteAtendentes = 'Use um número de 0 a 500.';
+    if (!Number.isInteger(d.limiteEnviosHora) || d.limiteEnviosHora < 0 || d.limiteEnviosHora > 10000) erros.limiteEnviosHora = 'Use um número de 0 a 10000.';
+    if (!marcarErros(f, erros)) return;
+    await comBotao($('[type=submit]', f), async () => { try { await api.limitesLoja(lojaId, d); avisar('Limites salvos.'); } catch (err) { if (err.campos) marcarErros(f, err.campos); else avisar(err.message, 'erro'); } });
+  });
   $('#pix-proprio', alvo)?.addEventListener('click', async () => {
     const ligar = !loja.pix?.proprio;
     const ok = await confirmar({ titulo: ligar ? 'Liberar conta própria' : 'Voltar para a conta da rede', texto: ligar
-      ? 'A loja passa a receber os Pix do WhatsApp na própria conta AbacatePay. O gestor cadastra a chave da conta em "Pagamentos online"; até lá, o Pix fica indisponível para esta loja. Ela sai do relatório de repasse.'
+      ? 'A loja passa a receber os Pix do WhatsApp na própria conta AbacatePay. Em seguida cadastre o token da conta em Configurar a loja → Pagamentos online; até lá, o Pix fica indisponível para esta loja. Ela sai do relatório de repasse.'
       : 'Os próximos Pix desta loja voltam a cair na conta da rede (repasse pelo relatório). A chave cadastrada pela loja deixa de ser usada.', botao: ligar ? 'Liberar' : 'Voltar para a rede' });
     if (!ok) return;
-    try { await api.pixProprioLoja(lojaId, ligar); avisar(ligar ? 'Conta própria liberada. Avise o gestor para cadastrar a chave.' : 'Loja de volta à conta da rede.'); detalhe(alvo, ctx); } catch (err) { avisar(err.message, 'erro'); }
+    try { await api.pixProprioLoja(lojaId, ligar); avisar(ligar ? 'Conta própria liberada. Agora cadastre o token do AbacatePay em Configurar a loja → Pagamentos online.' : 'Loja de volta à conta da rede.'); detalhe(alvo, ctx); } catch (err) { avisar(err.message, 'erro'); }
   });
 
   const NOMES_DIAG = { ambiente: 'Ambiente', locality: 'GET /locality', availabilities: 'GET /availabilities/external', prices_calculate: 'POST /prices/calculate', reservations: 'GET /reservations', reservations_new_TESTE: 'POST /reservations/new (reserva de teste, cancelada em seguida)' };
@@ -432,4 +485,82 @@ export async function detalhe(alvo, ctx) {
       ctx.navegar(`lojas/${lojaId}`);
     } catch (err) { avisar(err.message, 'erro'); }
   });
+}
+
+
+// ---------- v14.7: a administração dentro da loja ----------
+export async function naLoja(alvo, ctx) {
+  const [lojaId, chave] = ctx.params;
+  const t = TELAS_NA_LOJA[chave];
+  if (!t) return ctx.navegar(`lojas/${lojaId}`);
+  render(alvo, html`<div class="migalha"><a href="#/lojas">Lojas</a>${icone('seta')}<span>Carregando…</span></div>`);
+  let loja;
+  try { loja = await api.obterLoja(lojaId); } catch (err) {
+    if (err.status === 401) return ctx.sessaoExpirou();
+    return render(alvo, html`<div class="painel"><div class="estado">${icone('alerta')}<h3>Loja não encontrada</h3><p>${err.message}</p><a class="btn btn-contorno" href="#/lojas">Voltar</a></div></div>`);
+  }
+  lojaAtuando.id = lojaId;
+  render(alvo, html`
+    <div class="migalha"><a href="#/lojas">Lojas</a>${icone('seta')}<a href="#/lojas/${lojaId}">${loja.nome}</a>${icone('seta')}<span>${t.titulo}</span></div>
+    <div class="faixa-na-loja">${icone('lojas')}<span><strong>Configurando a loja ${loja.nome}</strong> · ${loja.cidade}/${loja.uf}. Você está no acesso da administração: tudo o que salvar aqui vale para esta loja.</span>
+      <div class="filtros">${Object.entries(TELAS_NA_LOJA).map(([k, x]) => html`<a class="btn ${k === chave ? 'btn-primario' : 'btn-texto'}" href="#/lojas/${lojaId}/${k}">${x.titulo}</a>`)}</div></div>
+    <div id="tela-na-loja"></div>`);
+  // o contexto passa a "ser" a loja; voltar/navegar para telas da loja continua dentro dela
+  const ctx2 = {
+    ...ctx, naLoja: true,
+    usuario: { ...ctx.usuario, loja: { id: loja.id, nome: loja.nome, cidade: loja.cidade, uf: loja.uf, modulos: loja.modulos } },
+    navegar: (caminho) => ctx.navegar(TELAS_NA_LOJA[String(caminho).replace(/^#?\//, '')] ? `lojas/${lojaId}/${String(caminho).replace(/^#?\//, '')}` : caminho),
+  };
+  const r = await t.tela($('#tela-na-loja', alvo), ctx2);
+  const limparInterno = typeof r === 'function' ? r : r?.limpar;
+  return { limpar: () => { lojaAtuando.id = null; limparInterno?.(); } };   // sem `atualizar`: trocar de tela redesenha tudo
+}
+
+
+// ---------- v14.8: assinatura da loja (administração) ----------
+const reais = (v) => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+const dia = (v) => data(typeof v === 'string' && v.length === 10 ? v + 'T12:00:00' : v);
+const ST = { pendente: ['Aguardando pagamento', 'alerta'], ativa: ['Ativa', 'ok'], atrasada: ['Atrasada', 'erro'], cancelada: ['Cancelada', ''], isenta: ['Isenta', 'ok'] };
+const FT = { pendente: ['Em aberto', 'alerta'], paga: ['Paga', 'ok'], vencida: ['Vencida', 'erro'], cancelada: ['Cancelada', ''], falhou: ['Falhou', 'erro'] };
+async function painelAssinatura(area, lojaId, ctx) {
+  if (!area) return;
+  let s;
+  try { s = await api.assinaturaDaLoja(lojaId); } catch (err) { return render($('.painel-corpo', area), html`<p class="sub">${err.message}</p>`); }
+  const a = s.assinatura;
+  render($('.painel-cab', area), html`<div><h2>Assinatura do Conecta</h2><span class="sub">${s.ligada ? (s.simulado ? 'Pagar.me simulada (teste). ' : '') + (s.obrigatoria ? 'Obrigatória: loja sem assinatura não entra.' : 'Opcional por enquanto (ASSINATURA_OBRIGATORIA desligada).') : 'Pagar.me não configurada neste ambiente.'}</span></div>${a ? html`<span class="selo ${ST[a.status]?.[1] || ''}">${ST[a.status]?.[0] || a.status}</span>` : html`<span class="selo">Sem assinatura</span>`}`);
+  render($('.painel-corpo', area), html`
+    ${a ? html`<dl class="dados-grade">
+      <div class="dado"><dt>Plano</dt><dd>${a.planoNome} · ${a.ciclo}</dd></div>
+      <div class="dado"><dt>Valor</dt><dd class="num">${a.valor ? reais(a.valor) : 'cortesia'}</dd></div>
+      <div class="dado"><dt>Pagamento</dt><dd>${a.formaNome}${a.cartao ? ` · final ${a.cartao.final}` : ''}</dd></div>
+      <div class="dado"><dt>Próxima cobrança</dt><dd>${a.proximaCobranca ? dia(a.proximaCobranca) : '—'}</dd></div>
+      <div class="dado"><dt>Observação</dt><dd>${a.observacao || '—'}</dd></div>
+    </dl>` : html`<p class="sub">A loja ainda não assinou. O gestor contrata em Assinatura (menu da loja); você pode isentar a loja abaixo.</p>`}
+    ${s.faturas?.length ? html`<div class="tabela-caixa"><table class="tabela"><thead><tr><th>Ref.</th><th>Valor</th><th>Forma</th><th>Vence</th><th>Situação</th><th></th></tr></thead><tbody>
+      ${s.faturas.slice(0, 6).map((f) => html`<tr><td>${f.referencia}</td><td class="num">${reais(f.valor)}</td><td>${f.formaNome}</td><td>${f.venceEm ? dia(f.venceEm) : '—'}</td><td><span class="selo ${FT[f.status]?.[1] || ''}">${FT[f.status]?.[0] || f.status}</span></td><td class="acoes-linha">${['pendente', 'vencida', 'falhou'].includes(f.status) ? html`<button class="btn btn-contorno" data-confirmar="${f.id}">Confirmar pagamento</button>` : ''}</td></tr>`)}
+    </tbody></table></div>` : ''}
+    <div class="acoes-linha">
+      ${!a || !['isenta'].includes(a.status) ? html`<button class="btn btn-contorno" id="isentar">Isentar a loja (cortesia)</button>` : html`<button class="btn btn-contorno" id="tirar-isencao">Tirar a isenção</button>`}
+      ${a && ['ativa', 'atrasada', 'pendente'].includes(a.status) ? html`<button class="btn btn-texto" id="cancelar-ass">Cancelar assinatura</button>` : ''}
+    </div>`);
+  $('#isentar', area)?.addEventListener('click', async () => {
+    const ok = await confirmar({ titulo: 'Isentar a loja', texto: 'A loja usa o Conecta sem pagar (plano completo). Você pode tirar a isenção depois.', botao: 'Isentar' });
+    if (!ok) return;
+    try { await api.isentarAssinatura(lojaId, { isenta: true, observacao: 'cortesia da rede' }); avisar('Loja isenta.'); painelAssinatura(area, lojaId, ctx); } catch (err) { avisar(err.message, 'erro'); }
+  });
+  $('#tirar-isencao', area)?.addEventListener('click', async () => {
+    const ok = await confirmar({ titulo: 'Tirar a isenção', texto: 'A loja volta a precisar de assinatura paga.', botao: 'Tirar isenção', perigo: true });
+    if (!ok) return;
+    try { await api.isentarAssinatura(lojaId, { isenta: false }); avisar('Isenção retirada.'); painelAssinatura(area, lojaId, ctx); } catch (err) { avisar(err.message, 'erro'); }
+  });
+  $('#cancelar-ass', area)?.addEventListener('click', async () => {
+    const ok = await confirmar({ titulo: 'Cancelar a assinatura', texto: 'Cancela na Pagar.me e no Conecta. A loja perde o acesso quando a cobrança for obrigatória.', botao: 'Cancelar assinatura', perigo: true });
+    if (!ok) return;
+    try { await api.cancelarAssinaturaAdmin(lojaId, 'cancelada pela administração'); avisar('Assinatura cancelada.'); painelAssinatura(area, lojaId, ctx); } catch (err) { avisar(err.message, 'erro'); }
+  });
+  $$('[data-confirmar]', area).forEach((b) => b.addEventListener('click', async () => {
+    const ok = await confirmar({ titulo: 'Confirmar pagamento', texto: 'Marca a fatura como paga (pagou por fora, ou o aviso da Pagar.me não chegou) e ativa a assinatura.', botao: 'Confirmar' });
+    if (!ok) return;
+    try { await api.confirmarFaturaAssinatura(b.dataset.confirmar, 'confirmado pela administração'); avisar('Fatura confirmada.'); painelAssinatura(area, lojaId, ctx); } catch (err) { avisar(err.message, 'erro'); }
+  }));
 }

@@ -76,7 +76,7 @@ function ligarFiltros(alvo, p, aoMudar) {
 }
 
 // Painel "Recebimento": conta da rede (repasse) ou conta própria da loja (chave do AbacatePay cadastrada aqui, só pelo dono)
-function painelRecebimento(cfg) {
+function painelRecebimento(cfg, admin) {
   if (!cfg) return '';
   if (!cfg.proprio) {
     return html`<section class="painel"><div class="painel-cab"><div><h2>Recebimento</h2><span class="sub">Os Pix do WhatsApp caem na conta da rede LocarX; a loja recebe o repasse com base neste relatório.</span></div><span class="selo neutro">Conta da rede</span></div>
@@ -86,12 +86,12 @@ function painelRecebimento(cfg) {
     <div class="painel-corpo">
       ${cfg.chaveFinal ? html`<div class="lista-simples">
           <div><span>Chave do AbacatePay cadastrada <strong class="num">…${cfg.chaveFinal}</strong>${cfg.devMode === true ? html` <span class="selo alerta">sandbox</span>` : cfg.devMode === false ? html` <span class="selo ok">produção</span>` : ''}</span><button type="button" class="btn btn-texto" data-remover-chave>Remover</button></div>
-        </div><p class="ajuda">Para trocar, cole a chave nova abaixo.</p>` : html`<div class="alerta-caixa info">${icone('info')}<span>A administração liberou a conta própria, mas o Pix só fica disponível depois de cadastrar a chave da sua conta AbacatePay.</span></div>`}
-      <form class="form" id="form-chave" novalidate>
+        </div><p class="ajuda">${admin ? 'Para trocar, cole a chave nova abaixo.' : 'Configurado pela administração da rede.'}</p>` : html`<div class="alerta-caixa info">${icone('info')}<span>A administração liberou a conta própria, mas o Pix só fica disponível depois de cadastrar ${admin ? 'a chave da conta AbacatePay da loja.' : 'o token da conta AbacatePay — a administração da rede faz isso com você.'}</span></div>`}
+      ${admin ? html`<form class="form" id="form-chave" novalidate>
         <div class="campo"><label for="ch-abacate">Chave de API do AbacatePay</label><input id="ch-abacate" name="chave" type="password" autocomplete="off" placeholder="abc_dev_… ou abc_prod_…" required>
           <p class="ajuda">No painel do AbacatePay: Integrações → Chaves de API. A chave fica cifrada no servidor e nunca volta ao navegador. Cadastre também o webhook da rede na sua conta (a administração passa a URL).</p></div>
         <div><button class="btn btn-primario" type="submit">Testar e salvar</button></div>
-      </form></div></section>`;
+      </form>` : html`<p class="sub">O token da conta AbacatePay da loja é cadastrado pela administração da rede (v14.7). Se precisar trocar a conta, fale com o Conecta.</p>`}</div></section>`;
 }
 
 export async function loja(alvo, ctx) {
@@ -108,7 +108,7 @@ export async function loja(alvo, ctx) {
         <div class="titulos"><h1>Pagamentos online</h1><p>Pix recebidos pelo WhatsApp da ${ctx.usuario.loja?.nome || 'loja'} na conta da rede. Use este relatório para solicitar o repasse ao franqueador.</p></div>
         <a class="btn btn-contorno" href="${api.urlRelatorioPagamentosCsv(p)}" download>${icone('copiar')}Exportar CSV</a>
       </div>
-      ${painelRecebimento(cfg)}
+      ${painelRecebimento(cfg, ctx.usuario.perfil === 'admin')}
       <section class="painel"><div class="painel-corpo">${filtros(p, filiais)}</div></section>
       ${resumo(r.totais, { rotuloLiquido: cfg?.proprio ? 'Recebido na sua conta' : 'A receber da rede' })}
       ${!p.filial ? tabelaFiliais(r.filiais, { rotulo: cfg?.proprio ? 'Recebido' : 'A receber' }) : ''}

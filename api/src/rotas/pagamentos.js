@@ -4,7 +4,7 @@ import { z } from 'zod';
 import rateLimit from 'express-rate-limit';
 import { config } from '../config.js';
 import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js';
-import { rota, erro, validar, zUuid, exigirPerfil, registrar } from '../http.js';
+import { rota, erro, validar, zUuid, exigirPerfil, soAdministracao, registrar } from '../http.js';
 import * as abacate from '../servicos/pagamentos/abacatepay.js';
 import * as cobrancas from '../servicos/pagamentos/cobrancas.js';
 import { cifrar } from '../servicos/seguranca.js';
@@ -80,7 +80,7 @@ pagamentosLoja.get('/pagamentos', exigirPerfil('dono', 'atendente'), rota(async 
 }));
 
 // ---------- conta própria da loja: cadastrar / testar / remover a chave do AbacatePay (só o dono; só se a administração ligou) ----------
-pagamentosLoja.put('/pagamentos/chave', exigirPerfil('dono'), limite, rota(async (req, res) => {
+pagamentosLoja.put('/pagamentos/chave', soAdministracao, limite, rota(async (req, res) => {
   const { chave } = validar(z.object({ chave: z.string().trim().min(20, 'Cole a chave completa.').max(300) }), req.body);
   const r = await comContexto(ctx(req), async (c) => {
     const l = (await c.query('SELECT pix_proprio FROM lojas WHERE id = $1', [req.usuario.loja_id])).rows[0];
@@ -94,7 +94,7 @@ pagamentosLoja.put('/pagamentos/chave', exigirPerfil('dono'), limite, rota(async
   const conta = await cobrancas.contaDaLoja(req.usuario.loja_id);
   res.json({ ok: true, devMode: r.devMode, conta: conta.conta, chaveFinal: conta.chaveFinal });
 }));
-pagamentosLoja.delete('/pagamentos/chave', exigirPerfil('dono'), rota(async (req, res) => {
+pagamentosLoja.delete('/pagamentos/chave', soAdministracao, rota(async (req, res) => {
   await comContexto(ctx(req), async (c) => {
     await c.query('UPDATE lojas SET abacatepay_chave_cifrada = NULL, abacatepay_chave_final = NULL, abacatepay_dev = NULL WHERE id = $1', [req.usuario.loja_id]);
     await registrar(c, req, 'removeu_chave_abacatepay', { lojaId: req.usuario.loja_id });

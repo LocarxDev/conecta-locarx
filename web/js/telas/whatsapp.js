@@ -39,7 +39,7 @@ export async function montar(alvo, ctx) {
             ${c.instavelAte ? html`<div class="alerta-caixa aviso">${icone('alerta')}<span><strong>Conexão instável.</strong> O WhatsApp conectou e caiu várias vezes seguidas; para não piorar, Conectar fica bloqueado até ${new Date(c.instavelAte).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}. Confira se este número está aberto em outro aparelho ou sistema (WhatsApp → Dispositivos conectados) e, se continuar, use "Trocar de número".</span></div>` : ''}
             ${c.ultimaQuedaEm && !conectado ? html`<p class="sub">Última queda: ${new Date(c.ultimaQuedaEm).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</p>` : ''}
             <div>${conectado
-              ? html`<div class="acoes-linha"><button class="btn btn-contorno" id="trocar">Trocar de número</button><button class="btn btn-perigo" id="desconectar">Desconectar número</button></div>`
+              ? html`<div class="acoes-linha">${ctx.usuario.perfil === 'admin' ? html`<button class="btn btn-contorno" id="trocar">Trocar de número</button>` : ''}<button class="btn btn-perigo" id="desconectar">Desconectar número</button></div>`
               : html`<button class="btn btn-primario" id="conectar" ${c.configurado && !c.instavelAte ? '' : 'disabled'}>${icone('whatsapp')}Conectar WhatsApp</button>`}</div>
           </div>
         </section>
@@ -138,7 +138,7 @@ async function montarInstagram(area, ctx) {
     if (err.status === 401) return ctx.sessaoExpirou();
     return render(area, html`<div class="painel"><div class="estado">${icone('alerta')}<h3>Não foi possível carregar</h3><p>${err.message}</p></div></div>`);
   }
-  const dono = ctx.usuario.perfil === 'dono';
+  const dono = ctx.usuario.perfil === 'dono' || !!ctx.naLoja;
   render(area, html`
     <div class="whats-grade">
       <section class="painel">

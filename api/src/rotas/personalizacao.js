@@ -218,7 +218,7 @@ function rotasEtiquetas(router, { escopo }) {
       }
       const n = (await c.query('SELECT count(*)::int AS n FROM etiquetas WHERE loja_id IS NOT DISTINCT FROM $1', [lojaDe(req)])).rows[0].n;
       if (n >= 60) throw erro(409, 'Limite de 60 etiquetas.');
-      const descricao = escopo === 'loja' && req.usuario.perfil !== 'dono' ? null : (d.descricaoBot || null); // só o dono decide o que o assistente faz
+      const descricao = escopo === 'loja' && !['dono', 'admin'].includes(req.usuario.perfil) ? null : (d.descricaoBot || null); // só o dono decide o que o assistente faz
       return (await c.query('INSERT INTO etiquetas (loja_id, nome, cor, descricao_bot) VALUES ($1, $2, $3, $4) RETURNING *', [lojaDe(req), d.nome, d.cor, descricao])).rows[0];
     }).catch(unico('Já existe uma etiqueta com este nome.'));
     res.status(201).json(etiquetaPublica(e));

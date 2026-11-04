@@ -9,16 +9,18 @@ const SITUACAO = {
 };
 
 export async function montar(alvo, ctx) {
-  const dono = ctx.usuario.perfil === 'dono';
+  // v14.7: a base da loja é montada pela administração (que abre esta tela por Lojas → loja); gestor e atendente só leem.
+  const admin = ctx.usuario.perfil === 'admin';
+  const dono = ctx.usuario.perfil === 'dono' || admin;
   render(alvo, html`
     <div class="cabecalho-pagina">
-      <div class="titulos"><h1>Base de conhecimento</h1><p>${dono ? 'As informações que o assistente usa para responder os clientes da loja. Ele não responde nada que não esteja aqui ou na base da rede.' : 'Sugira informações para o assistente. O dono da loja aprova antes de valer.'}</p></div>
+      <div class="titulos"><h1>Base de conhecimento</h1><p>${admin ? 'As informações que o assistente usa para responder os clientes desta loja. Ele não responde nada que não esteja aqui ou na base da rede.' : dono ? 'O que a Lia sabe responder sobre a sua loja. A base é montada pela administração da rede: para incluir ou corrigir algo, fale com o Conecta.' : 'Sugira informações para o assistente. O dono da loja aprova antes de valer.'}</p></div>
     </div>
     ${dono ? html`<div id="perguntas"></div>` : ''}
     <div id="base-loja"></div>
     <div id="base-rede"></div>`);
   if (dono) painelPerguntas($('#perguntas', alvo), ctx);
-  painelBase($('#base-loja', alvo), { ctx, escopo: 'loja', titulo: 'Informações desta loja', podeEditar: true, podeAprovar: dono });
+  painelBase($('#base-loja', alvo), { ctx, escopo: 'loja', titulo: 'Informações desta loja', podeEditar: admin, podeAprovar: admin });
   painelBase($('#base-rede', alvo), { ctx, escopo: 'rede', titulo: 'Informações da rede LocarX (valem para todas as lojas)', podeEditar: false, podeAprovar: false });
 }
 
@@ -30,7 +32,7 @@ async function painelPerguntas(alvo, ctx) {
     <div class="painel-cab"><h2>Perguntas que o assistente não soube responder</h2><span class="selo alerta">${lista.length}</span></div>
     <div class="lista-simples">${lista.slice(0, 20).map((p) => html`<div>
       <div><strong>${p.pergunta}</strong><div class="sub">${quando(p.criadaEm)}${p.conversaId ? html` · <a href="#/conversas/${p.conversaId}">ver conversa</a>` : ''}</div></div>
-      <div class="acoes-linha"><button class="btn btn-contorno" data-responder="${p.id}">Ensinar resposta</button><button class="btn btn-texto" data-resolver="${p.id}">Dispensar</button></div>
+      <div class="acoes-linha">${ctx.usuario.perfil === 'admin' ? html`<button class="btn btn-contorno" data-responder="${p.id}">Ensinar resposta</button>` : ''}<button class="btn btn-texto" data-resolver="${p.id}">Dispensar</button></div>
     </div>`)}</div></section>`);
   $$('[data-resolver]', alvo).forEach((b) => b.addEventListener('click', async () => {
     try { await api.resolverPergunta(b.dataset.resolver); painelPerguntas(alvo, ctx); } catch (err) { avisar(err.message, 'erro'); }

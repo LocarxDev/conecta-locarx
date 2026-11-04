@@ -15,7 +15,8 @@ async function euComLoja(c, id) {
   return (await c.query(
     `SELECT u.*, l.nome AS loja_nome, l.cidade AS loja_cidade, l.uf AS loja_uf, l.modulos AS loja_modulos,
             (SELECT count(*)::int FROM usuario_lojas ul JOIN lojas lx ON lx.id = ul.loja_id AND lx.ativa WHERE ul.usuario_id = u.id) AS qtd_lojas,
-            ${SQL_TERMOS_PENDENTES} AS termos_pendentes
+            ${SQL_TERMOS_PENDENTES} AS termos_pendentes,
+            (SELECT a.status FROM assinaturas a WHERE a.loja_id = u.loja_id) AS assinatura_status, l.central AS loja_central
        FROM usuarios u LEFT JOIN lojas l ON l.id = u.loja_id WHERE u.id = $1`, [id])).rows[0];
 }
 

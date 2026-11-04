@@ -57,9 +57,14 @@ usuarios.post('/convites', exigirPerfil('admin', 'dono'), rota(async (req, res) 
   if (eu.perfil === 'dono' && d.perfil !== 'atendente') throw erro(403, 'Só a administração convida o dono da loja.');
 
   const r = await comContexto(ctx(req), async (c) => {
-    const loja = (await c.query('SELECT id, nome, ativa FROM lojas WHERE id = $1', [lojaId])).rows[0];
+    const loja = (await c.query('SELECT id, nome, ativa, limite_atendentes FROM lojas WHERE id = $1', [lojaId])).rows[0];
     if (!loja) throw erro(404, 'Loja não encontrada.');
     if (!loja.ativa) throw erro(400, 'Esta loja está desativada. Reative a loja antes de convidar pessoas.');
+    // v14.7: o gestor convida atendentes até o limite da loja (a administração define em Lojas → loja; ela mesma não tem limite)
+    if (eu.perfil === 'dono' && d.perfil === 'atendente') {
+      const n = (await c.query(`SELECT count(*)::int AS n FROM usuarios WHERE loja_id = $1 AND perfil = 'atendente' AND status <> 'inativo'`, [lojaId])).rows[0].n;
+      if (n >= loja.limite_atendentes) throw erro(422, `Esta loja pode ter até ${loja.limite_atendentes} atendente${loja.limite_atendentes === 1 ? '' : 's'} ativos ou convidados (já tem ${n}). Para aumentar, fale com a administração da rede.`, { email: 'Limite de atendentes atingido.' });
+    }
     // e-mail repetido na mesma loja (o dono não enxerga outras lojas; lá o índice único do banco barra)
     const existe = (await c.query('SELECT 1 FROM usuarios WHERE email = $1', [d.email])).rowCount;
     if (existe) return { repetido: true };

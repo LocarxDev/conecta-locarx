@@ -15,7 +15,7 @@ const NOVO_FUNIL = [
 ];
 
 export async function montar(alvo, ctx) {
-  const rede = ['admin', 'matriz'].includes(ctx.usuario.perfil);
+  const rede = !ctx.naLoja && ['admin', 'matriz'].includes(ctx.usuario.perfil);   // v14.7: admin dentro da loja vê a versão da loja
   const escopo = rede ? 'rede' : 'loja';
   let aba = preferencia.ler('aba-personalizar') || 'funis';
   render(alvo, html`

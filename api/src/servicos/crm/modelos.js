@@ -48,6 +48,15 @@ export function preencherModelo(texto, vars) {
 const dataBr = (d) => new Date(d).toLocaleDateString('pt-BR', { timeZone: 'America/Bahia', day: '2-digit', month: '2-digit' });
 const horaBr = (d) => new Date(d).toLocaleTimeString('pt-BR', { timeZone: 'America/Bahia', hour: '2-digit', minute: '2-digit' });
 
+// v14.7 — limite de envios automáticos por hora, por loja (a administração define em Lojas → loja). 0 = sem limite.
+// Conta só o que a automação mandou (reservas e etapas do funil); respostas da Lia e da equipe não entram.
+export async function dentroDoLimiteHora(lojaId, limite) {
+  if (!limite) return true;
+  const n = (await comoSistema(async (c) => (await c.query(`SELECT count(*)::int AS n FROM envios_automaticos WHERE loja_id = $1 AND enviado_em > now() - interval '1 hour'`, [lojaId])).rows[0])).n;
+  return n < limite;
+}
+export const contarEnvio = (lojaId) => comoSistema((c) => c.query('INSERT INTO envios_automaticos (loja_id) VALUES ($1)', [lojaId]));
+
 function emSilencio(a) {
   const h = agoraBahia().hora, ini = a?.silencio_inicio ?? 21, fim = a?.silencio_fim ?? 8;
   return ini > fim ? (h >= ini || h < fim) : (h >= ini && h < fim);
@@ -80,7 +89,7 @@ export async function rodarAutomacoes() {
     // mensagens automáticas devidas: cada modelo automático tem um momento (horas antes/depois da retirada ou da devolução).
     // Vale por até 36 h depois do momento (cobre o horário de silêncio); nas "antes", só enquanto o evento ainda não passou.
     return (await c.query(`
-      SELECT r.id AS reserva_id, r.codigo, r.retirada, r.devolucao, r.loja_id, k.telefone, k.nome, l.nome AS loja_nome, m.chave AS tipo, m.texto,
+      SELECT r.id AS reserva_id, r.codigo, r.retirada, r.devolucao, r.loja_id, k.telefone, k.nome, l.nome AS loja_nome, l.limite_envios_hora, m.chave AS tipo, m.texto,
              a.silencio_inicio, a.silencio_fim, cn.instancia, cn.provedor, cn.status AS canal_status, cv.id AS conversa_id
         FROM modelos_mensagem m
         JOIN reservas r ON r.loja_id = m.loja_id
@@ -106,10 +115,12 @@ export async function rodarAutomacoes() {
       data_retirada: dataBr(t.retirada), hora_retirada: horaBr(t.retirada), data_devolucao: dataBr(t.devolucao), hora_devolucao: horaBr(t.devolucao),
     });
     try {
+      if (!(await dentroDoLimiteHora(t.loja_id, t.limite_envios_hora))) continue;   // v14.7: fica para a próxima rodada
       // registra antes de enviar: nunca manda duas vezes, mesmo se o envio der erro
       const novo = await comoSistema(async (c) => (await c.query(`INSERT INTO automacoes_enviadas (reserva_id, tipo) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [t.reserva_id, t.tipo])).rowCount);
       if (!novo) continue;
       const externoId = await evolution.enviarTexto(t.instancia, t.telefone, texto);
+      await contarEnvio(t.loja_id);
       if (t.conversa_id) {
         await comoSistema((c) => c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto, externo_id) VALUES ($1, $2, 'saida', 'assistente', 'texto', $3, $4)`,
           [t.conversa_id, t.loja_id, texto, externoId]));
@@ -132,7 +143,7 @@ export const limparCamposVazios = (texto) => texto.replace(/\{[a-z_]+\}/g, '').r
  */
 export async function rodarMensagensDeEtapa() {
   const devidas = await comoSistema(async (c) => (await c.query(`
-    SELECT o.id AS op_id, o.etapa_id, o.loja_id, o.reserva_id, k.telefone, k.nome, l.nome AS loja_nome, m.texto, m.chave, (m.automatico AND m.gatilho IS NOT NULL) AS da_reserva,
+    SELECT o.id AS op_id, o.etapa_id, o.loja_id, o.reserva_id, k.telefone, k.nome, l.nome AS loja_nome, l.limite_envios_hora, m.texto, m.chave, (m.automatico AND m.gatilho IS NOT NULL) AS da_reserva,
            a.silencio_inicio, a.silencio_fim, cn.instancia, cv.id AS conversa_id, r.codigo, r.retirada, r.devolucao
       FROM oportunidades o
       JOIN etapas_funil e ON e.id = o.etapa_id AND e.modelo_chave IS NOT NULL AND e.mensagem_desde IS NOT NULL
@@ -151,6 +162,7 @@ export async function rodarMensagensDeEtapa() {
   for (const t of devidas) {
     if (emSilencio(t)) continue; // fica pendente: sai quando o silêncio acabar (até 3 dias)
     try {
+      if (!(await dentroDoLimiteHora(t.loja_id, t.limite_envios_hora))) continue;   // v14.7: fica para a próxima rodada
       // registra antes de enviar: nunca manda duas vezes, mesmo se o envio der erro
       const vale = await comoSistema(async (c) => {
         const n = (await c.query('INSERT INTO mensagens_de_etapa (oportunidade_id, etapa_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [t.op_id, t.etapa_id])).rowCount;
@@ -168,6 +180,7 @@ export async function rodarMensagensDeEtapa() {
       }));
       if (!texto) continue;
       const externoId = await evolution.enviarTexto(t.instancia, t.telefone, texto);
+      await contarEnvio(t.loja_id);
       enviadas++;
       if (t.conversa_id) {
         await comoSistema((c) => c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto, externo_id) VALUES ($1, $2, 'saida', 'assistente', 'texto', $3, $4)`,

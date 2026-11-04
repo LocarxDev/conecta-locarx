@@ -12,7 +12,7 @@ const PAPEL = { dono: 'Gestor de loja', atendente: 'Atendente' };
 export async function montar(alvo, ctx) {
   render(alvo, html`
     <div class="cabecalho-pagina">
-      <div class="titulos"><h1>Atendentes</h1><p>Quem atende os clientes da ${ctx.usuario.loja?.nome || 'sua loja'} no Conecta.</p></div>
+      <div class="titulos"><h1>Atendentes</h1><p>Quem atende os clientes da ${ctx.usuario.loja?.nome || 'sua loja'} no Conecta.<span id="limite-atendentes"></span></p></div>
       <button class="btn btn-primario" id="convidar-topo">${icone('mais')}Convidar atendente</button>
     </div>
     <div id="roleta"></div>
@@ -20,6 +20,8 @@ export async function montar(alvo, ctx) {
   const painel = painelEquipe($('#equipe', alvo), { ctx, lojaId: null, podeGerir: true, podeConvidarDono: false });
   $('#convidar-topo', alvo).addEventListener('click', painel.convidar);
   painelRoleta($('#roleta', alvo), ctx);
+  // v14.7: limite de atendentes da loja (definido pela administração)
+  api.dadosDaLoja().then((l) => { const n = l.limites?.atendentes; if (n) $('#limite-atendentes', alvo).textContent = ` O plano da loja permite até ${n} atendente${n === 1 ? '' : 's'}.`; }).catch(() => {});
 }
 
 // Roleta de atendimento: para quem vão as conversas quando o assistente chama um atendente.

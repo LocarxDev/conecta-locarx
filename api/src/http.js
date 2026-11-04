@@ -74,7 +74,8 @@ export async function carregarSessao(req, res, next) {
         `SELECT s.id AS sessao_id, s.csrf, s.ultimo_uso, u.*, coalesce(s.loja_id, u.loja_id) AS loja_id, u.loja_id AS loja_principal_id, u.perfil AS perfil_base, coalesce(ul.perfil, u.perfil) AS perfil,
                 l.nome AS loja_nome, l.cidade AS loja_cidade, l.uf AS loja_uf, l.ativa AS loja_ativa, l.modulos AS loja_modulos,
                 (SELECT count(*)::int FROM usuario_lojas ul JOIN lojas lx ON lx.id = ul.loja_id AND lx.ativa WHERE ul.usuario_id = u.id) AS qtd_lojas,
-                ${SQL_TERMOS_PENDENTES} AS termos_pendentes
+                ${SQL_TERMOS_PENDENTES} AS termos_pendentes,
+                (SELECT a.status FROM assinaturas a WHERE a.loja_id = coalesce(s.loja_id, u.loja_id)) AS assinatura_status, l.central AS loja_central
            FROM sessoes s JOIN usuarios u ON u.id = s.usuario_id LEFT JOIN lojas l ON l.id = coalesce(s.loja_id, u.loja_id)
            LEFT JOIN usuario_lojas ul ON ul.usuario_id = u.id AND ul.loja_id = coalesce(s.loja_id, u.loja_id) AND u.perfil IN ('dono', 'atendente')
           WHERE s.token_hash = $1 AND s.tipo = 'sessao' AND s.expira_em > now()
@@ -132,10 +133,24 @@ export const exigirTermosAceitos = (req, res, next) => {
   next(erro(403, 'Para continuar, leia e aceite o termo de uso apresentado na tela.', { termosPendentes: true }));
 };
 
+// v14.8 — com ASSINATURA_OBRIGATORIA=1, gestor e atendente de loja sem assinatura em dia só acessam a tela de assinatura
+export const exigirAssinatura = (req, res, next) => {
+  const u = req.usuario;
+  if (!u || !config.pagarme?.obrigatoria || !['dono', 'atendente'].includes(u.perfil) || u.atuandoNaLoja || u.loja_central || !u.loja_id) return next();
+  if (['ativa', 'atrasada', 'isenta'].includes(u.assinatura_status)) return next();
+  if (/^\/(loja\/assinatura|loja\/dados|termos|auth|eu)(\/|$)/.test(req.path)) return next();
+  next(erro(402, 'A assinatura do Conecta desta loja não está ativa.', { assinaturaPendente: true }));
+};
+
 export const exigirPerfil = (...perfis) => (req, res, next) => {
-  if (!perfis.includes(req.usuario?.perfil)) return next(erro(403, 'Você não tem acesso a esta área.'));
+  const u = req.usuario;
+  // v14.7: a administração configurando uma loja (/api/admin/na-loja/:id/...) passa onde o gestor passa
+  if (!u || !(perfis.includes(u.perfil) || (u.atuandoNaLoja && perfis.includes('dono')))) return next(erro(403, 'Você não tem acesso a esta área.'));
   next();
 };
+/** v14.7: coisas que só a administração da rede mexe (entregue pronto para a loja): prompt/chaves da Lia, base da loja, pagamentos, número do WhatsApp… */
+export const ehAdministracao = (u) => u?.perfil === 'admin';
+export const soAdministracao = (req, res, next) => (ehAdministracao(req.usuario) ? next() : next(erro(403, 'Isso é configurado pela administração da rede. Fale com o Conecta.')));
 
 // ---------- formatos de resposta ----------
 export function usuarioPublico(u) {
@@ -146,6 +161,20 @@ export function usuarioPublico(u) {
     ...(u.loja_nome !== undefined ? { loja: u.loja_id ? { id: u.loja_id, nome: u.loja_nome, cidade: u.loja_cidade, uf: u.loja_uf, modulos: normalizarModulos(u.loja_modulos) } : null } : {}),
     ...(u.qtd_lojas > 1 ? { variasLojas: true } : {}),
     termosPendentes: Number(u.termos_pendentes) || 0,   // v14.5: precisa aceitar o termo antes de usar o sistema
+    // v14.8: situação da assinatura da loja (null = sem assinatura). `assinaturaPendente` = bloqueado até assinar (só com ASSINATURA_OBRIGATORIA)
+    assinatura: u.assinatura_status !== undefined ? { status: u.assinatura_status || null, obrigatoria: !!config.pagarme?.obrigatoria, pendente: !!config.pagarme?.obrigatoria && ['dono', 'atendente'].includes(u.perfil) && !u.loja_central && !!u.loja_id && !['ativa', 'atrasada', 'isenta'].includes(u.assinatura_status) } : undefined,
+  };
+}
+
+// v14.6 — dados cadastrais e fiscais da loja (CNPJ, razão social, endereço, responsáveis, cobrança)
+export function cadastroDaLoja(l) {
+  return {
+    cnpj: l.cnpj || null, razaoSocial: l.razao_social || null, endereco: l.endereco || null, cep: l.cep || null,
+    responsavel: { nome: l.responsavel_nome || null, email: l.responsavel_email || null, telefone: l.responsavel_telefone || null },
+    financeiro: { nome: l.financeiro_nome || null, email: l.financeiro_email || null },
+    enderecoCobranca: l.endereco_cobranca || null,
+    atualizadoEm: l.cadastro_atualizado_em || null,
+    completo: !!(l.cnpj && l.razao_social && l.endereco && l.responsavel_nome && l.responsavel_email && l.financeiro_email),
   };
 }
 
@@ -157,6 +186,8 @@ export function lojaPublica(l) {
     ativa: l.ativa, whatsapp: l.whatsapp, assistente: l.assistente, criadaEm: l.criada_em,
     modulos: normalizarModulos(l.modulos),
     pix: { proprio: !!l.pix_proprio, temChave: !!l.abacatepay_chave_cifrada, chaveFinal: l.abacatepay_chave_final || null, devMode: l.abacatepay_dev ?? null },
+    cadastro: cadastroDaLoja(l),
+    limites: { atendentes: l.limite_atendentes ?? 5, enviosHora: l.limite_envios_hora ?? 60 },
     ...(l.qtd_usuarios !== undefined ? { usuarios: Number(l.qtd_usuarios), dono: l.dono_nome || null } : {}),
   };
 }

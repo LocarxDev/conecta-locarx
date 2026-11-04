@@ -16,8 +16,10 @@ export async function montar(alvo, ctx) {
     return render(alvo, html`<div class="painel"><div class="estado">${icone('alerta')}<h3>Não foi possível carregar</h3><p>${err.message}</p></div></div>`);
   }
   const semHorario = !a.horario || !Object.keys(a.horario).length;
-
-  const ABAS = [['apresenta', 'Como a Lia se apresenta'], ['horario', 'Horário e equipe'], ['ia', 'Inteligência artificial'], ['teste', 'Testar assistente']];
+  // v14.7: a loja é entregue pronta. O gestor liga/desliga a Lia e cuida do horário, dias fechados e "continuar sem equipe";
+  // nome, textos, orientações, palavras, retorno, silêncio, IA e limite são da administração (que abre esta tela por Lojas → loja).
+  const admin = ctx.usuario.perfil === 'admin';
+  const ABAS = [['apresenta', 'Como a Lia se apresenta'], ['horario', 'Horário e equipe'], ...(admin ? [['ia', 'Inteligência artificial']] : []), ['teste', 'Testar assistente']];
   let aba = preferencia.ler('aba-assistente');
   if (!ABAS.some(([v]) => v === aba)) aba = 'apresenta';
   const horaOpcoes = (sel) => [...Array(24).keys()].map((h) => html`<option value="${h}" ${h === sel ? 'selected' : ''}>${String(h).padStart(2, '0')}h</option>`);
@@ -39,6 +41,7 @@ export async function montar(alvo, ctx) {
       <section class="painel" data-painel="apresenta">
         <div class="painel-cab"><h2>Como a Lia se apresenta</h2></div>
         <div class="painel-corpo form">
+          ${admin ? '' : html`<div class="alerta-caixa info">${icone('info')}<span>Nome, saudação e orientações da Lia são configurados pela administração da rede, que entrega a loja pronta. Aqui você liga ou desliga a assistente; o horário e os dias fechados ficam na aba "Horário e equipe".</span></div>`}
           <label class="checkbox opcao-destaque"><input type="checkbox" name="ativo" ${a.ativo ? 'checked' : ''}>
             <span><strong>Assistente ligado</strong><br><span class="sub">Atende as conversas novas no WhatsApp, no Instagram e no chat do site.</span></span></label>
           <div class="campo campo-curto"><label for="as-nome">Nome do assistente</label><input id="as-nome" name="nome" value="${a.nome}" maxlength="60"></div>
@@ -97,7 +100,7 @@ export async function montar(alvo, ctx) {
         </div>
 
         <section class="painel">
-          <div class="painel-cab"><h2>Quando chamar a equipe</h2></div>
+          <div class="painel-cab"><h2>Quando chamar a equipe</h2>${admin ? '' : html`<span class="sub">Configurado pela administração da rede</span>`}</div>
           <div class="painel-corpo form">
             <div class="form-linha">
               <div class="campo"><label for="as-palavras">Palavras que chamam um atendente</label><input id="as-palavras" name="palavrasAtendente" value="${(a.palavrasAtendente || []).join(', ')}">
@@ -186,6 +189,11 @@ export async function montar(alvo, ctx) {
   }
   $$('[data-aba]', alvo).forEach((b) => b.addEventListener('click', () => trocarAba(b.dataset.aba)));
   trocarAba(aba);
+  if (!admin) {
+    // campos da administração ficam visíveis, mas travados (o valor continua indo no formulário; a API também ignora mudanças do gestor)
+    const f0 = $('#form-assistente', alvo);
+    for (const n of ['nome', 'boasVindas', 'instrucoes', 'foraHorario', 'msgAusencia', 'palavrasAtendente', 'msgRepasse', 'retornoHoras', 'silencioInicio', 'silencioFim', 'limiteDiario']) { const el = f0.elements[n]; if (el) { el.disabled = true; el.title = 'Configurado pela administração da rede.'; } }
+  }
 
   // ---------- IA ----------
   const fChave = $('#form-chave', alvo);

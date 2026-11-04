@@ -1,10 +1,11 @@
 // Monta a API: segurança primeiro, depois as rotas.
-import express from 'express';
+import express, { Router } from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
 import { config } from './config.js';
-import { cors, verificarOrigem, carregarSessao, exigirLogin, exigirCsrf, exigirTermosAceitos, exigirModulo, tratarErros, erro } from './http.js';
+import { cors, verificarOrigem, carregarSessao, exigirLogin, exigirCsrf, exigirTermosAceitos, exigirAssinatura, exigirModulo, tratarErros, erro, rota, zUuid } from './http.js';
+import { comoSistema } from './banco/conexao.js';
 import { auth } from './rotas/auth.js';
 import { admin, loja } from './rotas/lojas.js';
 import { usuarios, equipeAdmin, equipeLoja } from './rotas/usuarios.js';
@@ -18,6 +19,7 @@ import { personalizacaoLoja, personalizacaoRede } from './rotas/personalizacao.j
 import { termos, termosAdmin } from './rotas/termos.js';
 import { relatorioLoja, relatorioRede } from './rotas/relatorios.js';
 import { webhookAbacatePay, pagamentosLoja, pagamentosAdmin } from './rotas/pagamentos.js';
+import { assinaturaLoja, assinaturaAdmin, webhookPagarme } from './rotas/assinatura.js';
 import { site, siteAdmin, corsDoSite } from './rotas/site.js';
 import { instagramLoja, instagramPublico, webhookInstagram } from './rotas/instagram.js';
 
@@ -41,6 +43,8 @@ export function criarApp() {
   // retorno do login do Instagram (sem cookies; a loja vem no state assinado)
   app.use('/api/instagram', rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: 'draft-7', legacyHeaders: false }), instagramPublico);
 
+  // v14.8 — webhook da Pagar.me (assinatura dos franqueados): autenticação Basic cadastrada no painel
+  app.use('/api/webhooks/pagarme', express.json({ limit: '1mb' }), webhookPagarme);
   // webhook da Evolution: chega servidor-a-servidor (sem navegador, sem login), protegido por segredo na URL
   app.use('/api/webhooks', express.json({ limit: '2mb' }), webhooks);
 
@@ -66,7 +70,7 @@ export function criarApp() {
   app.use('/api/auth', auth);
 
   // daqui para baixo: precisa estar logado e mandar o token CSRF nas ações que alteram dados
-  app.use('/api', exigirLogin, exigirCsrf, exigirTermosAceitos);   // termos pendentes (v14.5): só /termos, /auth e /eu passam
+  app.use('/api', exigirLogin, exigirCsrf, exigirTermosAceitos, exigirAssinatura);   // termos pendentes (v14.5): só /termos, /auth e /eu passam
   app.use('/api/termos', termos);
   // módulos liberados por loja (plano): a administração liga/desliga em Lojas; o front esconde o menu e aqui a API barra
   app.use(['/api/loja/cotacao', '/api/loja/reservas'], (req, res, next) => (req.method === 'GET' && req.path === '/' ? next() : exigirModulo('cotacao')(req, res, next)));
@@ -78,8 +82,26 @@ export function criarApp() {
   app.use('/api/loja/relatorio', exigirModulo('relatorios'));
   app.use(['/api/loja/respostas', '/api/crm/modelos'], exigirModulo('automacoes'));
   app.use(['/api/loja/assistente', '/api/loja/perguntas'], exigirModulo('assistente'));
-  app.use('/api/admin', admin, equipeAdmin, rede, locarxAdmin, relatorioRede, personalizacaoRede, canalAdmin, pagamentosAdmin, siteAdmin, termosAdmin);
-  app.use('/api/loja', loja, equipeLoja, canal, instagramLoja, respostas, assistente, reservas, relatorioLoja, pagamentosLoja);
+  // v14.7 — a administração configurando UMA loja: /api/admin/na-loja/:lojaId/<mesmos endereços da loja>.
+  // A sessão continua sendo do admin (RLS de admin); só a loja em uso passa a ser a escolhida. Assim as telas da loja
+  // (assistente, base, pagamentos, canais…) funcionam para o admin sem rotas duplicadas.
+  const naLoja = Router({ mergeParams: true });
+  naLoja.use(rota(async (req, res, next) => {
+    if (req.usuario?.perfil !== 'admin') throw erro(403, 'Você não tem acesso a esta área.');
+    if (!zUuid.safeParse(req.params.lojaId).success) throw erro(404, 'Loja não encontrada.');
+    const l = await comoSistema(async (c) => (await c.query('SELECT id, nome, cidade, uf, ativa, modulos FROM lojas WHERE id = $1', [req.params.lojaId])).rows[0]);
+    if (!l) throw erro(404, 'Loja não encontrada.');
+    req.usuario = { ...req.usuario, loja_id: l.id, loja_nome: l.nome, loja_cidade: l.cidade, loja_uf: l.uf, loja_ativa: l.ativa, loja_modulos: l.modulos, atuandoNaLoja: true };
+    next();
+  }));
+  naLoja.use('/loja', loja, equipeLoja, canal, instagramLoja, respostas, assistente, reservas, relatorioLoja, pagamentosLoja, assinaturaLoja);
+  naLoja.use('/crm', crm, personalizacaoLoja);
+  naLoja.use('/conhecimento', conhecimento);
+  naLoja.use('/conversas', conversas);
+  naLoja.use('/usuarios', usuarios);
+  app.use('/api/admin/na-loja/:lojaId', naLoja);
+  app.use('/api/admin', admin, equipeAdmin, rede, locarxAdmin, relatorioRede, personalizacaoRede, canalAdmin, pagamentosAdmin, siteAdmin, termosAdmin, assinaturaAdmin);
+  app.use('/api/loja', loja, equipeLoja, canal, instagramLoja, respostas, assistente, reservas, relatorioLoja, pagamentosLoja, assinaturaLoja);
   app.use('/api/crm', crm, personalizacaoLoja);
   app.use('/api/conhecimento', conhecimento);
   app.use('/api/conversas', conversas);

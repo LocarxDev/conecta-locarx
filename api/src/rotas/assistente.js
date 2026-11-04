@@ -10,7 +10,7 @@ import { dividirEmBlocos } from '../servicos/ia/conhecimento.js';
 import { extrairTexto } from '../servicos/arquivos/extrair-texto.js';
 import * as locarx from '../servicos/locarx/api-locarx.js';
 import { resolverFilial, filiaisDaLoja, filiaisComPortal, filialPublica } from '../servicos/locarx/filiais.js';
-import { rota, erro, validar, zUuid, exigirPerfil, registrar } from '../http.js';
+import { rota, erro, validar, zUuid, exigirPerfil, soAdministracao, ehAdministracao, registrar } from '../http.js';
 import { moduloLigado } from '../servicos/modulos.js';
 import { situacaoDaEquipe } from '../servicos/crm/expediente.js';
 
@@ -89,7 +89,13 @@ assistente.put('/assistente', exigirPerfil('dono'), rota(async (req, res) => {
   }), req.body);
   const a = await comContexto(ctx(req), async (c) => {
     const atual = await garantirAssistente(c, req.usuario.loja_id);
-    if (d.ativo && !atual.chave_cifrada && !config.iaSimulada) throw erro(422, 'Cadastre a chave da IA antes de ligar o assistente.', { ativo: 'Cadastre a chave da IA antes de ligar.' });
+    if (!ehAdministracao(req.usuario)) {
+      // v14.7: o gestor da loja só liga/desliga a Lia e cuida do expediente (horário, dias fechados, continuar sem equipe).
+      // Nome, instruções, mensagens, palavras, retorno, limite diário e silêncio ficam como a administração entregou.
+      Object.assign(d, { nome: atual.nome, instrucoes: atual.instrucoes || '', boasVindas: atual.boas_vindas || '', msgAusencia: atual.msg_ausencia || '', msgRepasse: atual.msg_repasse || '',
+        foraHorario: atual.fora_horario, palavrasAtendente: atual.palavras_atendente || [], retornoHoras: atual.retorno_horas, limiteDiario: atual.limite_diario, silencioInicio: atual.silencio_inicio, silencioFim: atual.silencio_fim });
+    }
+    if (d.ativo && !atual.chave_cifrada && !config.iaSimulada) throw erro(422, ehAdministracao(req.usuario) ? 'Cadastre a chave da IA antes de ligar o assistente.' : 'A administração ainda não configurou a chave da IA desta loja.', { ativo: 'Falta a chave da IA.' });
     const dias = d.diasFechados ? normalizarDias(d.diasFechados) : (Array.isArray(atual.dias_fechados) ? atual.dias_fechados : []);
     const r = (await c.query(
       `UPDATE assistentes SET ativo = $2, nome = $3, instrucoes = $4, boas_vindas = $5, msg_ausencia = $6, msg_repasse = $7, horario = $8,
@@ -108,7 +114,7 @@ assistente.put('/assistente', exigirPerfil('dono'), rota(async (req, res) => {
 // Como a Lia vai responder agora: loja aberta ou fechada, alguém da equipe disponível e a próxima abertura
 assistente.get('/assistente/expediente', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
   const sit = await comContexto(ctx(req), async (c) => {
-    const a = req.usuario.perfil === 'dono' ? await garantirAssistente(c, req.usuario.loja_id) : null;
+    const a = req.usuario.perfil !== 'atendente' ? await garantirAssistente(c, req.usuario.loja_id) : null;
     return situacaoDaEquipe(c, req.usuario.loja_id, a);
   });
   res.json({
@@ -117,7 +123,7 @@ assistente.get('/assistente/expediente', exigirPerfil('dono', 'atendente'), rota
   });
 }));
 
-assistente.post('/assistente/chave', exigirPerfil('dono'), rota(async (req, res) => {
+assistente.post('/assistente/chave', soAdministracao, rota(async (req, res) => {
   const d = validar(z.object({
     provedor: z.enum(['anthropic', 'openai']),
     modelo: z.string().trim().min(3).max(80).regex(/^[\w.:-]+$/, 'Nome de modelo inválido.'),
@@ -147,7 +153,7 @@ assistente.post('/assistente/chave', exigirPerfil('dono'), rota(async (req, res)
   res.json(publico(a));
 }));
 
-assistente.delete('/assistente/chave', exigirPerfil('dono'), rota(async (req, res) => {
+assistente.delete('/assistente/chave', soAdministracao, rota(async (req, res) => {
   const a = await comContexto(ctx(req), async (c) => {
     const r = (await c.query(`UPDATE assistentes SET chave_cifrada = NULL, chave_final = NULL, ativo = false, atualizado_em = now() WHERE loja_id = $1 RETURNING *`, [req.usuario.loja_id])).rows[0];
     await registrar(c, req, 'removeu_chave_ia');
@@ -181,8 +187,9 @@ assistente.post('/perguntas/:id/resolver', exigirPerfil('dono'), rota(async (req
 // =====================================================================
 // Base de conhecimento (rede: administração/matriz; loja: dono aprova, atendente sugere)
 // =====================================================================
-function quemAprova(u, escopo) { return escopo === 'rede' ? ['admin', 'matriz'].includes(u.perfil) : u.perfil === 'dono'; }
-function podeEditar(u, escopo) { return escopo === 'rede' ? ['admin', 'matriz'].includes(u.perfil) : ['dono', 'atendente'].includes(u.perfil); }
+// v14.7: a base da loja é montada e aprovada pela administração (em Lojas → loja → Base de conhecimento); gestor e atendente só leem.
+function quemAprova(u, escopo) { return escopo === 'rede' ? ['admin', 'matriz'].includes(u.perfil) : ehAdministracao(u); }
+function podeEditar(u, escopo) { return escopo === 'rede' ? ['admin', 'matriz'].includes(u.perfil) : ehAdministracao(u); }
 const itemPublico = (k) => ({ id: k.id, escopo: k.escopo, titulo: k.titulo, conteudo: k.conteudo, status: k.status, autor: k.autor_nome || null, criadoEm: k.criado_em, atualizadoEm: k.atualizado_em });
 
 // base da loja só com o módulo liberado (a da rede continua visível para todos)
@@ -267,7 +274,7 @@ conhecimento.post('/:id/:acao(aprovar|arquivar)', rota(async (req, res) => {
 // importar: texto colado ou arquivo (PDF/Word) → blocos para revisar antes de salvar
 // Importa do portal, para a base DESTA loja, o endereço, os horários e as políticas de uma filial (com várias filiais, cada
 // uma ganha os próprios itens, com o nome da filial no título). Entra como pendente até o dono aprovar.
-conhecimento.post('/importar-portal', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
+conhecimento.post('/importar-portal', soAdministracao, rota(async (req, res) => {
   if (!config.locarx) throw erro(503, 'API LocarX não configurada no servidor.');
   const { filialId } = validar(z.object({ filialId: z.string().max(60).optional() }), req.body || {});
   const filial = await comContexto(ctx(req), async (c) => { try { return await resolverFilial(c, req.usuario.loja_id, filialId); } catch (e) { throw erro(422, e.message); } });

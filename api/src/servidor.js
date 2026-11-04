@@ -7,6 +7,7 @@ import { criarApp } from './app.js';
 import { iniciarVarreduras } from './servicos/ia/assistente.js';
 import { iniciarAutomacoes, semearModelosRede, sincronizarModelos } from './servicos/crm/modelos.js';
 import { semearTermos } from './servicos/termos.js';
+import { rodarCiclos } from './servicos/assinatura/index.js';
 import { iniciarVarreduraPix } from './servicos/pagamentos/cobrancas.js';
 import { aplicarRegrasFunil } from './servicos/crm/funis.js';
 import { iniciarLimpezaSite } from './servicos/site/chat.js';
@@ -41,6 +42,9 @@ async function iniciar() {
   // regras automáticas do funil (perdido sem resposta / concluído na retirada): a cada 10 min
   const funil = () => comoSistema(aplicarRegrasFunil).then((f) => { if (f.perdidas || f.concluidas) console.log(`[funil] automático: ${f.perdidas} perdida(s), ${f.concluidas} concluída(s)`); }).catch((e) => console.error('[funil] regras:', e.message));
   setTimeout(funil, 20_000); setInterval(funil, 10 * 60_000).unref();
+  // v14.8 — assinatura dos franqueados: faturas Pix do próximo ciclo e atraso, a cada 6 h
+  const ciclos = () => rodarCiclos().then((r) => { if (r.geradas || r.atrasadas) console.log(`[assinatura] ${r.geradas} fatura(s) Pix gerada(s), ${r.atrasadas} atrasada(s)`); }).catch((e) => console.error('[assinatura] ciclos:', e.message));
+  setTimeout(ciclos, 40_000); setInterval(ciclos, 6 * 3_600_000).unref();
   const servidor = criarApp().listen(config.porta, () => console.log(`[inicio] Conecta LocarX API na porta ${config.porta}`));
   const encerrar = () => { servidor.close(() => pool.end().then(() => process.exit(0))); setTimeout(() => process.exit(1), 10_000).unref(); };
   process.on('SIGTERM', encerrar);

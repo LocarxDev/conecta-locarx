@@ -4,10 +4,11 @@ import { filiaisDaLoja, filiaisComPortal, filialPublica } from '../servicos/loca
 import { MODULOS, normalizarModulos } from '../servicos/modulos.js';
 import { z } from 'zod';
 import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js';
-import { rota, erro, validar, zUuid, exigirPerfil, lojaPublica, usuarioPublico, registrar } from '../http.js';
+import { rota, erro, validar, zUuid, exigirPerfil, soAdministracao, ehAdministracao, lojaPublica, usuarioPublico, registrar } from '../http.js';
 import { config } from '../config.js';
 import * as locarx from '../servicos/locarx/api-locarx.js';
 import { evolution } from '../servicos/canais/evolution.js';
+import { cnpjValido, soDigitos } from '../servicos/cnpj.js';
 
 export const admin = Router();
 export const loja = Router();
@@ -23,6 +24,38 @@ const esquemaLoja = z.object({
   branchCode: z.preprocess((v) => (v === '' || v == null ? undefined : v), z.string().trim().toUpperCase().regex(/^[A-Z0-9]{2,6}$/, 'Use de 2 a 6 letras ou números, ex.: SSA1.').optional()),
   tipo: z.enum(['Cidade', 'Aeroporto']).default('Cidade'),
 });
+
+// v14.6 — dados cadastrais e fiscais (opcionais no cadastro; vazios viram NULL). Compartilhado pela administração e pelo gestor.
+const vazio = (v) => (v == null || (typeof v === 'string' && !v.trim()) ? undefined : v);
+const zOpc = (s) => z.preprocess(vazio, s.optional());
+const zEmailOpc = zOpc(z.string().trim().toLowerCase().max(254).email('Informe um e-mail válido.'));
+const esquemaCadastro = z.object({
+  cnpj: zOpc(z.string().transform(soDigitos).refine(cnpjValido, 'CNPJ inválido. Confira os 14 dígitos.')),
+  razaoSocial: zOpc(z.string().trim().min(2, 'Informe a razão social.').max(160, 'Máximo de 160 caracteres.')),
+  endereco: zOpc(z.string().trim().max(300, 'Máximo de 300 caracteres.')),
+  cep: zOpc(z.string().transform(soDigitos).refine((v) => /^\d{8}$/.test(v), 'CEP com 8 dígitos.')),
+  responsavelNome: zOpc(z.string().trim().min(2, 'Informe o nome.').max(120)),
+  responsavelEmail: zEmailOpc,
+  responsavelTelefone: zOpc(z.string().transform(soDigitos).refine((v) => /^\d{10,13}$/.test(v), 'Telefone com DDD, ex.: 71 99999-9999.')),
+  financeiroNome: zOpc(z.string().trim().min(2, 'Informe o nome.').max(120)),
+  financeiroEmail: zEmailOpc,
+  enderecoCobranca: zOpc(z.string().trim().max(300, 'Máximo de 300 caracteres.')),
+});
+const COLUNAS_CADASTRO = { cnpj: 'cnpj', razaoSocial: 'razao_social', endereco: 'endereco', cep: 'cep', responsavelNome: 'responsavel_nome', responsavelEmail: 'responsavel_email', responsavelTelefone: 'responsavel_telefone', financeiroNome: 'financeiro_nome', financeiroEmail: 'financeiro_email', enderecoCobranca: 'endereco_cobranca' };
+
+/** Grava os dados cadastrais da loja (todos: o formulário manda o conjunto inteiro; campo vazio limpa). Confere CNPJ repetido. */
+async function gravarCadastro(c, lojaId, d) {
+  if (d.cnpj) {
+    const outra = (await c.query('SELECT nome FROM lojas WHERE cnpj = $1 AND id <> $2', [d.cnpj, lojaId])).rows[0];
+    if (outra) throw erro(422, 'Confira os campos destacados.', { cnpj: `Este CNPJ já está na loja ${outra.nome}.` });
+  }
+  const sets = Object.entries(COLUNAS_CADASTRO).map(([campo, col], i) => `${col} = $${i + 2}`);
+  const valores = Object.keys(COLUNAS_CADASTRO).map((campo) => d[campo] ?? null);
+  const l = (await c.query(`UPDATE lojas SET ${sets.join(', ')}, cadastro_atualizado_em = now() WHERE id = $1 RETURNING *`, [lojaId, ...valores])).rows[0];
+  if (!l) throw erro(404, 'Loja não encontrada.');
+  return l;
+}
+const temCadastro = (body) => Object.keys(COLUNAS_CADASTRO).some((k) => k in (body || {}));
 
 const ctx = (req) => contextoDoUsuario(req.usuario);
 const idValido = (id) => { if (!zUuid.safeParse(id).success) throw erro(404, 'Loja não encontrada.'); return id; };
@@ -69,6 +102,8 @@ admin.get('/lojas/:id', exigirPerfil('admin', 'matriz'), rota(async (req, res) =
 
 async function salvar(req, res, id) {
   const d = validar(esquemaLoja, req.body);
+  // dados cadastrais só quando o formulário manda (a tela antiga manda só os campos básicos)
+  const cad = temCadastro(req.body) ? validar(esquemaCadastro, req.body) : null;
   const salva = await comContexto(ctx(req), async (c) => {
     let central = !!d.central;
     if (id && d.central === undefined) central = !!(await c.query('SELECT central FROM lojas WHERE id = $1', [id])).rows[0]?.central;
@@ -101,7 +136,8 @@ async function salvar(req, res, id) {
     } else {
       await c.query('UPDATE filiais SET principal = false WHERE loja_id = $1 AND principal', [l.id]);   // Central sem filial própria: nenhuma é "principal"
     }
-    await registrar(c, req, id ? 'editou_loja' : 'criou_loja', { alvo: l.id, lojaId: l.id, detalhes: d });
+    if (cad) l = await gravarCadastro(c, l.id, cad);
+    await registrar(c, req, id ? 'editou_loja' : 'criou_loja', { alvo: l.id, lojaId: l.id, detalhes: { ...d, ...(cad || {}) } });
     return l;
   });
   res.status(id ? 200 : 201).json(lojaPublica(salva));
@@ -247,18 +283,42 @@ admin.put('/lojas/:id', exigirPerfil('admin'), rota((req, res) => salvar(req, re
 admin.patch('/lojas/:id', exigirPerfil('admin'), rota(async (req, res) => {
   const id = idValido(req.params.id);
   // ativa: liga/desliga a loja. pixProprio: a loja recebe o Pix na própria conta AbacatePay (ela cadastra a chave em Pagamentos online).
-  const d = validar(z.object({ ativa: z.boolean().optional(), pixProprio: z.boolean().optional(), modulos: z.record(z.boolean()).optional() }), req.body);
+  const d = validar(z.object({
+    ativa: z.boolean().optional(), pixProprio: z.boolean().optional(), modulos: z.record(z.boolean()).optional(),
+    // v14.7: limites da loja (só a administração)
+    limiteAtendentes: z.coerce.number().int().min(0, 'Use 0 ou mais.').max(500).optional(),
+    limiteEnviosHora: z.coerce.number().int().min(0, 'Use 0 (sem limite) ou mais.').max(10000).optional(),
+  }), req.body);
   const modulos = d.modulos ? normalizarModulos(d.modulos) : null;
   const l = await comContexto(ctx(req), async (c) => {
-    const r = (await c.query('UPDATE lojas SET ativa = coalesce($2, ativa), pix_proprio = coalesce($3, pix_proprio), modulos = coalesce($4, modulos) WHERE id = $1 RETURNING *', [id, d.ativa ?? null, d.pixProprio ?? null, modulos])).rows[0];
+    const r = (await c.query(`UPDATE lojas SET ativa = coalesce($2, ativa), pix_proprio = coalesce($3, pix_proprio), modulos = coalesce($4, modulos),
+                                 limite_atendentes = coalesce($5, limite_atendentes), limite_envios_hora = coalesce($6, limite_envios_hora) WHERE id = $1 RETURNING *`,
+      [id, d.ativa ?? null, d.pixProprio ?? null, modulos, d.limiteAtendentes ?? null, d.limiteEnviosHora ?? null])).rows[0];
     if (!r) throw erro(404, 'Loja não encontrada.');
     if (d.ativa === false) await c.query('DELETE FROM sessoes WHERE usuario_id IN (SELECT id FROM usuarios WHERE loja_id = $1)', [id]);
     if (d.ativa !== undefined) await registrar(c, req, d.ativa ? 'reativou_loja' : 'desativou_loja', { alvo: id, lojaId: id });
     if (d.pixProprio !== undefined) await registrar(c, req, d.pixProprio ? 'ligou_pix_proprio' : 'desligou_pix_proprio', { alvo: id, lojaId: id });
+    if (d.limiteAtendentes !== undefined || d.limiteEnviosHora !== undefined) await registrar(c, req, 'alterou_limites_loja', { alvo: id, lojaId: id, detalhes: { limiteAtendentes: d.limiteAtendentes, limiteEnviosHora: d.limiteEnviosHora } });
     if (modulos) { await c.query('DELETE FROM sessoes WHERE usuario_id IN (SELECT id FROM usuarios WHERE loja_id = $1)', [id]); await registrar(c, req, 'alterou_modulos', { alvo: id, lojaId: id, detalhes: modulos }); }   // a equipe entra de novo já com o menu certo
     return r;
   });
   res.json(lojaPublica(l));
+}));
+
+// ---------- dados cadastrais da loja logada (v14.6): o gestor confere e corrige; atendente só vê ----------
+loja.get('/dados', exigirPerfil('dono', 'atendente'), rota(async (req, res) => {
+  const l = await comContexto(ctx(req), async (c) => (await c.query('SELECT * FROM lojas WHERE id = $1', [req.usuario.loja_id])).rows[0]);
+  if (!l) throw erro(404, 'Loja não encontrada.');
+  res.json({ ...lojaPublica(l), podeEditar: ehAdministracao(req.usuario) });
+}));
+loja.put('/dados', soAdministracao, rota(async (req, res) => {   // v14.7: gestor só vê; a administração corrige (também por Lojas → Editar)
+  const cad = validar(esquemaCadastro, req.body);
+  const l = await comContexto(ctx(req), async (c) => {
+    const salva = await gravarCadastro(c, req.usuario.loja_id, cad);
+    await registrar(c, req, 'atualizou_cadastro_loja', { alvo: salva.id, lojaId: salva.id, detalhes: cad });
+    return salva;
+  });
+  res.json({ ...lojaPublica(l), podeEditar: true });
 }));
 
 // ---------- resumo da loja logada ----------

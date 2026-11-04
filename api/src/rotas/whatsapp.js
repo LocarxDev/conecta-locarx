@@ -6,7 +6,7 @@ import { evolution, lerMensagemEvolution } from '../servicos/canais/evolution.js
 import { iguais } from '../servicos/seguranca.js';
 import { emailAviso } from '../servicos/email.js';
 import { enviarAoCliente } from '../servicos/canais/envio.js';
-import { rota, erro, exigirPerfil, registrar, zUuid } from '../http.js';
+import { rota, erro, exigirPerfil, soAdministracao, registrar, zUuid } from '../http.js';
 import { estadoInicial, agendar, dentroDoHorario } from '../servicos/ia/assistente.js';
 import { registrarEvento } from '../servicos/crm/funis.js';
 import { distribuir } from '../servicos/crm/roleta.js';
@@ -192,7 +192,7 @@ async function trocarNumero(req, lojaId) {
 canal.post('/canal/conectar', exigirPerfil('dono'), rota(async (req, res) => res.json(await conectarLoja(req, req.usuario.loja_id))));
 canal.get('/canal/qr', exigirPerfil('dono'), rota(async (req, res) => res.json(await qrDaLoja(req, req.usuario.loja_id))));
 canal.post('/canal/desconectar', exigirPerfil('dono'), rota(async (req, res) => res.json(await desconectarLoja(req, req.usuario.loja_id))));
-canal.post('/canal/trocar-numero', exigirPerfil('dono'), rota(async (req, res) => res.json(await trocarNumero(req, req.usuario.loja_id))));
+canal.post('/canal/trocar-numero', soAdministracao, rota(async (req, res) => res.json(await trocarNumero(req, req.usuario.loja_id))));
 
 // =====================================================================
 // Administração: status do WhatsApp de todas as lojas (Evolution no ar, instância por loja,

@@ -9,7 +9,13 @@ export const USAR_EXEMPLO = false;
 
 let csrf = null; // vem do back-end junto com a sessão; vai no cabeçalho das ações que alteram dados
 
+// v14.7 — administração configurando uma loja: enquanto `lojaAtuando` estiver definida, as chamadas da loja
+// (/loja, /crm, /conhecimento, /conversas, /usuarios) vão para /admin/na-loja/:id/… e a API trabalha nessa loja.
+export const lojaAtuando = { id: null };
+export const comLoja = (caminho) => (lojaAtuando.id && /^\/(loja|crm|conhecimento|conversas|usuarios)(\/|$|\?)/.test(caminho) ? `/admin/na-loja/${encodeURIComponent(lojaAtuando.id)}${caminho}` : caminho);
+
 async function chamar(metodo, caminho, corpo) {
+  caminho = comLoja(caminho);
   const cabecalhos = { Accept: 'application/json' };
   if (corpo !== undefined) cabecalhos['Content-Type'] = 'application/json';
   if (metodo !== 'GET' && csrf) cabecalhos['X-CSRF-Token'] = csrf;
@@ -34,6 +40,7 @@ async function chamar(metodo, caminho, corpo) {
     if (dados?.campos) e.campos = dados.campos;
     // v14.5: termo novo publicado durante a sessão → a tela do termo aparece de novo
     if (resp.status === 403 && dados?.campos?.termosPendentes) window.dispatchEvent(new CustomEvent('termos-pendentes'));
+    if (resp.status === 402 && dados?.campos?.assinaturaPendente) window.dispatchEvent(new CustomEvent('assinatura-pendente'));
     throw e;
   }
   return dados;
@@ -47,6 +54,15 @@ const real = {
   sessao: () => chamar('GET', '/auth/sessao'),
   // v14.5 — termos de adesão/privacidade
   termosPendentes: () => chamar('GET', '/termos/pendentes'),
+  // v14.8 — assinatura do Conecta (Pagar.me)
+  assinatura: () => chamar('GET', '/loja/assinatura'),
+  contratarAssinatura: (d) => chamar('POST', '/loja/assinatura', d),
+  cancelarAssinatura: (motivo) => chamar('POST', '/loja/assinatura/cancelar', { motivo }),
+  assinaturasAdmin: () => chamar('GET', '/admin/assinaturas'),
+  assinaturaDaLoja: (id) => chamar('GET', `/admin/lojas/${encodeURIComponent(id)}/assinatura`),
+  isentarAssinatura: (id, d) => chamar('POST', `/admin/lojas/${encodeURIComponent(id)}/assinatura/isentar`, d),
+  cancelarAssinaturaAdmin: (id, motivo) => chamar('POST', `/admin/lojas/${encodeURIComponent(id)}/assinatura/cancelar`, { motivo }),
+  confirmarFaturaAssinatura: (id, observacao) => chamar('POST', `/admin/assinaturas/faturas/${encodeURIComponent(id)}/confirmar`, { observacao }),
   aceitarTermo: (id, hash) => chamar('POST', `/termos/${encodeURIComponent(id)}/aceitar`, { hash }),
   termosAdmin: () => chamar('GET', '/admin/termos'),
   termoAdmin: (id) => chamar('GET', `/admin/termos/${encodeURIComponent(id)}`),
@@ -59,6 +75,8 @@ const real = {
   pedirNovaSenha: (d) => chamar('POST', '/auth/esqueci-senha', d),
   definirSenha: (d) => chamar('POST', '/auth/definir-senha', d),
   resumoLoja: () => chamar('GET', '/loja/resumo'),
+  dadosDaLoja: () => chamar('GET', '/loja/dados'),
+  salvarDadosDaLoja: (d) => chamar('PUT', '/loja/dados', d),
   resumoRede: () => chamar('GET', '/admin/resumo'),
   listarLojas: () => chamar('GET', '/admin/lojas'),
   obterLoja: (id) => chamar('GET', `/admin/lojas/${encodeURIComponent(id)}`),
@@ -67,6 +85,7 @@ const real = {
   excluirLoja: (id, confirmacao) => chamar('DELETE', `/admin/lojas/${encodeURIComponent(id)}`, { confirmacao }),
   modulosCatalogo: () => chamar('GET', '/admin/modulos'),
   salvarModulosLoja: (id, modulos) => chamar('PATCH', `/admin/lojas/${encodeURIComponent(id)}`, { modulos }),
+  limitesLoja: (id, d) => chamar('PATCH', `/admin/lojas/${encodeURIComponent(id)}`, d),
   pixProprioLoja: (id, pixProprio) => chamar('PATCH', `/admin/lojas/${encodeURIComponent(id)}`, { pixProprio }),
   siteChat: () => chamar('GET', '/admin/site-chat'),
   centralLoja: (id, central) => chamar('PUT', `/admin/lojas/${encodeURIComponent(id)}/central`, { central }),
@@ -159,7 +178,7 @@ const real = {
   simularCobranca: (id) => chamar('POST', `/loja/cobrancas/${encodeURIComponent(id)}/simular`, {}),
   // Relatório de pagamentos online (repasse franqueador → loja)
   relatorioPagamentos: (q) => chamar('GET', '/loja/pagamentos/relatorio?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
-  urlRelatorioPagamentosCsv: (q) => '/api/loja/pagamentos/relatorio.csv?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v)),
+  urlRelatorioPagamentosCsv: (q) => '/api' + comLoja('/loja/pagamentos/relatorio.csv') + '?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v)),
   relatorioPagamentosRede: (q) => chamar('GET', '/admin/pagamentos/relatorio?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
   urlRelatorioPagamentosRedeCsv: (q) => '/api/admin/pagamentos/relatorio.csv?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v)),
   monitorAssistente: (q) => chamar('GET', '/admin/assistente/monitor?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
@@ -175,7 +194,7 @@ const real = {
   contato: (id) => chamar('GET', `/crm/contatos/${encodeURIComponent(id)}`),
   novoContato: (d) => chamar('POST', '/crm/contatos', d),
   salvarContato: (id, d) => chamar('PATCH', `/crm/contatos/${encodeURIComponent(id)}`, d),
-  urlExportarContatos: () => '/api/crm/contatos.csv',
+  urlExportarContatos: () => '/api' + comLoja('/crm/contatos.csv'),
   funil: (funilId) => chamar('GET', '/crm/funil' + (funilId ? '?funil=' + encodeURIComponent(funilId) : '')),
   novaOportunidade: (d) => chamar('POST', '/crm/oportunidades', d),
   moverOportunidade: (id, d) => chamar('PATCH', `/crm/oportunidades/${encodeURIComponent(id)}`, d),
@@ -223,7 +242,7 @@ const real = {
   relatorioRede: (dias) => chamar('GET', `/admin/relatorio?dias=${dias}`),
   // v14.5 — campanhas (etiquetas)
   campanhasLoja: (q) => chamar('GET', '/loja/relatorio/etiquetas?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
-  urlCampanhasLojaCsv: (q) => '/api/loja/relatorio/etiquetas.csv?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v)),
+  urlCampanhasLojaCsv: (q) => '/api' + comLoja('/loja/relatorio/etiquetas.csv') + '?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v)),
   campanhasRede: (q) => chamar('GET', '/admin/relatorio/etiquetas?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
   urlCampanhasRedeCsv: (q) => '/api/admin/relatorio/etiquetas.csv?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v)),
   usuariosRede: () => chamar('GET', '/admin/usuarios'),

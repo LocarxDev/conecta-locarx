@@ -1241,3 +1241,122 @@ CREATE POLICY aceites_ver ON aceites_termos FOR SELECT
   USING (ctx_perfil() IN ('admin', 'matriz', 'sistema') OR usuario_id = ctx_usuario() OR (ctx_perfil() = 'dono' AND loja_id = ctx_loja()));
 DROP POLICY IF EXISTS aceites_inserir ON aceites_termos;
 CREATE POLICY aceites_inserir ON aceites_termos FOR INSERT WITH CHECK (ctx_perfil() = 'sistema' OR usuario_id = ctx_usuario());
+
+-- =====================================================================
+-- v14.6 — Dados cadastrais e fiscais da loja (CNPJ, razão social, endereço, responsáveis, cobrança).
+-- Base da assinatura (Pagar.me), das notas fiscais e do vínculo da loja nos termos. O gestor da loja pode
+-- conferir e corrigir os próprios dados (política lojas_gestor_atualizar); a administração edita tudo.
+-- =====================================================================
+ALTER TABLE lojas ADD COLUMN IF NOT EXISTS cnpj                 text CHECK (cnpj IS NULL OR cnpj ~ '^[0-9]{14}$');
+ALTER TABLE lojas ADD COLUMN IF NOT EXISTS razao_social         text CHECK (razao_social IS NULL OR length(razao_social) BETWEEN 2 AND 160);
+ALTER TABLE lojas ADD COLUMN IF NOT EXISTS endereco             text CHECK (endereco IS NULL OR length(endereco) <= 300);
+ALTER TABLE lojas ADD COLUMN IF NOT EXISTS cep                  text CHECK (cep IS NULL OR cep ~ '^[0-9]{8}$');
+ALTER TABLE lojas ADD COLUMN IF NOT EXISTS responsavel_nome     text CHECK (responsavel_nome IS NULL OR length(responsavel_nome) BETWEEN 2 AND 120);
+ALTER TABLE lojas ADD COLUMN IF NOT EXISTS responsavel_email    text CHECK (responsavel_email IS NULL OR (responsavel_email = lower(responsavel_email) AND length(responsavel_email) <= 254));
+ALTER TABLE lojas ADD COLUMN IF NOT EXISTS responsavel_telefone text CHECK (responsavel_telefone IS NULL OR responsavel_telefone ~ '^[0-9]{10,13}$');
+ALTER TABLE lojas ADD COLUMN IF NOT EXISTS financeiro_nome      text CHECK (financeiro_nome IS NULL OR length(financeiro_nome) BETWEEN 2 AND 120);
+ALTER TABLE lojas ADD COLUMN IF NOT EXISTS financeiro_email     text CHECK (financeiro_email IS NULL OR (financeiro_email = lower(financeiro_email) AND length(financeiro_email) <= 254));
+ALTER TABLE lojas ADD COLUMN IF NOT EXISTS endereco_cobranca    text CHECK (endereco_cobranca IS NULL OR length(endereco_cobranca) <= 300);
+ALTER TABLE lojas ADD COLUMN IF NOT EXISTS cadastro_atualizado_em timestamptz;
+CREATE UNIQUE INDEX IF NOT EXISTS lojas_cnpj_unico ON lojas (cnpj) WHERE cnpj IS NOT NULL;
+
+-- (v14.7) a loja é entregue pronta pela administração: o gestor não altera a tabela lojas (cadastro fiscal e token do
+-- AbacatePay passaram para o admin). A política abaixo existiu só na v14.6 e é removida.
+DROP POLICY IF EXISTS lojas_gestor_atualizar ON lojas;
+
+-- =====================================================================
+-- v14.7 — Permissões: o que fica com a administração. Limite de atendentes por loja (o gestor convida até esse número)
+-- e limite de envios automáticos por hora (mensagens automáticas de reserva e de etapa do funil; 0 = sem limite).
+-- =====================================================================
+ALTER TABLE lojas ADD COLUMN IF NOT EXISTS limite_atendentes  integer NOT NULL DEFAULT 5 CHECK (limite_atendentes BETWEEN 0 AND 500);
+ALTER TABLE lojas ADD COLUMN IF NOT EXISTS limite_envios_hora integer NOT NULL DEFAULT 60 CHECK (limite_envios_hora BETWEEN 0 AND 10000);
+CREATE TABLE IF NOT EXISTS envios_automaticos (
+  id         bigserial PRIMARY KEY,
+  loja_id    uuid NOT NULL REFERENCES lojas(id) ON DELETE CASCADE,
+  enviado_em timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS envios_automaticos_loja_hora ON envios_automaticos (loja_id, enviado_em DESC);
+GRANT SELECT, INSERT, DELETE ON envios_automaticos TO conecta_app;
+GRANT USAGE, SELECT ON SEQUENCE envios_automaticos_id_seq TO conecta_app;
+ALTER TABLE envios_automaticos ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS envios_automaticos_sistema ON envios_automaticos;
+CREATE POLICY envios_automaticos_sistema ON envios_automaticos FOR ALL
+  USING (ctx_perfil() IN ('admin', 'sistema') OR loja_id = ctx_loja()) WITH CHECK (ctx_perfil() = 'sistema');
+
+-- v14.7 — a administração configurando a loja (/api/admin/na-loja/:id) grava como admin com a loja no contexto.
+-- Base da loja: só a administração altera (gestor e atendente leem). Instagram: gestor e administração.
+DROP POLICY IF EXISTS conhecimento_alterar ON conhecimento;
+CREATE POLICY conhecimento_alterar ON conhecimento FOR ALL
+  USING (ctx_perfil() = 'sistema' OR (escopo = 'rede' AND ctx_perfil() IN ('admin', 'matriz')) OR (escopo = 'loja' AND loja_id = ctx_loja() AND ctx_perfil() = 'admin'))
+  WITH CHECK (ctx_perfil() = 'sistema' OR (escopo = 'rede' AND ctx_perfil() IN ('admin', 'matriz')) OR (escopo = 'loja' AND loja_id = ctx_loja() AND ctx_perfil() = 'admin'));
+DROP POLICY IF EXISTS canais_instagram_alterar ON canais_instagram;
+CREATE POLICY canais_instagram_alterar ON canais_instagram FOR ALL
+  USING (ctx_perfil() = 'sistema' OR (loja_id = ctx_loja() AND ctx_perfil() IN ('dono', 'admin')))
+  WITH CHECK (ctx_perfil() = 'sistema' OR (loja_id = ctx_loja() AND ctx_perfil() IN ('dono', 'admin')));
+
+-- =====================================================================
+-- v14.8 — Assinatura do Conecta pelos franqueados (Pagar.me). Uma assinatura por loja; faturas por ciclo.
+-- Cartão e boleto: assinatura recorrente na Pagar.me. Pix: a Pagar.me não renova Pix sozinha — o Conecta gera um pedido
+-- Pix por ciclo (a primeira na contratação; as seguintes 5 dias antes do vencimento) e confirma pelo webhook.
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS assinaturas (
+  id                     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  loja_id                uuid NOT NULL UNIQUE REFERENCES lojas(id) ON DELETE CASCADE,
+  plano                  text NOT NULL CHECK (plano IN ('basico', 'intermediario')),
+  ciclo                  text NOT NULL DEFAULT 'mensal' CHECK (ciclo IN ('mensal', 'anual')),
+  forma                  text NOT NULL CHECK (forma IN ('cartao', 'pix', 'boleto', 'isenta')),
+  status                 text NOT NULL DEFAULT 'pendente' CHECK (status IN ('pendente', 'ativa', 'atrasada', 'cancelada', 'isenta')),
+  valor_centavos         integer NOT NULL CHECK (valor_centavos >= 0),
+  pagarme_cliente_id     text,
+  pagarme_assinatura_id  text,
+  pagarme_cartao_id      text,
+  cartao_final           text,
+  cartao_bandeira        text,
+  inicio_em              timestamptz,
+  proxima_cobranca       date,
+  cancelada_em           timestamptz,
+  observacao             text,
+  criada_por             uuid REFERENCES usuarios(id) ON DELETE SET NULL,
+  criada_em              timestamptz NOT NULL DEFAULT now(),
+  atualizada_em          timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS faturas_assinatura (
+  id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  assinatura_id         uuid NOT NULL REFERENCES assinaturas(id) ON DELETE CASCADE,
+  loja_id               uuid NOT NULL REFERENCES lojas(id) ON DELETE CASCADE,
+  referencia            text NOT NULL,                       -- ciclo cobrado: AAAA-MM (mensal) ou AAAA (anual)
+  valor_centavos        integer NOT NULL CHECK (valor_centavos >= 0),
+  forma                 text NOT NULL CHECK (forma IN ('cartao', 'pix', 'boleto', 'manual')),
+  status                text NOT NULL DEFAULT 'pendente' CHECK (status IN ('pendente', 'paga', 'vencida', 'cancelada', 'falhou')),
+  pagarme_pedido_id     text,
+  pagarme_cobranca_id   text,
+  pagarme_fatura_id     text,
+  pix_codigo            text,
+  pix_qr_url            text,
+  pix_expira_em         timestamptz,
+  boleto_url            text,
+  boleto_linha          text,
+  vence_em              date,
+  paga_em               timestamptz,
+  confirmada_por        uuid REFERENCES usuarios(id) ON DELETE SET NULL,
+  detalhes              jsonb,
+  criada_em             timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (assinatura_id, referencia)
+);
+CREATE INDEX IF NOT EXISTS faturas_assinatura_loja ON faturas_assinatura (loja_id, criada_em DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS faturas_assinatura_cobranca ON faturas_assinatura (pagarme_cobranca_id) WHERE pagarme_cobranca_id IS NOT NULL;
+GRANT SELECT, INSERT, UPDATE, DELETE ON assinaturas, faturas_assinatura TO conecta_app;
+ALTER TABLE assinaturas ENABLE ROW LEVEL SECURITY;
+ALTER TABLE faturas_assinatura ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS assinaturas_ver ON assinaturas;
+CREATE POLICY assinaturas_ver ON assinaturas FOR SELECT USING (ctx_perfil() IN ('admin', 'matriz', 'sistema') OR loja_id = ctx_loja());
+DROP POLICY IF EXISTS assinaturas_alterar ON assinaturas;
+CREATE POLICY assinaturas_alterar ON assinaturas FOR ALL
+  USING (ctx_perfil() IN ('admin', 'sistema') OR (loja_id = ctx_loja() AND ctx_perfil() = 'dono'))
+  WITH CHECK (ctx_perfil() IN ('admin', 'sistema') OR (loja_id = ctx_loja() AND ctx_perfil() = 'dono'));
+DROP POLICY IF EXISTS faturas_assinatura_ver ON faturas_assinatura;
+CREATE POLICY faturas_assinatura_ver ON faturas_assinatura FOR SELECT USING (ctx_perfil() IN ('admin', 'matriz', 'sistema') OR loja_id = ctx_loja());
+DROP POLICY IF EXISTS faturas_assinatura_alterar ON faturas_assinatura;
+CREATE POLICY faturas_assinatura_alterar ON faturas_assinatura FOR ALL
+  USING (ctx_perfil() IN ('admin', 'sistema') OR (loja_id = ctx_loja() AND ctx_perfil() = 'dono'))
+  WITH CHECK (ctx_perfil() IN ('admin', 'sistema') OR (loja_id = ctx_loja() AND ctx_perfil() = 'dono'));

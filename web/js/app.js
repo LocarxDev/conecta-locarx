@@ -9,6 +9,8 @@ import * as inicio from './telas/inicio.js';
 import * as equipe from './telas/equipe.js';
 import * as lojas from './telas/lojas.js';
 import * as perfil from './telas/perfil.js';
+import * as minhaLoja from './telas/minha-loja.js';
+import * as assinaturaTela from './telas/assinatura.js';
 import * as whatsapp from './telas/whatsapp.js';
 import * as respostasRapidas from './telas/respostas.js';
 import * as conversas from './telas/conversas.js';
@@ -90,6 +92,8 @@ function menuDoPerfil(perfilUsuario) {
       { rota: 'campanhas', rotulo: 'Campanhas', icone: 'etiqueta' },
       { rota: 'pagamentos', rotulo: 'Pagamentos online', icone: 'reservas' },
       { rota: 'atendentes', rotulo: 'Atendentes', icone: 'atendentes' },
+      { rota: 'minha-loja', rotulo: 'Dados da loja', icone: 'lojas' },
+      { rota: 'assinatura', rotulo: 'Assinatura', icone: 'reservas' },
     );
   }
   if (perfilUsuario === 'atendente') itens.push({ grupo: 'Apoio' }, { rota: 'base', rotulo: 'Base de conhecimento', icone: 'info' });
@@ -108,8 +112,11 @@ const ROTAS = [
   { padrao: /^termos$/, tela: termosTela.montar },
   { padrao: /^atendentes$/, tela: equipe.montar, perfis: ['dono'] },
   { padrao: /^lojas$/, tela: lojas.lista, perfis: ['admin', 'matriz'] },
+  { padrao: /^lojas\/([\w-]+)\/(assistente|base|pagamentos|whatsapp|personalizar|respostas|modelos)$/, tela: lojas.naLoja, perfis: ['admin'] },
   { padrao: /^lojas\/([\w-]+)$/, tela: lojas.detalhe, perfis: ['admin', 'matriz'] },
   { padrao: /^perfil$/, tela: perfil.montar },
+  { padrao: /^minha-loja$/, tela: minhaLoja.montar, perfis: ['dono', 'atendente'] },
+  { padrao: /^assinatura$/, tela: assinaturaTela.montar, perfis: ['dono', 'atendente'] },
   { padrao: /^conversas(?:\/([\w-]+))?$/, tela: conversas.montar, perfis: ['dono', 'atendente'] },
   { padrao: /^whatsapp$/, tela: whatsapp.montar, perfis: ['dono'] },
   { padrao: /^respostas$/, tela: respostasRapidas.montar, perfis: ['dono'] },
@@ -164,6 +171,8 @@ async function despachar() {
   // v14.5: termo de adesão/privacidade pendente → só a tela do termo (e sair) até aceitar
   if (estado.usuario?.termosPendentes > 0 && caminho !== 'termos') return navegar('termos');
   if (estado.usuario && !(estado.usuario.termosPendentes > 0) && caminho === 'termos') return navegar('inicio');
+  // v14.8: assinatura obrigatória e não ativa → só a tela de assinatura (e Dados da loja)
+  if (estado.usuario?.assinatura?.pendente && !['assinatura', 'minha-loja', 'perfil', 'termos'].includes(caminho)) return navegar('assinatura');
   if (achada.perfis && !achada.perfis.includes(estado.usuario.perfil)) {
     avisar('Você não tem acesso a essa tela.', 'erro');
     return navegar('inicio');
@@ -200,7 +209,7 @@ async function despachar() {
     guardar(await achada.tela(app, ctx));
   } else {
     desenharEstrutura(caminho);
-    if (['dono', 'atendente'].includes(estado.usuario.perfil) && !(estado.usuario.termosPendentes > 0)) { conversas.iniciarVigia(ctx); conversas.atualizarContadores(); }
+    if (['dono', 'atendente'].includes(estado.usuario.perfil) && !(estado.usuario.termosPendentes > 0) && !estado.usuario.assinatura?.pendente) { conversas.iniciarVigia(ctx); conversas.atualizarContadores(); }
     const area = $('#conteudo');
     area.classList.toggle('conteudo-largo', /^conversas/.test(caminho));
     area.classList.toggle('conteudo-amplo', !!achada.largo);
@@ -348,6 +357,7 @@ async function iniciar() {
     estado.usuario = null;
   }
   window.addEventListener('hashchange', despachar);
+  window.addEventListener('assinatura-pendente', () => { if (estado.usuario && !estado.usuario.assinatura?.pendente) { estado.usuario = { ...estado.usuario, assinatura: { ...(estado.usuario.assinatura || {}), pendente: true } }; conversas.pararVigia(); navegar('assinatura'); } });
   window.addEventListener('termos-pendentes', () => { if (estado.usuario && !(estado.usuario.termosPendentes > 0)) { estado.usuario = { ...estado.usuario, termosPendentes: 1 }; conversas.pararVigia(); navegar('termos'); } });
   despachar();
 }
