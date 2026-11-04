@@ -67,6 +67,7 @@ const real = {
   aceitarTermo: (id, hash) => chamar('POST', `/termos/${encodeURIComponent(id)}/aceitar`, { hash }),
   termosAdmin: () => chamar('GET', '/admin/termos'),
   termoAdmin: (id) => chamar('GET', `/admin/termos/${encodeURIComponent(id)}`),
+  converterDocxTermo: (nome, base64) => chamar('POST', '/admin/termos/converter-docx', { nome, base64 }),
   publicarTermo: (tipo, d) => chamar('PUT', `/admin/termos/${encodeURIComponent(tipo)}`, d),
   aceitesTermos: (q) => chamar('GET', '/admin/termos-aceites?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
   urlAceitesCsv: () => '/api/admin/termos-aceites.csv',

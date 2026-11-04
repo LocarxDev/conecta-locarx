@@ -367,7 +367,7 @@ export async function montar(alvo, ctx) {
     else if (m.tipo === 'localizacao' && m.midia?.lat != null) corpo = html`<a class="anexo" href="https://www.google.com/maps?q=${m.midia.lat},${m.midia.lng}" target="_blank" rel="noopener noreferrer">${icone('lojas')}Localização · abrir no mapa</a>`;
     else if (m.tipo === 'outro') corpo = html`<span class="sub">Mensagem de um tipo que o Conecta ainda não mostra. Veja no celular da loja.</span>`;
     return html`<div class="balao ${classe}${m.status === 'erro' ? ' erro-envio' : ''}" data-mid="${m.id}">
-      ${m.tipo === 'nota' ? html`<span class="autor-balao">Nota interna · ${m.autorNome || 'equipe'}</span>` : m.direcao === 'saida' && m.autorNome ? html`<span class="autor-balao">${m.autorNome}</span>` : ''}
+      ${m.tipo === 'nota' ? html`<span class="autor-balao">Nota interna · ${m.autorNome || 'equipe'}</span>` : m.peloCelular ? html`<span class="autor-balao celular" title="Mensagem enviada direto pelo aparelho da loja, fora do Conecta">${icone('whatsapp')} Pelo celular da loja</span>` : m.direcao === 'saida' && m.autorNome ? html`<span class="autor-balao">${m.autorNome}</span>` : ''}
       ${corpo}${m.texto && m.tipo !== 'evento' ? html`<span>${m.texto}</span>` : ''}
       <span class="rodape-balao">${m.status === 'erro' ? html`<span class="falhou">Não enviada</span>` : ''}${hora(m.criadaEm)}</span>
     </div>`;

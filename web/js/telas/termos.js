@@ -1,7 +1,7 @@
 // v14.5 — Termos de adesão (gestores), de uso e de privacidade (gestores e atendentes): aparecem no primeiro acesso e sempre que a
 // administração publicar uma versão nova. Sem aceitar, o sistema não abre (o roteador e a API bloqueiam).
 import { api } from '../api.js';
-import { html, render, $, icone, avisar, comBotao } from '../util.js';
+import { html, render, $, icone, avisar, comBotao, seguro } from '../util.js';
 
 export async function montar(alvo, ctx) {
   const sistema = document.getElementById('sistema');
@@ -19,7 +19,7 @@ export async function montar(alvo, ctx) {
       <section class="painel termo-caixa">
         <div class="painel-cab"><div><h2>${t.titulo}</h2><span class="sub">${total > 1 ? `Termo ${n} de ${total} · ` : ''}${t.nome} · versão ${t.versao} · publicado em ${new Date(t.publicadoEm).toLocaleDateString('pt-BR')}</span></div></div>
         <div class="alerta-caixa info">${icone('info')}<span>Para usar o Conecta LocarX, leia o termo até o fim e clique em "Li e concordo". O aceite fica registrado com nome, e-mail, loja, data, hora, endereço IP e navegador.${total > 1 ? ` São ${total} termos; este é o ${n}º.` : ''}</span></div>
-        <div class="termo-texto" id="termo-texto" tabindex="0">${t.texto}</div>
+        <div class="termo-texto ${t.formato === 'html' ? 'formatado' : ''}" id="termo-texto" tabindex="0">${t.formato === 'html' ? seguro(t.texto) : t.texto}</div>
         <label class="checkbox termo-confirmo"><input type="checkbox" id="termo-li"> Li e compreendi o termo acima e concordo com ele.</label>
         <div class="termo-acoes">
           <button class="btn btn-texto" id="termo-sair">Sair sem aceitar</button>

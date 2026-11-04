@@ -34,7 +34,7 @@ export async function pendentesDe(c, usuario) {
   return rows.sort((a, b) => (TIPOS[a.tipo]?.ordem || 9) - (TIPOS[b.tipo]?.ordem || 9));
 }
 
-export const termoPublico = (t) => ({ id: t.id, tipo: t.tipo, nome: TIPOS[t.tipo]?.nome || t.tipo, versao: t.versao, titulo: t.titulo, texto: t.texto, publicadoEm: t.publicado_em, hash: hashTexto(t.texto) });
+export const termoPublico = (t) => ({ id: t.id, tipo: t.tipo, nome: TIPOS[t.tipo]?.nome || t.tipo, versao: t.versao, titulo: t.titulo, texto: t.texto, formato: t.formato || 'texto', publicadoEm: t.publicado_em, hash: hashTexto(t.texto) });
 
 const REGISTRO = `Registro do aceite. Ao aceitar este termo, o sistema grava: nome, e-mail e perfil de acesso, loja vinculada, versão do termo, data e hora, endereço IP e identificação do navegador/dispositivo, além da assinatura digital (hash) do texto aceito. Esse registro é mantido como prova do aceite pelo tempo exigido em lei.`;
 

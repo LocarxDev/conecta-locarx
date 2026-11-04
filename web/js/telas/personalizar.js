@@ -2,7 +2,7 @@
 // - Dono (#/personalizar): funis da loja, etiquetas e campos da loja (os da rede aparecem só para consulta).
 // - Administração e matriz (#/padroes): funil padrão, etiquetas, campos e mensagens automáticas que valem para toda a rede.
 import { api } from '../api.js';
-import { html, render, $, $$, icone, avisar, abrirModal, confirmar, comBotao, marcarErros, chipEtiqueta, seletorCor, CORES, preferencia } from '../util.js';
+import { html, render, $, $$, icone, avisar, abrirModal, confirmar, comBotao, marcarErros, chipEtiqueta, seletorCor, CORES, preferencia, seguro } from '../util.js';
 
 const TIPO_ETAPA = { aberta: 'Em andamento', ganho: 'Venda concluída', perdido: 'Perdido' };
 const EVENTOS = [['', 'Só a equipe move'], ['cotacao', 'Automático: cotou preço'], ['reserva', 'Automático: reserva criada'], ['retirada', 'Automático: carro retirado']];
@@ -430,7 +430,7 @@ async function termos(area, { ctx }) {
         <div class="painel-cab"><div><h2>${tipo.nome}</h2><span class="sub">${tipo.perfis.map((p) => (p === 'dono' ? 'gestores' : 'atendentes')).join(' e ')} · ${v ? `Versão vigente ${v.versao} · publicada em ${quando(v.publicadoEm)}` : 'Nenhuma versão publicada'} · ${pend ? html`<span class="selo alerta sem-ponto">${pend} pessoa(s) ainda sem aceitar</span>` : html`<span class="selo ok sem-ponto">todos aceitaram</span>`}</span></div>
           <div class="filtros">${admin ? html`<button class="btn btn-contorno" data-editar-termo="${tipo.tipo}">${icone('editar')}Editar e publicar versão nova</button>` : ''}</div></div>
         <div class="painel-corpo">
-          <details><summary class="sub">Ver o texto vigente</summary><div class="termo-texto" style="margin:8px 0 0">${v?.texto || '—'}</div></details>
+          <details><summary class="sub">Ver o texto vigente${v?.formato === 'html' ? ' (importado do Word)' : ''}</summary><div class="termo-texto termo-previa ${v?.formato === 'html' ? 'formatado' : ''}">${v ? (v.formato === 'html' ? seguro(v.texto) : v.texto) : '—'}</div></details>
           ${versoes.length > 1 ? html`<p class="sub" style="margin-top:8px">Histórico: ${versoes.map((x) => `v${x.versao} (${quando(x.publicadoEm)}${x.publicadoPor ? ', ' + x.publicadoPor : ''}, ${x.aceites} aceite${x.aceites === 1 ? '' : 's'})`).join(' · ')}</p>` : ''}
         </div>
       </section>`; })}
@@ -476,18 +476,35 @@ async function termos(area, { ctx }) {
       corpo: html`<form class="form termo-editor" id="form-termo" novalidate>
         <div class="alerta-caixa aviso">${icone('alerta')}<span>Ao publicar, esta passa a ser a versão ${(v?.versao || 0) + 1} e <strong>todas as pessoas deste perfil precisarão aceitar de novo</strong> no próximo acesso. As versões anteriores e os aceites antigos ficam guardados.</span></div>
         <div class="campo"><label for="t-titulo">Título</label><input id="t-titulo" name="titulo" maxlength="160" value="${v?.titulo || ''}" required></div>
-        <div class="campo"><label for="t-texto">Texto do termo <span class="sub contador" id="t-contador"></span></label><textarea id="t-texto" name="texto" maxlength="60000" required>${v?.texto || ''}</textarea>
-          <p class="ajuda">Texto simples; as quebras de linha são mantidas. Recomendação: revisão jurídica antes de publicar.</p></div>
+        <div class="campo"><label>Texto do termo</label>
+          <div class="acoes-linha"><label class="btn btn-contorno" for="t-docx">${icone('copiar')} Importar de um Word (.docx)<input id="t-docx" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" class="sr-only"></label><button class="btn btn-texto" type="button" id="t-modo-texto" ${v?.formato === 'html' ? '' : 'hidden'}>Voltar para texto simples</button></div>
+          <p class="ajuda">Importando do Word, títulos, negrito, listas e parágrafos são mantidos; imagens e links não. Recomendação: revisão jurídica antes de publicar.</p></div>
+        <div class="campo" id="t-bloco-html" ${v?.formato === 'html' ? '' : 'hidden'}><label>Prévia formatada <span class="sub" id="t-origem"></span></label><div class="termo-texto termo-previa formatado" id="t-previa">${v?.formato === 'html' ? seguro(v.texto) : ''}</div></div>
+        <div class="campo" id="t-bloco-texto" ${v?.formato === 'html' ? 'hidden' : ''}><label for="t-texto">Texto simples <span class="sub contador" id="t-contador"></span></label><textarea id="t-texto" name="texto" maxlength="60000">${v?.formato === 'html' ? '' : (v?.texto || '')}</textarea></div>
       </form>`,
       rodape: html`<button class="btn btn-contorno" data-fechar>Cancelar</button><button class="btn btn-primario" type="submit" form="form-termo">Publicar versão ${(v?.versao || 0) + 1}</button>`,
     });
     m.el.querySelector('.modal').classList.add('modal-cotacao');
     const f = $('#form-termo', m.el), ta = $('#t-texto', m.el), cont = $('#t-contador', m.el);
+    let htmlImportado = v?.formato === 'html' ? v.texto : null;   // v14.8.4: termo vindo do Word
     const mostrar = () => { cont.textContent = `${ta.value.length.toLocaleString('pt-BR')} / 60.000`; };
     ta.addEventListener('input', mostrar); mostrar();
+    const modo = (html) => { htmlImportado = html; $('#t-bloco-html', m.el).hidden = !html; $('#t-bloco-texto', m.el).hidden = !!html; $('#t-modo-texto', m.el).hidden = !html; if (html) $('#t-previa', m.el).innerHTML = html; };
+    $('#t-docx', m.el).addEventListener('change', async (e) => {
+      const arq = e.target.files?.[0]; if (!arq) return;
+      if (arq.size > 8 * 1024 * 1024) return avisar('Arquivo grande demais (máximo 8 MB).', 'erro');
+      const base64 = await new Promise((ok, erro) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1] || ''); r.onerror = () => erro(new Error('Não consegui ler o arquivo.')); r.readAsDataURL(arq); });
+      try {
+        const r = await api.converterDocxTermo(arq.name, base64);
+        modo(r.html); $('#t-origem', m.el).textContent = `· ${arq.name}`;
+        avisar(r.avisos?.length ? 'Documento importado (alguns trechos simplificados).' : 'Documento importado. Confira a prévia e publique.');
+      } catch (err) { avisar(err.message, 'erro'); }
+      e.target.value = '';
+    });
+    $('#t-modo-texto', m.el).addEventListener('click', () => { modo(null); $('#t-origem', m.el).textContent = ''; });
     f.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const dados = { titulo: f.elements.titulo.value.trim(), texto: f.elements.texto.value.trim() };
+      const dados = htmlImportado ? { titulo: f.elements.titulo.value.trim(), texto: htmlImportado, formato: 'html' } : { titulo: f.elements.titulo.value.trim(), texto: f.elements.texto.value.trim(), formato: 'texto' };
       if (!marcarErros(f, { ...(dados.titulo.length < 3 ? { titulo: 'Informe o título.' } : {}), ...(dados.texto.length < 20 ? { texto: 'O texto está curto demais.' } : {}) })) return;
       if (!(await confirmar({ titulo: 'Publicar nova versão?', texto: 'Todas as pessoas deste perfil vão precisar aceitar de novo no próximo acesso.', botao: 'Publicar' }))) return;
       await comBotao($('[type=submit]', m.el), async () => {

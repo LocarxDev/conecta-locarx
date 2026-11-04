@@ -239,3 +239,12 @@ Um app da Meta (dono: LocarX; App ID `2324380125023153`) para a rede; cada loja 
 - **Variáveis** (Railway): `PAGARME_SECRET_KEY` (sk_…), `PAGARME_PUBLIC_KEY` (pk_…), `PAGARME_WEBHOOK_USUARIO`, `PAGARME_WEBHOOK_SENHA`, `PAGARME_DESCRICAO` (texto na fatura do cartão, até 22 caracteres), `ASSINATURA_OBRIGATORIA=1` (bloqueia gestor/atendente de loja sem assinatura ativa/isenta — a Central e a administração nunca bloqueiam), `PAGARME_SIMULADO=1` (só fora de produção: nada sai para a Pagar.me).
 - Sem nenhuma variável, a tela diz que a assinatura online não está disponível e nada muda para as lojas.
 - Banco: `assinaturas` (uma por loja) e `faturas_assinatura`. Front: `web/js/telas/assinatura.js`; CSP do Netlify libera `https://api.pagar.me` em `connect-src` e `img-src`.
+
+## Resposta pelo celular da loja (v14.8.3)
+- Mensagem enviada direto pelo aparelho (chega pela Evolution como `fromMe`) entra no histórico como saída da equipe, com o selo **"Pelo celular da loja"** no balão (`peloCelular` na API: saída, autor atendente, sem usuário, com id externo).
+- Se a conversa estava com a Lia, ela passa para a equipe e fica o evento "Respondida pelo celular da loja — a assistente parou de responder esta conversa".
+
+## Termos importados do Word (v14.8.4)
+- Padrões do CRM → Termos de uso → Editar → **Importar de um Word (.docx)**: o servidor converte (mammoth) mantendo títulos, negrito/itálico, listas, parágrafos e tabelas; imagens, links e estilos são descartados (`servicos/termos-docx.js`, `limparHtml`). A prévia formatada aparece no editor e o termo é publicado com `formato = 'html'`; a tela do gestor/atendente mostra o termo formatado e o aceite continua com o hash do conteúdo.
+- "Voltar para texto simples" mantém o modo antigo (textarea). `POST /api/admin/termos/converter-docx` (base64, até 8 MB). Dependência nova: `mammoth`.
+- Tela de assinatura: o erro de tokenização do cartão agora mostra o detalhe devolvido pela Pagar.me; nome do titular vai sem acentos/números; ano com 2 dígitos.

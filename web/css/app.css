@@ -961,3 +961,17 @@ select option, select optgroup { background: var(--superficie); color: var(--tex
 .loja-chip b { font-weight: 600; } .loja-chip small { color: var(--texto-3); }
 .loja-chip .av { width: 28px; height: 28px; border-radius: 50%; background: var(--vermelho-suave); color: var(--vermelho); display: grid; place-items: center; font: 700 12px/1 var(--fonte-titulo); }
 @media (max-width: 900px) { .assinatura-acesso { grid-template-columns: 1fr; } .assinatura-acesso .acesso-marca { padding: 28px 24px; } .assinatura-acesso .x-fundo { display: none; } }
+
+/* v14.8.3: resposta enviada pelo celular da loja (fora do Conecta) */
+.autor-balao.celular { display: inline-flex; align-items: center; gap: 4px; color: var(--alerta); }
+.autor-balao.celular .ic { width: 12px; height: 12px; }
+
+/* ---------- v14.8.4: termo formatado (importado do Word) ---------- */
+.termo-previa { margin: 8px 0 0; max-height: 360px; overflow: auto; }
+.termo-texto.formatado { white-space: normal; line-height: 1.55; }
+.termo-texto.formatado h2 { font-size: 1.1rem; margin: 18px 0 8px; } .termo-texto.formatado h3 { font-size: 1rem; margin: 16px 0 6px; } .termo-texto.formatado h4 { font-size: .95rem; margin: 14px 0 6px; }
+.termo-texto.formatado h2:first-child, .termo-texto.formatado h3:first-child { margin-top: 0; }
+.termo-texto.formatado p { margin: 0 0 10px; } .termo-texto.formatado ul, .termo-texto.formatado ol { margin: 0 0 10px; padding-left: 22px; } .termo-texto.formatado li { margin: 2px 0; }
+.termo-texto.formatado table { border-collapse: collapse; width: 100%; margin: 8px 0 12px; font-size: 13.5px; }
+.termo-texto.formatado th, .termo-texto.formatado td { border: 1px solid var(--borda); padding: 6px 8px; vertical-align: top; text-align: left; }
+.termo-texto.formatado blockquote { margin: 0 0 10px; padding-left: 12px; border-left: 3px solid var(--borda-forte); color: var(--texto-2); }

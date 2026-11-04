@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js';
 import { rota, erro, validar, zUuid, exigirPerfil, registrar, ipDe, navegadorDe } from '../http.js';
 import { TIPOS, tiposDoPerfil, vigentes, pendentesDe, termoPublico, hashTexto } from '../servicos/termos.js';
+import { docxParaTermo, limparHtml } from '../servicos/termos-docx.js';
 
 export const termos = Router();        // /api/termos
 export const termosAdmin = Router();   // /api/admin/termos
@@ -66,17 +67,32 @@ termosAdmin.put('/termos/:tipo', exigirPerfil('admin'), rota(async (req, res) =>
   if (!TIPOS[tipo]) throw erro(404, 'Termo não encontrado.');
   const d = validar(z.object({
     titulo: z.string().trim().min(3, 'Informe o título.').max(160),
-    texto: z.string().trim().min(20, 'O texto está curto demais.').max(60000, 'Máximo de 60.000 caracteres.'),
+    texto: z.string().trim().min(20, 'O texto está curto demais.').max(400000, 'Máximo de 400.000 caracteres.'),
+    formato: z.enum(['texto', 'html']).default('texto'),   // v14.8.4: html = importado de um Word (já limpo no servidor; limpa de novo por garantia)
   }), req.body);
+  if (d.formato === 'html') d.texto = limparHtml(d.texto);
+  if (d.formato === 'texto' && d.texto.length > 60000) throw erro(422, 'Confira os campos destacados.', { texto: 'Máximo de 60.000 caracteres.' });
   const t = await comContexto(ctx(req), async (c) => {
     const atual = (await c.query('SELECT * FROM termos WHERE tipo = $1 ORDER BY versao DESC LIMIT 1', [tipo])).rows[0];
     if (atual && atual.titulo === d.titulo && atual.texto === d.texto) throw erro(422, 'Nada mudou em relação à versão vigente.');
-    const r = (await c.query(`INSERT INTO termos (tipo, versao, titulo, texto, publicado_por) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [tipo, (atual?.versao || 0) + 1, d.titulo, d.texto, req.usuario.id])).rows[0];
+    const r = (await c.query(`INSERT INTO termos (tipo, versao, titulo, texto, formato, publicado_por) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [tipo, (atual?.versao || 0) + 1, d.titulo, d.texto, d.formato, req.usuario.id])).rows[0];
     await registrar(c, req, 'publicou_termo', { detalhes: { tipo, versao: r.versao } });
     return r;
   });
   res.status(201).json(termoPublico(t));
+}));
+
+// v14.8.4: converte um Word (.docx, em base64) em HTML limpo para virar o texto do termo (a publicação é o PUT acima)
+termosAdmin.post('/termos/converter-docx', exigirPerfil('admin'), rota(async (req, res) => {
+  const { nome, base64 } = validar(z.object({ nome: z.string().trim().max(200).optional(), base64: z.string().min(100, 'Arquivo vazio.').max(11_000_000, 'Arquivo grande demais (máximo 8 MB).') }), req.body);
+  if (nome && !/\.docx$/i.test(nome)) throw erro(422, 'Envie um arquivo .docx (Word).', { arquivo: 'Só .docx.' });
+  let buffer; try { buffer = Buffer.from(base64.replace(/^data:[^,]*,/, ''), 'base64'); } catch { throw erro(422, 'Arquivo inválido.'); }
+  if (buffer.subarray(0, 2).toString('latin1') !== 'PK') throw erro(422, 'Isso não parece um .docx (Word). Salve como .docx e tente de novo.', { arquivo: 'Formato inválido.' });
+  try {
+    const r = await docxParaTermo(buffer);
+    res.json({ html: r.html, texto: r.texto, avisos: r.avisos, caracteres: r.html.length });
+  } catch (err) { if (err.status) throw err; throw erro(422, 'Não consegui ler o documento: ' + (err.message || 'erro desconhecido')); }
 }));
 
 termosAdmin.get('/termos/:id', admin, rota(async (req, res) => {

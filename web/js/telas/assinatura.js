@@ -219,15 +219,19 @@ export async function montar(alvo, ctx) {
 
   // tokenização do cartão direto na Pagar.me (chave pública); em modo simulado gera um token local
   async function tokenizar(form) {
-    const numero = form.elements.numero.value.replace(/\D/g, ''), nome = form.elements.nome.value.trim(), val = form.elements.validade.value.replace(/\D/g, ''), cvv = form.elements.cvv.value.replace(/\D/g, '');
+    const numero = form.elements.numero.value.replace(/\D/g, ''), nome = form.elements.nome.value.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z ]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 64), val = form.elements.validade.value.replace(/\D/g, ''), cvv = form.elements.cvv.value.replace(/\D/g, '');
     if (numero.length < 13 || !nome || val.length !== 4 || cvv.length < 3) throw new Error('Confira o número, o nome, a validade (MM/AA) e o CVV do cartão.');
     if (s.simulado || !s.chavePublica) return `token_simulado_${numero.slice(-4)}`;
     const r = await fetch(`https://api.pagar.me/core/v5/tokens?appId=${encodeURIComponent(s.chavePublica)}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'card', card: { number: numero, holder_name: nome, exp_month: Number(val.slice(0, 2)), exp_year: Number('20' + val.slice(2)), cvv } }),
+      body: JSON.stringify({ type: 'card', card: { number: numero, holder_name: nome, exp_month: Number(val.slice(0, 2)), exp_year: Number(val.slice(2)), cvv } }),
     });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok || !j.id) throw new Error(j.message || 'A Pagar.me não aceitou o cartão. Confira os dados.');
+    if (!r.ok || !j.id) {
+      // a Pagar.me manda o motivo em `errors` ({ "card.exp_year": ["..."] }); mostra para o gestor saber o que corrigir
+      const detalhes = j.errors && typeof j.errors === 'object' ? Object.entries(j.errors).map(([k, v]) => `${k.replace(/^card\./, '')}: ${[].concat(v).join(', ')}`).join(' · ') : '';
+      throw new Error(`A Pagar.me não aceitou o cartão${detalhes ? ' — ' + detalhes : j.message ? ' — ' + j.message : ''}. Confira número, nome (sem números ou acentos), validade e CVV.`);
+    }
     return j.id;
   }
 

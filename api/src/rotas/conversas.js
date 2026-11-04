@@ -33,9 +33,11 @@ function conversaPublica(r) {
     ...(r.loja_atendimento_id ? { transferida: { origem: { id: r.loja_id, nome: r.loja_origem_nome }, atendimento: { id: r.loja_atendimento_id, nome: r.loja_atendimento_nome }, em: r.transferida_em } } : {}),
   };
 }
-function mensagemPublica(m) {
+export function mensagemPublica(m) {
   return {
-    id: m.id, direcao: m.direcao, autor: m.autor, autorNome: m.autor_nome || null, tipo: m.tipo, texto: [m.texto, ...(Array.isArray(m.ui) ? m.ui.map((u) => u.fallback).filter(Boolean) : [])].filter(Boolean).join('\n\n') || m.texto,
+    id: m.id, direcao: m.direcao, autor: m.autor, autorNome: m.autor_nome || null, tipo: m.tipo,
+    // v14.8.3: resposta mandada direto pelo celular da loja (chegou pela Evolution como fromMe, sem usuário do Conecta)
+    peloCelular: m.direcao === 'saida' && m.autor === 'atendente' && !m.autor_id && !!m.externo_id, texto: [m.texto, ...(Array.isArray(m.ui) ? m.ui.map((u) => u.fallback).filter(Boolean) : [])].filter(Boolean).join('\n\n') || m.texto,
     midia: m.midia ? { mimetype: m.midia.mimetype || null, nome: m.midia.nome || null, segundos: m.midia.segundos || null, lat: m.midia.lat ?? null, lng: m.midia.lng ?? null } : null,
     temArquivo: !!(m.externo_id && ['imagem', 'audio', 'video', 'documento', 'figurinha'].includes(m.tipo)),
     status: m.status, criadaEm: m.criada_em, cursor: m.cursor,

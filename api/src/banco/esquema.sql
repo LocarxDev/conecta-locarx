@@ -1364,3 +1364,6 @@ CREATE POLICY faturas_assinatura_alterar ON faturas_assinatura FOR ALL
 -- v14.8.1 — assinatura "suspensa": atrasada há mais de ASSINATURA_DIAS_BLOQUEIO dias (padrão 10) → loja travada até pagar
 ALTER TABLE assinaturas DROP CONSTRAINT IF EXISTS assinaturas_status_check;
 ALTER TABLE assinaturas ADD CONSTRAINT assinaturas_status_check CHECK (status IN ('pendente', 'ativa', 'atrasada', 'suspensa', 'cancelada', 'isenta'));
+
+-- v14.8.4 — termo importado de um Word: texto guardado como HTML limpo (formato = 'html'); o aceite continua com o hash do conteúdo
+ALTER TABLE termos ADD COLUMN IF NOT EXISTS formato text NOT NULL DEFAULT 'texto' CHECK (formato IN ('texto', 'html'));

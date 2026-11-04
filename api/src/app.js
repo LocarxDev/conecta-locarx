@@ -63,6 +63,8 @@ export function criarApp() {
   app.use('/api/conversas/:id/midia', express.json({ limit: '12mb' }));
   app.use('/api/conhecimento/importar', express.json({ limit: '15mb' }));
   app.use('/api/conhecimento/lote', express.json({ limit: '1mb' }));
+  app.use('/api/admin/termos/converter-docx', express.json({ limit: '12mb' }));   // v14.8.4: Word em base64
+  app.use('/api/admin/termos', express.json({ limit: '1mb' }));                    // termo em HTML pode passar de 50 kB
   app.use(express.json({ limit: '50kb' }));
   app.use(cookieParser());
   app.use('/api', carregarSessao);

@@ -353,6 +353,10 @@ export async function registrarRecebida(lojaId, m, opcoes = {}) {
       [conversa.id, lojaId, entrada ? 'entrada' : 'saida', entrada ? 'cliente' : 'atendente', m.tipo, m.texto, m.midia, m.externoId]);
     // conversa nova ou reaberta: o cliente entra (ou continua) no funil principal da loja
     if (reabrir) await registrarEvento(c, { lojaId, contatoId: contato.id, conversaId: conversa.id, evento: null });
+    // v14.8.3: alguém respondeu pelo celular da loja enquanto a Lia atendia → a conversa passou para a equipe; deixa registrado
+    if (!entrada && canalNovo === 'whatsapp' && anterior?.estado === 'assistente') {
+      await c.query(`INSERT INTO mensagens (conversa_id, loja_id, direcao, autor, tipo, texto) VALUES ($1, $2, 'interna', 'sistema', 'evento', 'Respondida pelo celular da loja — a assistente parou de responder esta conversa')`, [conversa.id, lojaId]);
+    }
     // esperando alguém da equipe: a roleta entrega para a próxima pessoa disponível
     if (entrada && conversa.estado === 'aguardando' && await distribuir(c, conversa.id)) conversa.estado = 'humano';
     // cliente pediu para não receber mais mensagens ativas (lembretes, avisos)
