@@ -8,6 +8,7 @@ import { iniciarVarreduras } from './servicos/ia/assistente.js';
 import { iniciarAutomacoes, semearModelosRede, sincronizarModelos } from './servicos/crm/modelos.js';
 import { semearTermos } from './servicos/termos.js';
 import { rodarCiclos } from './servicos/assinatura/index.js';
+import { carregarConfigPlanos } from './servicos/assinatura/planos.js';
 import { iniciarVarreduraPix } from './servicos/pagamentos/cobrancas.js';
 import { aplicarRegrasFunil } from './servicos/crm/funis.js';
 import { iniciarLimpezaSite } from './servicos/site/chat.js';
@@ -34,6 +35,7 @@ async function iniciar() {
   // padrões de mensagem da rede (uma vez) e cópia para as lojas; falha aqui não impede a API de subir
   await comoSistema(async (c) => { await semearModelosRede(c); await sincronizarModelos(c, null); }).catch((e) => console.error('[inicio] modelos de mensagem:', e.message));
   await comoSistema((c) => semearTermos(c)).catch((e) => console.error('[inicio] termos:', e.message));   // v14.5: termos de adesão/privacidade (versão 1 inicial)
+  await comoSistema((c) => carregarConfigPlanos(c)).then((n) => { if (n) console.log('[inicio] plano e valores: personalização carregada'); }).catch((e) => console.error('[inicio] plano:', e.message));   // v14.10
   await criarAdminInicial();
   iniciarVarreduras();
   iniciarAutomacoes();

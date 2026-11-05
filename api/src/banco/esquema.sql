@@ -1367,3 +1367,42 @@ ALTER TABLE assinaturas ADD CONSTRAINT assinaturas_status_check CHECK (status IN
 
 -- v14.8.4 — termo importado de um Word: texto guardado como HTML limpo (formato = 'html'); o aceite continua com o hash do conteúdo
 ALTER TABLE termos ADD COLUMN IF NOT EXISTS formato text NOT NULL DEFAULT 'texto' CHECK (formato IN ('texto', 'html'));
+
+-- v14.10 — Plano e valores editáveis pela administração (uma linha; o código usa como padrão o que está em planos.js quando a linha não existe).
+-- Mudar o preço vale para contratações novas: quem já assinou mantém o valor da assinatura criada na Pagar.me.
+CREATE TABLE IF NOT EXISTS plano_config (
+  chave               text PRIMARY KEY,                      -- 'basico'
+  nome                text NOT NULL CHECK (length(nome) BETWEEN 2 AND 60),
+  rotulo              text NOT NULL CHECK (length(rotulo) BETWEEN 2 AND 40),
+  descricao           text NOT NULL DEFAULT '' CHECK (length(descricao) <= 200),
+  mensal              integer NOT NULL CHECK (mensal >= 0),            -- centavos
+  anual               integer NOT NULL CHECK (anual >= 0),
+  acessos_inclusos    integer NOT NULL DEFAULT 2 CHECK (acessos_inclusos BETWEEN 0 AND 100),
+  acesso_extra_mensal integer NOT NULL DEFAULT 0 CHECK (acesso_extra_mensal >= 0),
+  inclui              jsonb NOT NULL DEFAULT '[]'::jsonb,
+  notas               jsonb NOT NULL DEFAULT '[]'::jsonb,
+  atualizado_em       timestamptz NOT NULL DEFAULT now(),
+  atualizado_por      text
+);
+CREATE TABLE IF NOT EXISTS plano_config_versoes (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  chave       text NOT NULL,
+  dados       jsonb NOT NULL,
+  autor_id    uuid REFERENCES usuarios(id) ON DELETE SET NULL,
+  autor_nome  text,
+  motivo      text CHECK (length(motivo) <= 200),
+  criada_em   timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS plano_config_versoes_data ON plano_config_versoes (criada_em DESC);
+GRANT SELECT, INSERT, UPDATE, DELETE ON plano_config TO conecta_app;
+GRANT SELECT, INSERT ON plano_config_versoes TO conecta_app;
+ALTER TABLE plano_config ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS plano_config_ver ON plano_config;
+CREATE POLICY plano_config_ver ON plano_config FOR SELECT USING (true);
+DROP POLICY IF EXISTS plano_config_alterar ON plano_config;
+CREATE POLICY plano_config_alterar ON plano_config FOR ALL USING (ctx_perfil() IN ('admin', 'sistema')) WITH CHECK (ctx_perfil() IN ('admin', 'sistema'));
+ALTER TABLE plano_config_versoes ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS plano_config_versoes_ver ON plano_config_versoes;
+CREATE POLICY plano_config_versoes_ver ON plano_config_versoes FOR SELECT USING (ctx_perfil() IN ('admin', 'matriz', 'sistema'));
+DROP POLICY IF EXISTS plano_config_versoes_inserir ON plano_config_versoes;
+CREATE POLICY plano_config_versoes_inserir ON plano_config_versoes FOR INSERT WITH CHECK (ctx_perfil() IN ('admin', 'sistema'));

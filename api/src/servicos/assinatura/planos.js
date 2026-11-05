@@ -5,11 +5,33 @@ export const PLANOS = {
   basico: {
     nome: 'Conecta + LIA', rotulo: 'Plano básico', descricao: 'CRM, Portal LocarX e atendimento automatizado pela Lia.', destaque: true,
     mensal: 22000, anual: 200000,
+    acessosInclusos: 2, acessoExtraMensal: 2990,   // v14.9.3 — 2 acessos por loja no plano; acesso adicional R$ 29,90/mês (cobrança do extra ainda manual: backlog)
     modulos: { funil: true, clientes: true, relatorios: true, automacoes: true, assistente: true, cotacao: true, base: true },
     inclui: ['Funil de vendas e tarefas', 'Clientes (CRM)', 'Relatórios', 'Mensagens automáticas', 'Assistente virtual LIA', 'Cotação e reserva', 'Integração com Portal', 'Base de conhecimento da loja'],
     naoInclui: [],
   },
 };
+// v14.10 — valores editáveis pela administração (tela "Plano e valores"): ficam em plano_config e sobrepõem o padrão acima.
+// Carregados no boot e depois de cada salvamento; em memória, porque todo o código lê PLANOS de forma síncrona.
+const PADRAO = structuredClone(PLANOS);
+export const CAMPOS_EDITAVEIS = ['nome', 'rotulo', 'descricao', 'mensal', 'anual', 'acessosInclusos', 'acessoExtraMensal', 'inclui', 'notas'];
+export function aplicarConfigPlano(chave, cfg) {
+  if (!PLANOS[chave]) return;
+  const base = PADRAO[chave];
+  PLANOS[chave] = { ...base, nome: cfg.nome ?? base.nome, rotulo: cfg.rotulo ?? base.rotulo, descricao: cfg.descricao ?? base.descricao,
+    mensal: cfg.mensal ?? base.mensal, anual: cfg.anual ?? base.anual, acessosInclusos: cfg.acessosInclusos ?? base.acessosInclusos, acessoExtraMensal: cfg.acessoExtraMensal ?? base.acessoExtraMensal,
+    inclui: Array.isArray(cfg.inclui) && cfg.inclui.length ? cfg.inclui : base.inclui, notas: Array.isArray(cfg.notas) ? cfg.notas : NOTAS };
+}
+export const configDeLinha = (r) => ({ nome: r.nome, rotulo: r.rotulo, descricao: r.descricao, mensal: r.mensal, anual: r.anual, acessosInclusos: r.acessos_inclusos, acessoExtraMensal: r.acesso_extra_mensal, inclui: r.inclui, notas: r.notas });
+/** Lê plano_config e aplica em memória. Sem linha, fica o padrão do código. */
+export async function carregarConfigPlanos(c) {
+  const rows = (await c.query('SELECT * FROM plano_config')).rows;
+  for (const r of rows) aplicarConfigPlano(r.chave, configDeLinha(r));
+  return rows.length;
+}
+export const padraoDoPlano = (chave) => ({ ...PADRAO[chave], notas: NOTAS });
+export const notasDoPlano = (chave) => PLANOS[chave]?.notas || NOTAS;
+
 export const CICLOS = { mensal: { meses: 1 }, anual: { meses: 12 } };
 export const FORMAS = { cartao: 'Cartão de crédito', pix: 'Pix', boleto: 'Boleto', isenta: 'Isenta pela rede', manual: 'Confirmação manual' };
 export const NOTAS = [
@@ -37,4 +59,4 @@ export function somarCiclo(data, ciclo) {
   d.setUTCMonth(d.getUTCMonth() + (CICLOS[ciclo]?.meses || 1));
   return d.toISOString().slice(0, 10);
 }
-export const planosPublicos = () => Object.entries(PLANOS).map(([chave, p]) => ({ chave, rotulo: p.rotulo, nome: p.nome, descricao: p.descricao, destaque: !!p.destaque, mensal: p.mensal, anual: p.anual, inclui: p.inclui, naoInclui: p.naoInclui }));
+export const planosPublicos = () => Object.entries(PLANOS).map(([chave, p]) => ({ chave, notas: p.notas || NOTAS, rotulo: p.rotulo, nome: p.nome, descricao: p.descricao, destaque: !!p.destaque, mensal: p.mensal, anual: p.anual, acessosInclusos: p.acessosInclusos, acessoExtraMensal: p.acessoExtraMensal, inclui: p.inclui, naoInclui: p.naoInclui }));

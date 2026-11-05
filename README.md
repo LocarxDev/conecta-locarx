@@ -267,3 +267,12 @@ Um app da Meta (dono: LocarX; App ID `2324380125023153`) para a rede; cada loja 
 ## v14.9.2 — caução na cotação
 - Regra 19 do prompt da Lia: ao passar o total da cotação e no resumo da reserva, a caução vai junto, **somente no cartão de crédito** do condutor (pré-autorização liberada após a devolução, fora do total). Sem valor da API, diz que é confirmado na retirada; cliente sem cartão de crédito → equipe.
 - `calcular_preco`, `consultar_disponibilidade` e o resumo de `criar_reserva` já trazem a linha "💳 Caução: … — somente no cartão de crédito".
+
+## v14.9.3 — tela do plano
+- Texto do ciclo muda com a escolha: mensal ("sem fidelidade, renova a cada 30 dias") ou anual ("12 meses pagos de uma vez, com N% de desconto"); o cartão do plano mostra "economize R$ X (N%)" no anual e, no mensal, quanto fica o anual. O desconto é calculado (anual ÷ 12 mensais).
+- Plano informa **2 acessos por loja** (gestor e atendente) e **acesso adicional R$ 29,90/mês** (`planos.acessosInclusos`/`acessoExtraMensal`). A cobrança do acesso extra ainda é combinada com a administração (limite de atendentes da loja); cobrança automática fica no backlog.
+
+## v14.10 — Plano e valores (administração)
+- Menu **Plano e valores** (administração; matriz só vê): mensal, anual, acessos inclusos por loja, acesso adicional (R$/mês), rótulo, nome, descrição, itens e notas — com prévia ao vivo de como o gestor vê, desconto do anual calculado, histórico de versões (quem/quando/motivo) e "Voltar ao padrão do sistema". `GET/PUT /api/admin/plano`, `POST /api/admin/plano/padrao`; tabelas `plano_config` e `plano_config_versoes`.
+- Vale para **contratações novas**: assinaturas existentes mantêm o valor criado na Pagar.me. Carregado no boot e aplicado em memória ao salvar.
+- A linha "N acessos por loja; acesso adicional por R$ X/mês" e a nota correspondente são montadas a partir dos valores (não precisam ser escritas nos itens).

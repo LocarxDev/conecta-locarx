@@ -7,10 +7,16 @@ const reais = (c) => Number(c || 0).toLocaleString('pt-BR', { style: 'currency',
 const dia = (v) => data(typeof v === 'string' && v.length === 10 ? v + 'T12:00:00' : v);   // datas sem hora: meio-dia para não voltar um dia no fuso
 const STATUS = { pendente: ['Aguardando pagamento', 'alerta'], ativa: ['Ativa', 'ok'], atrasada: ['Pagamento atrasado', 'erro'], suspensa: ['Suspensa por falta de pagamento', 'erro'], cancelada: ['Cancelada', ''], isenta: ['Isenta pela rede', 'ok'] };
 const FATURA = { pendente: ['Em aberto', 'alerta'], paga: ['Paga', 'ok'], vencida: ['Vencida', 'erro'], cancelada: ['Cancelada', ''], falhou: ['Falhou', 'erro'] };
+// v14.9.3 — desconto do anual em relação a 12 mensais (ex.: 2.000 vs 2.640 → 24%)
+const descontoAnual = (p) => (p && p.mensal ? `${Math.round((1 - p.anual / (p.mensal * 12)) * 100)}%` : '—');
+// v14.10 — as notas e os valores vêm da API (tela "Plano e valores" da administração); isto é só o reserva.
 const NOTAS = [
   'Os valores apresentados não incluem eventuais custos de reservas, taxas ou cobranças de integradores e plataformas parceiras, que poderão ser cobrados separadamente.',
   'Estes são os planos iniciais, disponibilizados em fase de testes e aprimoramento. Novas versões, com melhorias, funcionalidades adicionais e evoluções tecnológicas, serão disponibilizadas gradualmente.',
 ];
+// Linha dos acessos montada a partir dos valores do plano (muda junto com a tela da administração).
+export const linhaAcessos = (p) => (p?.acessosInclusos ? `${p.acessosInclusos} acesso${p.acessosInclusos === 1 ? '' : 's'} por loja${p.acessoExtraMensal ? `; acesso adicional por ${reais(p.acessoExtraMensal / 100)}/mês` : ''}` : '');
+export const notaAcessos = (p) => (p?.acessosInclusos ? `O plano inclui ${p.acessosInclusos} acesso${p.acessosInclusos === 1 ? '' : 's'} por loja (gestor e atendentes).${p.acessoExtraMensal ? ` Acessos adicionais custam ${reais(p.acessoExtraMensal / 100)} por mês cada, combinados com a administração.` : ''}` : '');
 
 export async function montar(alvo, ctx) {
   const bloqueando = !!ctx.usuario.assinatura?.pendente;
@@ -69,19 +75,19 @@ export async function montar(alvo, ctx) {
     return html`<div class="planos-grade">${s.planos.map((p) => html`
       <button class="plano-cartao ${estado.plano === p.chave ? 'ativo' : ''}" type="button" data-plano="${p.chave}" ${interativo ? '' : 'disabled'}>
         ${p.destaque && s.planos.length > 1 ? html`<span class="selo marca plano-selo">Mais escolhido</span>` : ''}
-        <div class="plano-cab"><div><div class="plano-rotulo">${p.rotulo}</div><div class="plano-preco num">${estado.ciclo === 'anual' ? reais(p.anual / 100) : reais(p.mensal / 100)}<small>${estado.ciclo === 'anual' ? '/ano' : '/mês'}</small></div>${estado.ciclo === 'anual' ? html`<div class="sub">equivale a ${reais(p.anual / 1200)}/mês</div>` : ''}</div>${interativo ? html`<span class="plano-radio"></span>` : ''}</div>
+        <div class="plano-cab"><div><div class="plano-rotulo">${p.rotulo}</div><div class="plano-preco num">${estado.ciclo === 'anual' ? reais(p.anual / 100) : reais(p.mensal / 100)}<small>${estado.ciclo === 'anual' ? '/ano' : '/mês'}</small></div>${estado.ciclo === 'anual' ? html`<div class="sub">equivale a ${reais(p.anual / 1200)}/mês · <strong class="ok">economize ${reais((p.mensal * 12 - p.anual) / 100)} (${descontoAnual(p)})</strong></div>` : html`<div class="sub">no anual: ${reais(p.anual / 100)}/ano, ${descontoAnual(p)} de desconto</div>`}</div>${interativo ? html`<span class="plano-radio"></span>` : ''}</div>
         <h3>${p.nome}</h3><p class="sub">${p.descricao}</p>
-        <ul class="plano-lista">${p.inclui.map((i) => html`<li>${icone('ok')}${i}</li>`)}${p.naoInclui.map((i) => html`<li class="nao">– ${i}</li>`)}</ul>
+        <ul class="plano-lista">${linhaAcessos(p) ? html`<li>${icone('ok')}${linhaAcessos(p)}</li>` : ''}${p.inclui.map((i) => html`<li>${icone('ok')}${i}</li>`)}${p.naoInclui.map((i) => html`<li class="nao">– ${i}</li>`)}</ul>
       </button>`)}</div>`;
   }
   function planos() {
     return html`<section class="painel"><div class="painel-corpo">
       <div class="acoes-linha entre">
         <div class="ciclo-troca" role="group" aria-label="Ciclo"><button type="button" class="${estado.ciclo === 'mensal' ? 'ativo' : ''}" data-ciclo="mensal">Mensal</button><button type="button" class="${estado.ciclo === 'anual' ? 'ativo' : ''}" data-ciclo="anual">Anual <span class="selo ok">menor preço</span></button></div>
-        <span class="sub">Sem fidelidade no mensal. O acesso libera assim que o pagamento for confirmado.</span>
+        <span class="sub">${estado.ciclo === 'anual' ? `Anual: 12 meses pagos de uma vez, com ${descontoAnual(s.planos.find((x) => x.chave === estado.plano))} de desconto sobre o mensal.` : 'Mensal: sem fidelidade, renova a cada 30 dias.'} O acesso libera assim que o pagamento for confirmado.</span>
       </div>
       ${planosLista(true)}
-      <div class="notas-plano">${NOTAS.map((n) => html`<p>${n}</p>`)}</div>
+      <div class="notas-plano">${[...(s.planos[0]?.notas?.length ? s.planos[0].notas : NOTAS), notaAcessos(s.planos.find((x) => x.chave === estado.plano))].filter(Boolean).map((n) => html`<p>${n}</p>`)}</div>
       <div class="acoes-linha entre"><span></span><button class="btn btn-primario" id="ir-pagamento">Continuar com o ${s.planos.find((x) => x.chave === estado.plano)?.nome || 'plano'} →</button></div>
     </div></section>`;
   }

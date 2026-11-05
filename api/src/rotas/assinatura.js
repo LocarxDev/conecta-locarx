@@ -7,7 +7,7 @@ import { comContexto, comoSistema, contextoDoUsuario } from '../banco/conexao.js
 import { rota, erro, validar, zUuid, exigirPerfil, registrar, lojaPublica } from '../http.js';
 import * as assinatura from '../servicos/assinatura/index.js';
 import { webhookAutorizado, simulado } from '../servicos/assinatura/pagarme.js';
-import { PLANOS, FORMAS, dataISO } from '../servicos/assinatura/planos.js';
+import { PLANOS, FORMAS, dataISO, CAMPOS_EDITAVEIS, aplicarConfigPlano, padraoDoPlano } from '../servicos/assinatura/planos.js';
 
 export const assinaturaLoja = Router();    // /api/loja/assinatura
 export const assinaturaAdmin = Router();   // /api/admin/assinaturas…
@@ -85,6 +85,60 @@ async function visaoGeral(c) {
     })),
   };
 }
+
+// ---------- v14.10 — Plano e valores (administração) ----------
+const zCentavos = z.number().int().min(0).max(100000000);
+const zLinhas = (max) => z.array(z.string().trim().min(1, 'Linha vazia.').max(max, `Cada linha tem no máximo ${max} caracteres.`)).max(20, 'No máximo 20 linhas.');
+const esquemaPlano = z.object({
+  nome: z.string().trim().min(2).max(60), rotulo: z.string().trim().min(2).max(40), descricao: z.string().trim().max(200).default(''),
+  mensal: zCentavos, anual: zCentavos, acessosInclusos: z.number().int().min(0).max(100), acessoExtraMensal: zCentavos,
+  inclui: zLinhas(160).min(1, 'Informe pelo menos um item.'), notas: zLinhas(400).default([]), motivo: z.string().trim().max(200).optional(),
+});
+const planoAtual = (chave) => { const p = PLANOS[chave]; return { chave, ...Object.fromEntries(CAMPOS_EDITAVEIS.map((k) => [k, p[k] ?? (k === 'notas' ? padraoDoPlano(chave).notas : null)])) }; };
+
+assinaturaAdmin.get('/plano', admin, rota(async (req, res) => {
+  const chave = 'basico';
+  const r = await comContexto(contextoDoUsuario(req.usuario), async (c) => ({
+    linha: (await c.query('SELECT * FROM plano_config WHERE chave = $1', [chave])).rows[0] || null,
+    versoes: (await c.query('SELECT id, dados, autor_nome, motivo, criada_em FROM plano_config_versoes WHERE chave = $1 ORDER BY criada_em DESC LIMIT 30', [chave])).rows,
+    assinantes: (await c.query(`SELECT count(*)::int AS n, coalesce(sum(valor_centavos) FILTER (WHERE ciclo = 'mensal'), 0)::int AS mensal, coalesce(sum(valor_centavos) FILTER (WHERE ciclo = 'anual'), 0)::int AS anual FROM assinaturas WHERE plano = $1 AND status IN ('ativa', 'atrasada', 'pendente')`, [chave])).rows[0],
+  }));
+  res.json({ plano: planoAtual(chave), padrao: { chave, ...Object.fromEntries(CAMPOS_EDITAVEIS.map((k) => [k, padraoDoPlano(chave)[k]])) }, personalizado: !!r.linha,
+    atualizadoEm: r.linha?.atualizado_em || null, atualizadoPor: r.linha?.atualizado_por || null,
+    versoes: r.versoes.map((v) => ({ id: v.id, dados: v.dados, autor: v.autor_nome, motivo: v.motivo, em: v.criada_em })),
+    assinantes: r.assinantes, podeEditar: req.usuario.perfil === 'admin' });
+}));
+
+assinaturaAdmin.put('/plano', exigirPerfil('admin'), rota(async (req, res) => {
+  const chave = 'basico';
+  const d = validar(esquemaPlano, req.body);
+  if (d.anual > d.mensal * 12) throw erro(422, 'Confira os valores.', { anual: 'O anual está mais caro do que 12 mensais.' });
+  const dados = { nome: d.nome, rotulo: d.rotulo, descricao: d.descricao, mensal: d.mensal, anual: d.anual, acessosInclusos: d.acessosInclusos, acessoExtraMensal: d.acessoExtraMensal, inclui: d.inclui, notas: d.notas };
+  await comContexto(contextoDoUsuario(req.usuario), async (c) => {
+    await c.query(`INSERT INTO plano_config (chave, nome, rotulo, descricao, mensal, anual, acessos_inclusos, acesso_extra_mensal, inclui, notas, atualizado_em, atualizado_por)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, now(), $11)
+        ON CONFLICT (chave) DO UPDATE SET nome = EXCLUDED.nome, rotulo = EXCLUDED.rotulo, descricao = EXCLUDED.descricao, mensal = EXCLUDED.mensal, anual = EXCLUDED.anual,
+          acessos_inclusos = EXCLUDED.acessos_inclusos, acesso_extra_mensal = EXCLUDED.acesso_extra_mensal, inclui = EXCLUDED.inclui, notas = EXCLUDED.notas, atualizado_em = now(), atualizado_por = EXCLUDED.atualizado_por`,
+      [chave, d.nome, d.rotulo, d.descricao, d.mensal, d.anual, d.acessosInclusos, d.acessoExtraMensal, JSON.stringify(d.inclui), JSON.stringify(d.notas), req.usuario.nome]);
+    await c.query('INSERT INTO plano_config_versoes (chave, dados, autor_id, autor_nome, motivo) VALUES ($1, $2::jsonb, $3, $4, $5)', [chave, JSON.stringify(dados), req.usuario.id, req.usuario.nome, d.motivo || null]);
+    await registrar(c, req, 'alterou_plano', { detalhes: { chave, mensal: d.mensal, anual: d.anual, acessosInclusos: d.acessosInclusos, acessoExtraMensal: d.acessoExtraMensal } });
+  });
+  aplicarConfigPlano(chave, dados);
+  res.json({ ok: true, plano: planoAtual(chave) });
+}));
+
+/** Volta ao padrão do código (apaga a personalização; fica no histórico). */
+assinaturaAdmin.post('/plano/padrao', exigirPerfil('admin'), rota(async (req, res) => {
+  const chave = 'basico';
+  await comContexto(contextoDoUsuario(req.usuario), async (c) => {
+    await c.query('DELETE FROM plano_config WHERE chave = $1', [chave]);
+    const p = padraoDoPlano(chave);
+    await c.query('INSERT INTO plano_config_versoes (chave, dados, autor_id, autor_nome, motivo) VALUES ($1, $2::jsonb, $3, $4, $5)', [chave, JSON.stringify(Object.fromEntries(CAMPOS_EDITAVEIS.map((k) => [k, p[k]]))), req.usuario.id, req.usuario.nome, 'Voltou ao padrão']);
+    await registrar(c, req, 'alterou_plano', { detalhes: { chave, padrao: true } });
+  });
+  aplicarConfigPlano(chave, {});
+  res.json({ ok: true, plano: planoAtual(chave) });
+}));
 
 assinaturaAdmin.get('/assinaturas', admin, rota(async (req, res) => {
   res.json(await comContexto(ctx(req), (c) => visaoGeral(c)));
