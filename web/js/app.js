@@ -11,6 +11,7 @@ import * as lojas from './telas/lojas.js';
 import * as perfil from './telas/perfil.js';
 import * as minhaLoja from './telas/minha-loja.js';
 import * as assinaturaTela from './telas/assinatura.js';
+import * as assinaturasRede from './telas/assinaturas-rede.js';
 import * as whatsapp from './telas/whatsapp.js';
 import * as respostasRapidas from './telas/respostas.js';
 import * as conversas from './telas/conversas.js';
@@ -69,6 +70,7 @@ function menuDoPerfil(perfilUsuario) {
       { rota: 'padroes', rotulo: 'Padrões do CRM', icone: 'ajustes' },
       { rota: 'relatorios-rede', rotulo: 'Relatórios', icone: 'relatorios' },
       { rota: 'campanhas-rede', rotulo: 'Campanhas', icone: 'etiqueta' },
+      { rota: 'assinaturas', rotulo: 'Assinaturas', icone: 'reservas' },
       { rota: 'pagamentos-rede', rotulo: 'Repasses Pix', icone: 'reservas' },
       ...(perfilUsuario === 'admin' ? [{ rota: 'acessos', rotulo: 'Acessos da rede', icone: 'escudo' }] : []),
     ];
@@ -136,6 +138,7 @@ const ROTAS = [
   { padrao: /^relatorios-rede$/, tela: relatoriosTela.rede, perfis: ['admin', 'matriz'] },
   { padrao: /^campanhas$/, tela: campanhasTela.loja, perfis: ['dono'] },
   { padrao: /^campanhas-rede$/, tela: campanhasTela.rede, perfis: ['admin', 'matriz'] },
+  { padrao: /^assinaturas$/, tela: assinaturasRede.montar, perfis: ['admin', 'matriz'] },
   { padrao: /^pagamentos$/, tela: pagamentosTela.loja, perfis: ['dono'] },
   { padrao: /^pagamentos-rede$/, tela: pagamentosTela.rede, perfis: ['admin', 'matriz'] },
   { padrao: /^acessos$/, tela: acessosTela.montar, perfis: ['admin'] },

@@ -4,6 +4,7 @@ import { comoSistema } from '../../banco/conexao.js';
 import { erro } from '../../http.js';
 import { config } from '../../config.js';
 import { normalizarModulos } from '../modulos.js';
+import { emailComprovanteAssinatura, emailFaturaAssinatura } from '../email.js';
 import * as pagarme from './pagarme.js';
 import { ErroPagarme } from './pagarme.js';
 import { PLANOS, FORMAS, valorDoPlano, modulosComPlano, referenciaDe, somarCiclo, planosPublicos, dataISO } from './planos.js';
@@ -99,18 +100,36 @@ export async function contratar(c, { loja, usuario, plano, ciclo = 'mensal', for
     [a.id, loja.id, ref, valor, forma, ativaJa ? 'paga' : 'pendente', pedido?.id || null, pedido?.cobrancaId || null, sub?.id || null,
       pedido?.pix?.codigo || null, pedido?.pix?.qrUrl || null, pedido?.pix?.expiraEm || null, pedido?.boleto?.url || sub?.boleto?.url || null, pedido?.boleto?.linha || sub?.boleto?.linha || null,
       forma === 'pix' ? somarDias(inicio, DIAS_ANTES_DO_VENCIMENTO) : forma === 'boleto' ? somarDias(inicio, 3) : inicio, ativaJa ? new Date() : null, JSON.stringify({ origem: 'contratacao', simulado: pagarme.simulado() })])).rows[0];
-  if (ativaJa) await aplicarPlano(c, loja.id, plano);
+  if (ativaJa) { await aplicarPlano(c, loja.id, plano, { primeiraVez: !atual?.inicio_em }); await avisarPagamento(c, a, f); }
+  else await avisarFatura(c, a, f);
   return { assinatura: a, fatura: f };
 }
 
 const somarDias = (dataISO, n) => { const d = new Date(dataISO + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 
-/** Liga/desliga os módulos conforme o plano (pix e mcp ficam como estão). */
-export async function aplicarPlano(c, lojaId, plano) {
+/** Liga os módulos do plano na loja. v14.8.6: só na PRIMEIRA ativação — depois, o que a administração ligar ou desligar
+ *  em Lojas → Módulos vale (o plano é o teto do que a loja pode ter; a administração pode deixar menos). pix e mcp nunca mudam aqui. */
+export async function aplicarPlano(c, lojaId, plano, { primeiraVez = true } = {}) {
+  if (!primeiraVez) return null;
   const l = (await c.query('SELECT modulos FROM lojas WHERE id = $1', [lojaId])).rows[0];
   const novos = normalizarModulos(modulosComPlano(normalizarModulos(l?.modulos), plano));
   await c.query('UPDATE lojas SET modulos = $2 WHERE id = $1', [lojaId, JSON.stringify(novos)]);
   return novos;
+}
+
+// e-mails da assinatura (Resend; se não estiver configurado, só avisa no log). Nunca derrubam a operação.
+async function dadosParaEmail(c, a) {
+  const l = (await c.query('SELECT nome, financeiro_email, responsavel_email FROM lojas WHERE id = $1', [a.loja_id])).rows[0];
+  const para = l?.financeiro_email || l?.responsavel_email || null;
+  return para ? { para, loja: l.nome, plano: PLANOS[a.plano]?.nome || a.plano, link: `${config.appUrl}/#/assinatura` } : null;
+}
+async function avisarPagamento(c, a, f) {
+  try { const d = await dadosParaEmail(c, a); if (d) await emailComprovanteAssinatura({ ...d, ciclo: a.ciclo, forma: FORMAS[f.forma] || f.forma, valorCentavos: f.valor_centavos, referencia: f.referencia, pagoEm: f.paga_em || new Date(), proximaCobranca: a.proxima_cobranca }); }
+  catch (err) { console.warn('[assinatura] e-mail do comprovante falhou:', err.message); }
+}
+async function avisarFatura(c, a, f) {
+  try { const d = await dadosParaEmail(c, a); if (d && (f.forma === 'pix' || f.forma === 'boleto') && f.status === 'pendente') await emailFaturaAssinatura({ ...d, forma: f.forma, valorCentavos: f.valor_centavos, referencia: f.referencia, venceEm: f.vence_em, pixCodigo: f.pix_codigo, boletoLinha: f.boleto_linha, boletoUrl: f.boleto_url }); }
+  catch (err) { console.warn('[assinatura] e-mail da fatura falhou:', err.message); }
 }
 
 /** Fatura paga (webhook, cartão na hora, ou confirmação manual da administração). */
@@ -121,7 +140,8 @@ export async function confirmarFatura(c, fatura, { por = null, detalhes = null }
   const base = f.vence_em ? dataISO(f.vence_em) : hoje();
   const proxima = somarCiclo(base < hoje() ? hoje() : base, a.ciclo);
   await c.query(`UPDATE assinaturas SET status = 'ativa', inicio_em = coalesce(inicio_em, now()), proxima_cobranca = $2, atualizada_em = now() WHERE id = $1`, [a.id, proxima]);
-  await aplicarPlano(c, a.loja_id, a.plano);
+  await aplicarPlano(c, a.loja_id, a.plano, { primeiraVez: !a.inicio_em });
+  await avisarPagamento(c, { ...a, proxima_cobranca: proxima }, f);
   return f;
 }
 
@@ -141,7 +161,7 @@ export async function isentar(c, lojaId, { isenta, plano = 'basico', observacao 
        VALUES ($1, $2, 'mensal', 'isenta', 'isenta', 0, now(), $3, $4)
        ON CONFLICT (loja_id) DO UPDATE SET plano = EXCLUDED.plano, forma = 'isenta', status = 'isenta', valor_centavos = 0, observacao = EXCLUDED.observacao, cancelada_em = NULL, atualizada_em = now()
        RETURNING *`, [lojaId, plano, observacao, por])).rows[0];
-    await aplicarPlano(c, lojaId, plano);
+    await aplicarPlano(c, lojaId, plano, { primeiraVez: true });
     return a;
   }
   return (await c.query(`UPDATE assinaturas SET status = 'cancelada', cancelada_em = now(), observacao = $2, atualizada_em = now() WHERE loja_id = $1 AND status = 'isenta' RETURNING *`, [lojaId, observacao])).rows[0] || null;
@@ -154,8 +174,10 @@ export async function novoPix(c, lojaId) {
   const f = (await c.query(`SELECT * FROM faturas_assinatura WHERE assinatura_id = $1 AND status IN ('pendente', 'vencida', 'falhou') ORDER BY vence_em NULLS LAST, criada_em LIMIT 1`, [a.id])).rows[0];
   if (!f) throw erro(404, 'Não há fatura em aberto.');
   const pedido = await pagarme.criarPedido({ clienteId: a.pagarme_cliente_id, forma: 'pix', valorCentavos: f.valor_centavos, descricao: `Conecta LocarX — ${PLANOS[a.plano].nome} (${f.referencia})`, codigo: `conecta-${a.loja_id.slice(0, 8)}-${f.referencia}-${Date.now().toString(36)}`, validadeSegundos: PIX_VALIDADE_SEGUNDOS, metadata: { loja_id: a.loja_id, referencia: f.referencia } });
-  return (await c.query(`UPDATE faturas_assinatura SET forma = 'pix', status = 'pendente', pagarme_pedido_id = $2, pagarme_cobranca_id = $3, pix_codigo = $4, pix_qr_url = $5, pix_expira_em = $6, boleto_url = NULL, boleto_linha = NULL WHERE id = $1 RETURNING *`,
+  const nova = (await c.query(`UPDATE faturas_assinatura SET forma = 'pix', status = 'pendente', pagarme_pedido_id = $2, pagarme_cobranca_id = $3, pix_codigo = $4, pix_qr_url = $5, pix_expira_em = $6, boleto_url = NULL, boleto_linha = NULL WHERE id = $1 RETURNING *`,
     [f.id, pedido.id, pedido.cobrancaId, pedido.pix?.codigo || null, pedido.pix?.qrUrl || null, pedido.pix?.expiraEm || null])).rows[0];
+  await avisarFatura(c, a, nova);
+  return nova;
 }
 
 // ---------- webhook da Pagar.me ----------
@@ -213,6 +235,7 @@ export async function rodarCiclos() {
         await c.query(`INSERT INTO faturas_assinatura (assinatura_id, loja_id, referencia, valor_centavos, forma, status, pagarme_pedido_id, pagarme_cobranca_id, pix_codigo, pix_qr_url, pix_expira_em, vence_em, detalhes) VALUES ($1, $2, $3, $4, 'pix', 'pendente', $5, $6, $7, $8, $9, $10, $11)`,
           [a.id, a.loja_id, ref, a.valor_centavos, pedido.id, pedido.cobrancaId, pedido.pix?.codigo || null, pedido.pix?.qrUrl || null, pedido.pix?.expiraEm || null, a.proxima_cobranca, JSON.stringify({ origem: 'ciclo' })]);
         geradas++;
+        await avisarFatura(c, a, { forma: 'pix', status: 'pendente', valor_centavos: a.valor_centavos, referencia: ref, vence_em: a.proxima_cobranca, pix_codigo: pedido.pix?.codigo || null });
       } catch (err) { console.warn('[assinatura] fatura Pix não gerada:', a.loja_id, err.message); }
     }
     // atraso: fatura pendente vencida há mais de 5 dias → assinatura atrasada (fatura marcada vencida)

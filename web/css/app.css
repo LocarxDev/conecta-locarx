@@ -181,12 +181,14 @@ img { max-width: 100%; }
 .demo-botoes .btn { min-height: 36px; font-size: 13px; padding: 0 8px; }
 
 /* ---------- estrutura logada ---------- */
-.sistema { display: grid; grid-template-columns: var(--menu-largura) minmax(0, 1fr); min-height: 100%; }
+.sistema { display: grid; grid-template-columns: var(--menu-largura) minmax(0, 1fr); min-height: 100%;
+  /* v14.9.1 — a coluna do menu é pintada inteira, para não sobrar faixa clara abaixo do menu em telas altas ou com zoom */
+  background: linear-gradient(90deg, var(--menu-fundo) 0 var(--menu-largura), transparent var(--menu-largura)); }
 .menu {
   background: var(--menu-fundo); color: var(--menu-texto);
   display: flex; flex-direction: column; gap: 4px;
   padding: 20px 12px; padding-left: max(12px, env(safe-area-inset-left, 0px));
-  position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  position: sticky; top: 0; height: 100vh; height: 100dvh; overflow-y: auto;
 }
 .menu .logo-menu { display: flex; align-items: center; gap: 10px; padding: 4px 10px 20px; }
 .menu .logo-menu img { width: 128px; }
@@ -351,7 +353,7 @@ table.tabela { width: 100%; border-collapse: collapse; font-size: 14px; }
   .acesso-caixa .logo-tema-escuro { display: var(--mostrar-logo-escuro); }
   .acesso-form { place-items: start center; padding-top: 56px; }
 
-  .sistema { grid-template-columns: minmax(0, 1fr); }
+  .sistema { grid-template-columns: minmax(0, 1fr); background: none; }
   .menu {
     position: fixed; inset: 0 auto 0 0; z-index: 40; width: min(84vw, 300px); height: 100%;
     padding-top: max(20px, env(safe-area-inset-top, 0px)); padding-bottom: max(20px, env(safe-area-inset-bottom, 0px));
@@ -861,6 +863,7 @@ select option, select optgroup { background: var(--superficie); color: var(--tex
 .barra-salvar-fixa.pendente .estado-salvar { color: var(--alerta); font-weight: 600; }
 /* v14.5: termo de adesão / privacidade no primeiro acesso */
 .sistema.so-termos { grid-template-columns: minmax(0, 1fr); }
+.sistema.so-termos { background: none; }
 .sistema.so-termos .menu, .sistema.so-termos .menu-sombra, .sistema.so-termos .abrir-menu, .sistema.so-termos .disponibilidade { display: none; }
 .termo-pagina { max-width: 860px; margin: 0 auto; }
 .termo-caixa { display: grid; gap: 14px; padding-bottom: 16px; }
@@ -975,3 +978,23 @@ select option, select optgroup { background: var(--superficie); color: var(--tex
 .termo-texto.formatado table { border-collapse: collapse; width: 100%; margin: 8px 0 12px; font-size: 13.5px; }
 .termo-texto.formatado th, .termo-texto.formatado td { border: 1px solid var(--borda); padding: 6px 8px; vertical-align: top; text-align: left; }
 .termo-texto.formatado blockquote { margin: 0 0 10px; padding-left: 12px; border-left: 3px solid var(--borda-forte); color: var(--texto-2); }
+
+/* ---------- v14.8.7: tela Assinaturas (rede) ---------- */
+.resumo.resumo-6 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (min-width: 1200px) { .resumo.resumo-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .resumo.resumo-6 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.resumo-item .valor.ok { color: var(--ok); } .resumo-item .valor.erro { color: var(--erro); }
+tr.linha-alerta td { background: color-mix(in srgb, var(--erro-fundo) 40%, transparent); }
+
+/* v14.9 — funil: período, números no topo, parados */
+.campo-periodo select { min-height: 40px; padding: 0 10px; border-radius: var(--raio); border: 1px solid var(--borda-forte); background: var(--superficie); color: var(--texto); font: 500 14px var(--fonte-texto); }
+.intervalo-funil[hidden] { display: none; }
+.resumo-funil { margin-bottom: 16px; }
+.resumo-botao { text-align: left; cursor: pointer; font: inherit; color: inherit; }
+.resumo-botao:hover { border-color: var(--borda-forte); }
+.resumo-botao.atencao { border-color: var(--alerta); }
+.resumo-botao.atencao .detalhe strong { color: var(--alerta); }
+.card-funil.parado { border-left: 3px solid var(--alerta); }
+.card-parado { display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap; }
+.card-parado .selo { display: inline-flex; align-items: center; gap: 4px; }
+.btn-mini { min-height: 28px; font-size: 12px; padding: 0 6px; }

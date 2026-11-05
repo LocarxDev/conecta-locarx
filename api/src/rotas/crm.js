@@ -138,8 +138,31 @@ function oportunidadePublica(o) {
   };
 }
 
+// v14.9 — período do funil: os abertos aparecem sempre; fechados/perdidos só dentro do período.
+// periodo = mes (padrão) | mes-anterior | 30d | intervalo (de/ate, AAAA-MM-DD). Devolve [inicio, fim) e o período anterior do mesmo tamanho.
+const zDia = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const esquemaPeriodo = { periodo: z.enum(['mes', 'mes-anterior', '30d', 'intervalo']).optional(), de: zDia.optional(), ate: zDia.optional() };
+export function periodoFunil(q, agora = new Date()) {
+  const hoje = new Date(agora.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));   // dia civil em Brasília (sem horário de verão)
+  const d = (y, m, dia) => new Date(Date.UTC(y, m, dia, 3, 0, 0));   // 00:00 em Brasília = 03:00 UTC; Date.UTC aceita mês/dia fora da faixa
+  const y = hoje.getFullYear(), m = hoje.getMonth();
+  let inicio, fim, nome;
+  if (q.periodo === 'intervalo' && q.de && q.ate) {
+    const [a, b] = [q.de, q.ate].map((s) => s.split('-').map(Number));
+    inicio = d(a[0], a[1] - 1, a[2]); fim = d(b[0], b[1] - 1, b[2] + 1); nome = `${q.de} a ${q.ate}`;
+    if (fim <= inicio) throw erro(422, 'O fim do período precisa ser depois do início.', { ate: 'Depois do início.' });
+    if (fim - inicio > 400 * 86400000) throw erro(422, 'Período de no máximo 400 dias.', { ate: 'No máximo 400 dias.' });
+  } else if (q.periodo === 'mes-anterior') { inicio = d(y, m - 1, 1); fim = d(y, m, 1); nome = 'mês anterior'; }
+  else if (q.periodo === '30d') { fim = d(y, m, hoje.getDate() + 1); inicio = new Date(fim.getTime() - 30 * 86400000); nome = 'últimos 30 dias'; }
+  else { inicio = d(y, m, 1); fim = d(y, m + 1, 1); nome = 'este mês'; }
+  const tam = fim - inicio;
+  return { inicio, fim, nome, anterior: { inicio: new Date(inicio.getTime() - tam), fim: inicio } };
+}
+const DIAS_PARADO = 3;   // card aberto sem mensagem nem movimento há 3+ dias = "parado"
+
 crm.get('/funil', loja, rota(async (req, res) => {
-  const q = validar(z.object({ funil: zUuid.optional() }), req.query);
+  const q = validar(z.object({ funil: zUuid.optional(), ...esquemaPeriodo }), req.query);
+  const p = periodoFunil(q);
   const r = await comContexto(ctx(req), async (c) => {
     const principal = await garantirFunil(c, req.usuario.loja_id);
     const funilId = q.funil || principal;
@@ -147,14 +170,58 @@ crm.get('/funil', loja, rota(async (req, res) => {
     if (!f) throw erro(404, 'Funil não encontrado.');
     const rows = (await c.query(
       `SELECT o.*, k.nome, k.telefone, u.nome AS responsavel_nome, cv.id AS conversa_id_atual,
+              greatest(o.atualizada_em, cv.ultima_mensagem_em) AS movimento_em,
               (SELECT coalesce(json_agg(json_build_object('id', t.id, 'nome', t.nome, 'cor', t.cor) ORDER BY lower(t.nome)), '[]')
                  FROM contato_etiquetas ce JOIN etiquetas t ON t.id = ce.etiqueta_id WHERE ce.contato_id = k.id) AS etiquetas
          FROM oportunidades o JOIN contatos k ON k.id = o.contato_id LEFT JOIN usuarios u ON u.id = o.responsavel_id LEFT JOIN conversas cv ON cv.contato_id = k.id
-        WHERE o.loja_id = $1 AND o.funil_id = $2 AND (o.fechada_em IS NULL OR o.fechada_em > now() - interval '30 days')
-        ORDER BY o.atualizada_em DESC LIMIT 800`, [req.usuario.loja_id, f.id])).rows;
+        WHERE o.loja_id = $1 AND o.funil_id = $2 AND (o.fechada_em IS NULL OR (o.fechada_em >= $3 AND o.fechada_em < $4))
+        ORDER BY o.atualizada_em DESC LIMIT 800`, [req.usuario.loja_id, f.id, p.inicio, p.fim])).rows;
     return { funilId: f.id, rows };
   });
-  res.json({ funilId: r.funilId, oportunidades: r.rows.map(oportunidadePublica) });
+  const agora = Date.now();
+  res.json({ funilId: r.funilId, periodo: { nome: p.nome, inicio: p.inicio, fim: p.fim }, diasParado: DIAS_PARADO,
+    oportunidades: r.rows.map((o) => {
+      const pub = oportunidadePublica(o);
+      const dias = o.movimento_em ? Math.floor((agora - new Date(o.movimento_em).getTime()) / 86400000) : null;
+      pub.movimentoEm = o.movimento_em; pub.diasParado = !o.fechada_em && dias != null && dias >= DIAS_PARADO ? dias : 0;
+      return pub;
+    }) });
+}));
+
+// v14.9 — números do funil no período: novos, fechados (qtd e R$), perdidos por motivo, conversão, tempo médio, parados; e o período anterior para comparar.
+crm.get('/funil/resumo', loja, rota(async (req, res) => {
+  const q = validar(z.object({ funil: zUuid.optional(), ...esquemaPeriodo }), req.query);
+  const p = periodoFunil(q);
+  const r = await comContexto(ctx(req), async (c) => {
+    const principal = await garantirFunil(c, req.usuario.loja_id);
+    const funilId = q.funil || principal;
+    const f = (await c.query('SELECT id FROM funis WHERE id = $1 AND loja_id = $2 AND NOT arquivado', [funilId, req.usuario.loja_id])).rows[0];
+    if (!f) throw erro(404, 'Funil não encontrado.');
+    const numeros = async (ini, fim) => {
+      const n = (await c.query(
+        `SELECT count(*) FILTER (WHERE o.criada_em >= $3 AND o.criada_em < $4)::int AS novos,
+                count(*) FILTER (WHERE o.resultado = 'ganho' AND o.fechada_em >= $3 AND o.fechada_em < $4)::int AS ganhos,
+                coalesce(sum(o.valor_previsto) FILTER (WHERE o.resultado = 'ganho' AND o.fechada_em >= $3 AND o.fechada_em < $4), 0)::numeric AS valor_ganho,
+                count(*) FILTER (WHERE o.resultado = 'perdido' AND o.fechada_em >= $3 AND o.fechada_em < $4)::int AS perdidos,
+                avg(extract(epoch FROM (o.fechada_em - o.criada_em))) FILTER (WHERE o.resultado = 'ganho' AND o.fechada_em >= $3 AND o.fechada_em < $4) AS segundos_ate_fechar
+           FROM oportunidades o WHERE o.loja_id = $1 AND o.funil_id = $2`, [req.usuario.loja_id, f.id, ini, fim])).rows[0];
+      const decididos = n.ganhos + n.perdidos;
+      return { novos: n.novos, ganhos: n.ganhos, valorGanho: Number(n.valor_ganho), perdidos: n.perdidos,
+        conversao: decididos ? Math.round((n.ganhos / decididos) * 100) : null,
+        diasAteFechar: n.segundos_ate_fechar != null ? Math.round(Number(n.segundos_ate_fechar) / 86400 * 10) / 10 : null };
+    };
+    const [atual, anterior] = [await numeros(p.inicio, p.fim), await numeros(p.anterior.inicio, p.anterior.fim)];
+    const motivos = (await c.query(
+      `SELECT coalesce(nullif(trim(motivo_perda), ''), 'Sem motivo') AS motivo, count(*)::int AS qtd FROM oportunidades
+        WHERE loja_id = $1 AND funil_id = $2 AND resultado = 'perdido' AND fechada_em >= $3 AND fechada_em < $4 GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 6`, [req.usuario.loja_id, f.id, p.inicio, p.fim])).rows;
+    const ab = (await c.query(
+      `SELECT count(*)::int AS abertos, coalesce(sum(o.valor_previsto), 0)::numeric AS valor_aberto,
+              count(*) FILTER (WHERE greatest(o.atualizada_em, cv.ultima_mensagem_em) < now() - make_interval(days => $3))::int AS parados
+         FROM oportunidades o LEFT JOIN conversas cv ON cv.contato_id = o.contato_id
+        WHERE o.loja_id = $1 AND o.funil_id = $2 AND o.fechada_em IS NULL`, [req.usuario.loja_id, f.id, DIAS_PARADO])).rows[0];
+    return { funilId: f.id, atual, anterior, motivos, abertos: ab.abertos, valorAberto: Number(ab.valor_aberto), parados: ab.parados };
+  });
+  res.json({ ...r, periodo: { nome: p.nome, inicio: p.inicio, fim: p.fim }, diasParado: DIAS_PARADO });
 }));
 
 crm.post('/oportunidades', loja, rota(async (req, res) => {

@@ -248,3 +248,18 @@ Um app da Meta (dono: LocarX; App ID `2324380125023153`) para a rede; cada loja 
 - Padrões do CRM → Termos de uso → Editar → **Importar de um Word (.docx)**: o servidor converte (mammoth) mantendo títulos, negrito/itálico, listas, parágrafos e tabelas; imagens, links e estilos são descartados (`servicos/termos-docx.js`, `limparHtml`). A prévia formatada aparece no editor e o termo é publicado com `formato = 'html'`; a tela do gestor/atendente mostra o termo formatado e o aceite continua com o hash do conteúdo.
 - "Voltar para texto simples" mantém o modo antigo (textarea). `POST /api/admin/termos/converter-docx` (base64, até 8 MB). Dependência nova: `mammoth`.
 - Tela de assinatura: o erro de tokenização do cartão agora mostra o detalhe devolvido pela Pagar.me; nome do titular vai sem acentos/números; ano com 2 dígitos.
+
+## v14.8.6 — e-mails da assinatura e módulos
+- E-mails (Resend, mesmo remetente dos convites) para o e-mail de cobrança da loja: **comprovante** quando o pagamento é confirmado (cartão na hora, Pix/boleto pelo webhook ou confirmação manual) e **fatura** quando um Pix/boleto é gerado (contratação, ciclo mensal, "Gerar Pix novo"). Sem `RESEND_API_KEY`, só avisa no log.
+- O plano liga os módulos da loja **só na primeira ativação** (ou na isenção). Depois disso vale o que a administração deixar em Lojas → Módulos: o plano é o teto, não o piso.
+
+## v14.8.7 — Assinaturas (rede)
+- Menu **Assinaturas** (admin/matriz): lojas pagantes, ativas, atrasadas/suspensas, aguardando pagamento, recebido no mês (e no anterior), previsão mensal e faturas em aberto; lista por loja com filtros, busca e **Exportar CSV** (`GET /api/admin/assinaturas`, `.csv`). Isentar/confirmar/cancelar continuam no detalhe da loja.
+
+## v14.9 — funil de vendas: período, números e parados
+- **Período** no topo do funil (este mês · mês anterior · últimos 30 dias · outro período): vale para concluídos e perdidos; quem está em andamento aparece sempre. `GET /api/crm/funil?periodo=mes|mes-anterior|30d|intervalo&de=&ate=` (dias civis de Brasília; a preferência fica no navegador).
+- **Números do período** com comparação com o período anterior: novos clientes, fechados (qtd e R$), conversão (fechados ÷ decididos), perdidos com os 3 maiores motivos, tempo médio até fechar, em andamento. `GET /api/crm/funil/resumo` (soma dos funis visíveis na tela).
+- **Parados**: card em andamento sem mensagem na conversa nem movimento no funil há 3+ dias ganha a faixa laranja e o selo "Parado há N dias", com atalho **Mandar mensagem** (abre a conversa; `/` para as respostas rápidas). Botão **Parados** (ou o cartão "Em andamento") filtra só eles.
+
+## v14.9.1 — menu lateral
+- A coluna do menu é pintada inteira (e o menu usa `100dvh`): não sobra faixa clara abaixo do último item em telas altas, com zoom ou no celular.

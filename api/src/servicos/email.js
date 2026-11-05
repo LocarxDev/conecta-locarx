@@ -63,3 +63,26 @@ export function emailAviso({ para, nome, assunto, texto }) {
     texto: `${assunto}\n\n${texto}\n\n${config.appUrl}/#/whatsapp-rede`,
   });
 }
+
+// v14.8.6 — assinatura do Conecta: comprovante ao confirmar o pagamento e aviso de fatura (Pix/boleto) ao gerar
+const brl = (c) => (Number(c || 0) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+const dataBR = (d) => (d ? new Date(typeof d === 'string' && d.length === 10 ? d + 'T12:00:00Z' : d).toLocaleDateString('pt-BR', { timeZone: 'America/Bahia' }) : '—');
+
+export function emailComprovanteAssinatura({ para, loja, plano, ciclo, forma, valorCentavos, referencia, pagoEm, proximaCobranca, link }) {
+  const texto = `Recebemos o pagamento da assinatura do Conecta LocarX da ${loja}. Plano ${plano} (${ciclo}), ${brl(valorCentavos)}, ${forma}, referência ${referencia}, pago em ${dataBR(pagoEm)}.${proximaCobranca ? ` Próxima cobrança: ${dataBR(proximaCobranca)}.` : ''}`;
+  return enviar({
+    para, assunto: `Comprovante — assinatura do Conecta LocarX (${referencia})`,
+    html: modelo({ titulo: 'Pagamento confirmado', texto, botao: 'Ver a assinatura no Conecta', link, rodape: 'Este é o comprovante do Conecta. A cobrança foi processada pela Pagar.me em nome da Auniti Tecnologia. Guarde este e-mail; a nota fiscal, quando emitida, é enviada separadamente.' }),
+    texto: `${texto}\n\nVer no Conecta: ${link}`,
+  });
+}
+
+export function emailFaturaAssinatura({ para, loja, plano, forma, valorCentavos, referencia, venceEm, pixCodigo, boletoLinha, boletoUrl, link }) {
+  const texto = `A fatura ${referencia} da assinatura do Conecta LocarX da ${loja} está disponível: ${brl(valorCentavos)} (${plano}), vencimento ${dataBR(venceEm)}. ${forma === 'pix' ? 'Pague com o código Pix abaixo ou abra o Conecta para ler o QR Code.' : 'Pague o boleto abaixo.'}`;
+  const detalhe = forma === 'pix' && pixCodigo ? `Código Pix (copia e cola):\n${pixCodigo}` : boletoLinha ? `Linha digitável:\n${boletoLinha}${boletoUrl ? `\nBoleto: ${boletoUrl}` : ''}` : '';
+  return enviar({
+    para, assunto: `Fatura ${referencia} — assinatura do Conecta LocarX`,
+    html: modelo({ titulo: `Fatura ${referencia} em aberto`, texto: `${texto}${detalhe ? ' ' + detalhe.replace(/\n/g, ' ') : ''}`, botao: forma === 'pix' ? 'Pagar pelo Conecta' : 'Ver a fatura no Conecta', link, rodape: 'Depois do pagamento a confirmação é automática. Se a loja já pagou, desconsidere.' }),
+    texto: `${texto}\n\n${detalhe}\n\nVer no Conecta: ${link}`,
+  });
+}

@@ -60,6 +60,7 @@ const real = {
   cancelarAssinatura: (motivo) => chamar('POST', '/loja/assinatura/cancelar', { motivo }),
   novoPixAssinatura: () => chamar('POST', '/loja/assinatura/novo-pix'),
   assinaturasAdmin: () => chamar('GET', '/admin/assinaturas'),
+  urlAssinaturasCsv: () => '/api/admin/assinaturas.csv',
   assinaturaDaLoja: (id) => chamar('GET', `/admin/lojas/${encodeURIComponent(id)}/assinatura`),
   isentarAssinatura: (id, d) => chamar('POST', `/admin/lojas/${encodeURIComponent(id)}/assinatura/isentar`, d),
   cancelarAssinaturaAdmin: (id, motivo) => chamar('POST', `/admin/lojas/${encodeURIComponent(id)}/assinatura/cancelar`, { motivo }),
@@ -197,7 +198,8 @@ const real = {
   novoContato: (d) => chamar('POST', '/crm/contatos', d),
   salvarContato: (id, d) => chamar('PATCH', `/crm/contatos/${encodeURIComponent(id)}`, d),
   urlExportarContatos: () => '/api' + comLoja('/crm/contatos.csv'),
-  funil: (funilId) => chamar('GET', '/crm/funil' + (funilId ? '?funil=' + encodeURIComponent(funilId) : '')),
+  funil: (funilId, periodo = {}) => chamar('GET', '/crm/funil?' + new URLSearchParams({ ...(funilId ? { funil: funilId } : {}), ...periodo })),
+  funilResumo: (funilId, periodo = {}) => chamar('GET', '/crm/funil/resumo?' + new URLSearchParams({ ...(funilId ? { funil: funilId } : {}), ...periodo })),   // v14.9
   novaOportunidade: (d) => chamar('POST', '/crm/oportunidades', d),
   moverOportunidade: (id, d) => chamar('PATCH', `/crm/oportunidades/${encodeURIComponent(id)}`, d),
   tarefas: (q) => chamar('GET', '/crm/tarefas?' + new URLSearchParams(Object.entries(q || {}).filter(([, v]) => v))),
