@@ -60,6 +60,15 @@ const real = {
   cancelarAssinatura: (motivo) => chamar('POST', '/loja/assinatura/cancelar', { motivo }),
   novoPixAssinatura: () => chamar('POST', '/loja/assinatura/novo-pix'),
   assinaturasAdmin: () => chamar('GET', '/admin/assinaturas'),
+  // v14.12 — adesão pública e tela Adesões
+  adesaoPublica: () => chamar('GET', '/publico/adesao'),
+  criarAdesao: (dados) => chamar('POST', '/publico/adesao', dados),
+  situacaoAdesao: (id, chave) => chamar('GET', `/publico/adesao/${encodeURIComponent(id)}?chave=${encodeURIComponent(chave)}`),
+  adesoesAdmin: () => chamar('GET', '/admin/adesoes'),
+  adesaoAdmin: (id) => chamar('GET', `/admin/adesoes/${id}`),
+  marcarAdesaoPaga: (id, dados) => chamar('POST', `/admin/adesoes/${id}/marcar-paga`, dados || {}),
+  vincularAdesao: (id, lojaId) => chamar('POST', `/admin/adesoes/${id}/vincular`, { lojaId }),
+  cancelarAdesao: (id, motivo) => chamar('POST', `/admin/adesoes/${id}/cancelar`, { motivo }),
   planoAdmin: () => chamar('GET', '/admin/plano'),                                 // v14.10 — Plano e valores
   salvarPlanoAdmin: (dados) => chamar('PUT', '/admin/plano', dados),
   planoPadraoAdmin: () => chamar('POST', '/admin/plano/padrao'),

@@ -51,7 +51,7 @@ export function login(alvo, ctx) {
         </div>
       </div>
       <button class="btn btn-primario btn-bloco" type="submit">Entrar</button>
-      <div class="acesso-links"><a href="#/esqueci-senha">Esqueci minha senha</a></div>
+      <div class="acesso-links"><a href="#/esqueci-senha">Esqueci minha senha</a><a href="#/adesao">Quero aderir ao Conecta</a></div>
     </form>
     ${USAR_EXEMPLO ? html`
       <div class="demo-caixa">

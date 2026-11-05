@@ -1,6 +1,7 @@
 // v14.8 — Assinatura do Conecta pela loja (Pagar.me): plano → pagamento → pronto. Também mostra a situação, faturas e cancelamento.
 // Cartão: os dados vão direto para a Pagar.me (tokenização com a chave pública); o Conecta só recebe o token.
 import { api } from '../api.js';
+import { tokenizarCartao } from '../pagarme.js';
 import { html, render, $, $$, icone, avisar, comBotao, confirmar, data } from '../util.js';
 
 const reais = (c) => Number(c || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -159,12 +160,13 @@ export async function montar(alvo, ctx) {
   function situacao(a) {
     return html`<section class="painel"><div class="painel-corpo">
       <dl class="dados-grade">
-        <div class="dado"><dt>Plano</dt><dd>${a.planoNome}${a.status === 'isenta' ? html`<div class="sub">cortesia da rede${a.observacao ? ` · ${a.observacao}` : ''}</div>` : ''}</dd></div>
+        <div class="dado"><dt>Plano</dt><dd>${a.planoNome}${a.status === 'isenta' ? html`<div class="sub">${a.isentaAte ? 'período liberado pela rede' : 'cortesia da rede'}${a.observacao ? ` · ${a.observacao}` : ''}</div>` : ''}</dd></div>
         <div class="dado"><dt>Valor</dt><dd class="num">${a.valor ? `${reais(a.valor)} / ${a.ciclo === 'anual' ? 'ano' : 'mês'}` : '—'}</dd></div>
         <div class="dado"><dt>Pagamento</dt><dd>${a.formaNome}${a.cartao ? html`<div class="sub">${a.cartao.bandeira || 'cartão'} final ${a.cartao.final}</div>` : ''}</dd></div>
-        <div class="dado"><dt>Próxima cobrança</dt><dd>${a.proximaCobranca ? dia(a.proximaCobranca) : '—'}</dd></div>
+        <div class="dado"><dt>${a.status === 'isenta' && a.isentaAte ? 'Liberada até' : 'Próxima cobrança'}</dt><dd>${a.status === 'isenta' && a.isentaAte ? dia(a.isentaAte) : (a.proximaCobranca ? dia(a.proximaCobranca) : '—')}</dd></div>
         <div class="dado"><dt>Desde</dt><dd>${a.inicioEm ? dia(a.inicioEm) : '—'}</dd></div>
       </dl>
+      ${a.status === 'isenta' && a.isentaAte ? html`<div class="alerta-caixa">${icone('info')}<span>Sua loja está liberada até <strong>${dia(a.isentaAte)}</strong>${a.entrada?.valor ? ` (entrada de ${reais(a.entrada.valor)} já paga)` : ''}. Depois dessa data, escolha aqui a forma de pagamento (cartão, Pix ou boleto) para continuar.</span></div>` : ''}
       ${s.faturaAberta ? html`<div class="alerta-caixa ${a.status === 'atrasada' ? 'erro' : ''}">${icone('alerta')}<span><strong>Fatura ${s.faturaAberta.referencia} em aberto:</strong> ${reais(s.faturaAberta.valor)}${s.faturaAberta.venceEm ? `, vence ${dia(s.faturaAberta.venceEm)}` : ''}.</span></div>${s.faturaAberta.pix ? pixBloco(s.faturaAberta) : ''}${s.faturaAberta.boleto ? boletoBloco(s.faturaAberta) : ''}` : ''}
       <div class="acoes-linha">
         ${s.faturaAberta ? html`<button class="btn btn-contorno" id="conferir">Já paguei — conferir</button>` : ''}
@@ -223,23 +225,8 @@ export async function montar(alvo, ctx) {
     });
   }
 
-  // tokenização do cartão direto na Pagar.me (chave pública); em modo simulado gera um token local
-  async function tokenizar(form) {
-    const numero = form.elements.numero.value.replace(/\D/g, ''), nome = form.elements.nome.value.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z ]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 64), val = form.elements.validade.value.replace(/\D/g, ''), cvv = form.elements.cvv.value.replace(/\D/g, '');
-    if (numero.length < 13 || !nome || val.length !== 4 || cvv.length < 3) throw new Error('Confira o número, o nome, a validade (MM/AA) e o CVV do cartão.');
-    if (s.simulado || !s.chavePublica) return `token_simulado_${numero.slice(-4)}`;
-    const r = await fetch(`https://api.pagar.me/core/v5/tokens?appId=${encodeURIComponent(s.chavePublica)}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'card', card: { number: numero, holder_name: nome, exp_month: Number(val.slice(0, 2)), exp_year: Number(val.slice(2)), cvv } }),
-    });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || !j.id) {
-      // a Pagar.me manda o motivo em `errors` ({ "card.exp_year": ["..."] }); mostra para o gestor saber o que corrigir
-      const detalhes = j.errors && typeof j.errors === 'object' ? Object.entries(j.errors).map(([k, v]) => `${k.replace(/^card\./, '')}: ${[].concat(v).join(', ')}`).join(' · ') : '';
-      throw new Error(`A Pagar.me não aceitou o cartão${detalhes ? ' — ' + detalhes : j.message ? ' — ' + j.message : ''}. Confira número, nome (sem números ou acentos), validade e CVV.`);
-    }
-    return j.id;
-  }
+  // v14.12 — tokenização compartilhada com a página de adesão (js/pagarme.js)
+  const tokenizar = (form) => tokenizarCartao({ numero: form.elements.numero.value, nome: form.elements.nome.value, validade: form.elements.validade.value, cvv: form.elements.cvv.value }, { simulado: s.simulado, chavePublica: s.chavePublica });
 
   desenhar();
   return { limpar: () => sistema?.classList.remove('so-termos', 'so-assinatura') };

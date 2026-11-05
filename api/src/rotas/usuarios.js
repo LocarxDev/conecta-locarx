@@ -14,7 +14,7 @@ export const equipeLoja = Router();
 const ctx = (req) => contextoDoUsuario(req.usuario);
 const uuidOu404 = (id, msg = 'Pessoa não encontrada.') => { if (!zUuid.safeParse(id).success) throw erro(404, msg); return id; };
 
-async function gerarConvite(c, usuarioId) {
+export async function gerarConvite(c, usuarioId) {
   await c.query(`UPDATE tokens_senha SET usado_em = now() WHERE usuario_id = $1 AND usado_em IS NULL`, [usuarioId]);
   const token = novoToken();
   await c.query(`INSERT INTO tokens_senha (usuario_id, token_hash, tipo, expira_em) VALUES ($1, $2, 'convite', now() + interval '72 hours')`, [usuarioId, hashToken(token)]);

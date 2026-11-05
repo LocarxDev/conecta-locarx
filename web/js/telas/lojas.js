@@ -53,11 +53,11 @@ function formLoja(loja = {}) {
   </form>`;
 }
 
-function abrirFormLoja(loja, aoSalvar) {
+export function abrirFormLoja(loja, aoSalvar) {
   const modal = abrirModal({
-    titulo: loja ? 'Editar loja' : 'Cadastrar loja',
+    titulo: loja?.id ? 'Editar loja' : 'Cadastrar loja',
     corpo: formLoja(loja || {}),
-    rodape: html`<button class="btn btn-contorno" data-fechar>Cancelar</button><button class="btn btn-primario" type="submit" form="form-loja">${loja ? 'Salvar' : 'Cadastrar loja'}</button>`,
+    rodape: html`<button class="btn btn-contorno" data-fechar>Cancelar</button><button class="btn btn-primario" type="submit" form="form-loja">${loja?.id ? 'Salvar' : 'Cadastrar loja'}</button>`,
   });
   modal.el.classList.add('modal-grande');
   const form = $('#form-loja', modal.el);
@@ -105,7 +105,7 @@ function abrirFormLoja(loja, aoSalvar) {
       try {
         const salva = await api.salvarLoja({ ...d, central: d.central ? true : undefined, id: loja?.id });
         modal.fechar();
-        avisar(loja ? 'Loja atualizada.' : 'Loja cadastrada. Agora convide o gestor da loja.');
+        avisar(loja?.id ? 'Loja atualizada.' : loja?.cadastro ? 'Loja cadastrada.' : 'Loja cadastrada. Agora convide o gestor da loja.');
         aoSalvar(salva);
       } catch (err) {
         if (err.campos) marcarErros(form, err.campos); else avisar(err.message, 'erro');
@@ -533,20 +533,56 @@ async function painelAssinatura(area, lojaId, ctx) {
       <div class="dado"><dt>Plano</dt><dd>${a.planoNome} · ${a.ciclo}</dd></div>
       <div class="dado"><dt>Valor</dt><dd class="num">${a.valor ? reais(a.valor) : 'cortesia'}</dd></div>
       <div class="dado"><dt>Pagamento</dt><dd>${a.formaNome}${a.cartao ? ` · final ${a.cartao.final}` : ''}</dd></div>
-      <div class="dado"><dt>Próxima cobrança</dt><dd>${a.proximaCobranca ? dia(a.proximaCobranca) : '—'}</dd></div>
+      <div class="dado"><dt>${a.status === 'isenta' ? 'Liberada até' : 'Próxima cobrança'}</dt><dd>${a.status === 'isenta' ? (a.isentaAte ? dia(a.isentaAte) : 'sem prazo (cortesia)') : (a.proximaCobranca ? dia(a.proximaCobranca) : '—')}</dd></div>
+      ${a.entrada ? html`<div class="dado"><dt>Entrada paga fora</dt><dd>${a.entrada.valor ? reais(a.entrada.valor) : '—'}${a.entrada.referencia ? ` · ${a.entrada.referencia}` : ''}</dd></div>` : ''}
       <div class="dado"><dt>Observação</dt><dd>${a.observacao || '—'}</dd></div>
-    </dl>` : html`<p class="sub">A loja ainda não assinou. O gestor contrata em Assinatura (menu da loja); você pode isentar a loja abaixo.</p>`}
+    </dl>` : html`<p class="sub">A loja ainda não assinou. O gestor contrata em Assinatura (menu da loja). Se ela pagou a entrada na página de adesão, use "Liberar até uma data" e registre o pagamento.</p>`}
     ${s.faturas?.length ? html`<div class="tabela-caixa"><table class="tabela"><thead><tr><th>Ref.</th><th>Valor</th><th>Forma</th><th>Vence</th><th>Situação</th><th></th></tr></thead><tbody>
       ${s.faturas.slice(0, 6).map((f) => html`<tr><td>${f.referencia}</td><td class="num">${reais(f.valor)}</td><td>${f.formaNome}</td><td>${f.venceEm ? dia(f.venceEm) : '—'}</td><td><span class="selo ${FT[f.status]?.[1] || ''}">${FT[f.status]?.[0] || f.status}</span></td><td class="acoes-linha">${['pendente', 'vencida', 'falhou'].includes(f.status) ? html`<button class="btn btn-contorno" data-confirmar="${f.id}">Confirmar pagamento</button>` : ''}</td></tr>`)}
     </tbody></table></div>` : ''}
     <div class="acoes-linha">
-      ${!a || !['isenta'].includes(a.status) ? html`<button class="btn btn-contorno" id="isentar">Isentar a loja (cortesia)</button>` : html`<button class="btn btn-contorno" id="tirar-isencao">Tirar a isenção</button>`}
+      ${!a || !['isenta'].includes(a.status) ? html`<button class="btn btn-contorno" id="isentar">Liberar a loja (isentar)</button>` : html`<button class="btn btn-contorno" id="isentar">Mudar prazo / entrada</button><button class="btn btn-texto" id="tirar-isencao">Tirar a isenção</button>`}
       ${a && ['ativa', 'atrasada', 'suspensa', 'pendente'].includes(a.status) ? html`<button class="btn btn-texto" id="cancelar-ass">Cancelar assinatura</button>` : ''}
     </div>`);
-  $('#isentar', area)?.addEventListener('click', async () => {
-    const ok = await confirmar({ titulo: 'Isentar a loja', texto: 'A loja usa o Conecta sem pagar (plano completo). Você pode tirar a isenção depois.', botao: 'Isentar' });
-    if (!ok) return;
-    try { await api.isentarAssinatura(lojaId, { isenta: true, observacao: 'cortesia da rede' }); avisar('Loja isenta.'); painelAssinatura(area, lojaId, ctx); } catch (err) { avisar(err.message, 'erro'); }
+  // v14.11 — liberar sem prazo (cortesia) ou até uma data (ex.: entrada paga na página de adesão); registra o pagamento feito fora
+  $('#isentar', area)?.addEventListener('click', () => {
+    const em30 = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10), em365 = new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10);
+    const m = abrirModal({
+      titulo: 'Liberar a loja',
+      corpo: html`<form id="form-isentar" class="form" novalidate>
+        <div class="opcoes-modo" style="display: grid; gap: 8px; margin-bottom: 12px">
+          <label class="opcao-modo"><input type="radio" name="modo" value="prazo" ${a?.status === 'isenta' && !a?.isentaAte ? '' : 'checked'}><span><strong>Até uma data</strong><span class="sub">Pagou a entrada na página de adesão, período de teste ou carência. Depois, o gestor assina na tela dele.</span></span></label>
+          <label class="opcao-modo"><input type="radio" name="modo" value="sem" ${a?.status === 'isenta' && !a?.isentaAte ? 'checked' : ''}><span><strong>Sem prazo</strong><span class="sub">Cortesia da rede: a loja usa o Conecta sem pagar até você tirar a isenção.</span></span></label>
+        </div>
+        <div class="form-linha" id="bloco-prazo">
+          <div class="campo"><label for="is-ate">Liberada até</label><input type="date" id="is-ate" value="${a?.isentaAte || em30}" min="${new Date(Date.now() + 86400000).toISOString().slice(0, 10)}">
+            <p class="ajuda"><button type="button" class="btn btn-texto btn-mini" data-ate="${em30}">+30 dias</button> <button type="button" class="btn btn-texto btn-mini" data-ate="${em365}">+1 ano</button> Depois dessa data o gestor escolhe cartão, Pix ou boleto na tela de assinatura.</p></div>
+        </div>
+        <h3>Pagamento de entrada (se houve)</h3>
+        <div class="form-linha">
+          <div class="campo"><label for="is-valor">Valor pago (R$)</label><input id="is-valor" inputmode="decimal" placeholder="220,00" value="${a?.entrada?.valor ? a.entrada.valor.toFixed(2).replace('.', ',') : ''}"></div>
+          <div class="campo"><label for="is-ref">Código / referência</label><input id="is-ref" maxlength="120" placeholder="ID do pagamento na Pagar.me, nº do Pix…" value="${a?.entrada?.referencia || ''}"></div>
+        </div>
+        <div class="campo"><label for="is-obs">Observação</label><input id="is-obs" maxlength="300" value="${a?.observacao || ''}" placeholder="Ex.: entrada paga na página de adesão em 05/11"></div>
+      </form>`,
+      rodape: html`<button class="btn btn-texto" data-fechar>Cancelar</button><button class="btn btn-primario" id="is-salvar">Liberar</button>`,
+    });
+    const f = $('#form-isentar', m.el), bloco = $('#bloco-prazo', m.el);
+    const modo = () => f.querySelector('[name=modo]:checked')?.value || 'prazo';
+    const ajusta = () => { bloco.hidden = modo() !== 'prazo'; };
+    $$('[name=modo]', f).forEach((r) => r.addEventListener('change', ajusta)); ajusta();
+    $$('[data-ate]', f).forEach((b) => b.addEventListener('click', () => { $('#is-ate', f).value = b.dataset.ate; }));
+    $('#is-salvar', m.el).addEventListener('click', async () => {
+      const valorTxt = $('#is-valor', f).value.trim();
+      const valor = valorTxt ? Math.round(Number(valorTxt.replace(/[R$\s.]/g, '').replace(',', '.')) * 100) : null;
+      if (valorTxt && !Number.isFinite(valor)) return avisar('Valor da entrada inválido (ex.: 220,00).', 'erro');
+      const dados = { isenta: true, observacao: $('#is-obs', f).value.trim() || (modo() === 'sem' ? 'cortesia da rede' : 'liberada até a data'), ...(modo() === 'prazo' ? { ate: $('#is-ate', f).value } : {}) };
+      if (modo() === 'prazo' && !dados.ate) return avisar('Informe a data.', 'erro');
+      if (valor != null) dados.entradaValor = valor;
+      if ($('#is-ref', f).value.trim()) dados.entradaReferencia = $('#is-ref', f).value.trim();
+      try { await api.isentarAssinatura(lojaId, dados); m.fechar(); avisar(modo() === 'prazo' ? `Loja liberada até ${dia(dados.ate)}.` : 'Loja isenta (cortesia).'); painelAssinatura(area, lojaId, ctx); }
+      catch (err) { avisar(err.campos ? Object.values(err.campos)[0] : err.message, 'erro'); }
+    });
   });
   $('#tirar-isencao', area)?.addEventListener('click', async () => {
     const ok = await confirmar({ titulo: 'Tirar a isenção', texto: 'A loja volta a precisar de assinatura paga.', botao: 'Tirar isenção', perigo: true });

@@ -45,12 +45,12 @@ export async function montar(alvo, ctx) {
           <thead><tr><th>Loja</th><th>Situação</th><th>Plano</th><th>Pagamento</th><th class="num">Valor</th><th>Desde</th><th>Próxima cobrança</th><th>Em aberto</th><th>Último pagamento</th></tr></thead>
           <tbody>${lista.length ? lista.map((l) => html`<tr class="${['atrasada', 'suspensa'].includes(l.status) ? 'linha-alerta' : ''}">
             <td><a href="#/lojas/${l.lojaId}"><strong>${l.loja}</strong></a><div class="sub">${l.cidade}/${l.uf}${l.cnpj ? ` · ${l.cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5')}` : ' · sem CNPJ'}${l.lojaAtiva ? '' : ' · loja desativada'}</div></td>
-            <td><span class="selo ${ST[l.status]?.[1] || ''}">${ST[l.status]?.[0] || l.status}</span>${l.observacao ? html`<div class="sub">${l.observacao}</div>` : ''}</td>
+            <td><span class="selo ${ST[l.status]?.[1] || ''}">${ST[l.status]?.[0] || l.status}${l.status === 'isenta' && l.isentaAte ? ` até ${dia(l.isentaAte)}` : ''}</span>${l.observacao ? html`<div class="sub">${l.observacao}</div>` : ''}${l.entradaValor ? html`<div class="sub">entrada ${reais(l.entradaValor)}</div>` : ''}</td>
             <td>${l.planoNome || '—'}${l.ciclo ? html`<div class="sub">${l.ciclo}</div>` : ''}</td>
             <td>${l.formaNome || '—'}${l.cartaoFinal ? html`<div class="sub">final ${l.cartaoFinal}</div>` : ''}</td>
             <td class="num">${l.valor != null ? (l.valor ? reais(l.valor) : 'cortesia') : '—'}</td>
             <td>${dia(l.inicioEm)}</td>
-            <td>${dia(l.proximaCobranca)}</td>
+            <td>${l.status === 'isenta' ? (l.isentaAte ? html`${dia(l.isentaAte)} <span class="sub">(fim da liberação)</span>` : '—') : dia(l.proximaCobranca)}</td>
             <td>${l.faturasAbertas ? html`<span class="selo ${l.status === 'ativa' || l.status === 'pendente' ? 'alerta' : 'erro'}">${l.faturasAbertas} · vence ${dia(l.venceAberta)}</span>` : '—'}</td>
             <td>${dia(l.ultimoPagamento)}</td>
           </tr>`) : html`<tr><td colspan="9"><div class="estado">${icone('info')}<p>Nenhuma loja neste filtro.</p></div></td></tr>`}</tbody>

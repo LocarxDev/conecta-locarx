@@ -4,7 +4,7 @@ import { comoSistema } from '../../banco/conexao.js';
 import { erro } from '../../http.js';
 import { config } from '../../config.js';
 import { normalizarModulos } from '../modulos.js';
-import { emailComprovanteAssinatura, emailFaturaAssinatura } from '../email.js';
+import { emailComprovanteAssinatura, emailFaturaAssinatura, emailAviso } from '../email.js';
 import * as pagarme from './pagarme.js';
 import { ErroPagarme } from './pagarme.js';
 import { PLANOS, FORMAS, valorDoPlano, modulosComPlano, referenciaDe, somarCiclo, planosPublicos, dataISO } from './planos.js';
@@ -25,6 +25,8 @@ export const assinaturaPublica = (a) => a ? ({
   id: a.id, lojaId: a.loja_id, plano: a.plano, planoNome: PLANOS[a.plano]?.nome || a.plano, ciclo: a.ciclo, forma: a.forma, formaNome: FORMAS[a.forma] || a.forma,
   status: a.status, valor: a.valor_centavos / 100, cartao: a.cartao_final ? { final: a.cartao_final, bandeira: a.cartao_bandeira } : null,
   inicioEm: a.inicio_em, proximaCobranca: a.proxima_cobranca ? dataISO(a.proxima_cobranca) : null, canceladaEm: a.cancelada_em, observacao: a.observacao || null, atualizadaEm: a.atualizada_em,
+  isentaAte: a.isenta_ate ? dataISO(a.isenta_ate) : null,   // v14.11 — isenção com prazo (null = sem prazo)
+  entrada: a.entrada_valor_centavos != null || a.entrada_referencia ? { valor: (a.entrada_valor_centavos || 0) / 100, referencia: a.entrada_referencia || null, em: a.entrada_em } : null,
 }) : null;
 
 export const ligada = () => pagarme.ligado();
@@ -153,18 +155,31 @@ export async function cancelar(c, lojaId, { por = null, motivo = null } = {}) {
   return (await c.query(`UPDATE assinaturas SET status = 'cancelada', cancelada_em = now(), observacao = $2, atualizada_em = now() WHERE id = $1 RETURNING *`, [a.id, motivo])).rows[0];
 }
 
-/** Administração: isenta a loja (plano cortesia) ou tira a isenção. */
-export async function isentar(c, lojaId, { isenta, plano = 'basico', observacao = null, por = null }) {
+/** Administração: isenta a loja (cortesia sem prazo, ou "liberada até" uma data — v14.11, p. ex. entrada paga na landing page) ou tira a isenção. */
+export async function isentar(c, lojaId, { isenta, plano = 'basico', observacao = null, por = null, ate = null, entrada = null }) {
   if (isenta) {
+    if (ate && ate <= hoje()) throw erroCampos('A data precisa ser depois de hoje.', { ate: 'Escolha uma data futura.' });
     const a = (await c.query(
-      `INSERT INTO assinaturas (loja_id, plano, ciclo, forma, status, valor_centavos, inicio_em, observacao, criada_por)
-       VALUES ($1, $2, 'mensal', 'isenta', 'isenta', 0, now(), $3, $4)
-       ON CONFLICT (loja_id) DO UPDATE SET plano = EXCLUDED.plano, forma = 'isenta', status = 'isenta', valor_centavos = 0, observacao = EXCLUDED.observacao, cancelada_em = NULL, atualizada_em = now()
-       RETURNING *`, [lojaId, plano, observacao, por])).rows[0];
+      `INSERT INTO assinaturas (loja_id, plano, ciclo, forma, status, valor_centavos, inicio_em, proxima_cobranca, observacao, criada_por, isenta_ate, entrada_valor_centavos, entrada_referencia, entrada_em)
+       VALUES ($1, $2, 'mensal', 'isenta', 'isenta', 0, now(), $5, $3, $4, $5, $6, $7, CASE WHEN $6::int IS NULL AND $7::text IS NULL THEN NULL ELSE now() END)
+       ON CONFLICT (loja_id) DO UPDATE SET plano = EXCLUDED.plano, forma = 'isenta', status = 'isenta', valor_centavos = 0, observacao = EXCLUDED.observacao, cancelada_em = NULL, atualizada_em = now(),
+         proxima_cobranca = EXCLUDED.proxima_cobranca, isenta_ate = EXCLUDED.isenta_ate,
+         entrada_valor_centavos = coalesce(EXCLUDED.entrada_valor_centavos, assinaturas.entrada_valor_centavos), entrada_referencia = coalesce(EXCLUDED.entrada_referencia, assinaturas.entrada_referencia), entrada_em = coalesce(EXCLUDED.entrada_em, assinaturas.entrada_em)
+       RETURNING *`, [lojaId, plano, observacao, por, ate || null, entrada?.valorCentavos ?? null, entrada?.referencia || null])).rows[0];
     await aplicarPlano(c, lojaId, plano, { primeiraVez: true });
     return a;
   }
-  return (await c.query(`UPDATE assinaturas SET status = 'cancelada', cancelada_em = now(), observacao = $2, atualizada_em = now() WHERE loja_id = $1 AND status = 'isenta' RETURNING *`, [lojaId, observacao])).rows[0] || null;
+  return (await c.query(`UPDATE assinaturas SET status = 'cancelada', cancelada_em = now(), observacao = $2, isenta_ate = NULL, proxima_cobranca = NULL, atualizada_em = now() WHERE loja_id = $1 AND status = 'isenta' RETURNING *`, [lojaId, observacao])).rows[0] || null;
+}
+
+/** v14.11 — isenções com prazo vencido viram 'pendente' (a loja volta à tela de assinatura para escolher a forma de pagamento). Avisa o e-mail de cobrança. */
+export async function encerrarIsencoesVencidas(c) {
+  const rows = (await c.query(`UPDATE assinaturas SET status = 'pendente', proxima_cobranca = NULL, atualizada_em = now() WHERE status = 'isenta' AND isenta_ate IS NOT NULL AND isenta_ate < $1::date RETURNING *`, [hoje()])).rows;
+  for (const a of rows) {
+    try { const d = await dadosParaEmail(c, a); if (d) await emailAviso({ para: d.para, nome: d.loja, assunto: 'Seu período liberado terminou', texto: `O período liberado da loja ${d.loja} no Conecta LocarX terminou em ${new Date(a.isenta_ate).toLocaleDateString('pt-BR')}. Para continuar usando, escolha a forma de pagamento da assinatura (cartão, Pix ou boleto) em ${d.link}. Qualquer dúvida, fale com a administração da rede.` }); }
+    catch (err) { console.warn('[assinatura] aviso de isenção encerrada falhou:', err.message); }
+  }
+  return rows.length;
 }
 
 /** Pix novo para a fatura em aberto mais antiga (código vencido, ou loja atrasada/suspensa). */
@@ -199,12 +214,18 @@ export async function processarEvento(evento) {
            VALUES ($1, $2, $3, $4, $5, 'pendente', $6, $7, $8, $9) ON CONFLICT (assinatura_id, referencia) DO UPDATE SET pagarme_cobranca_id = coalesce(faturas_assinatura.pagarme_cobranca_id, EXCLUDED.pagarme_cobranca_id) RETURNING *`,
           [a.id, a.loja_id, ref, d.amount || a.valor_centavos, a.forma, cobrancaId, d.invoice?.id || (tipo === 'invoice.paid' ? d.id : null), hoje(), JSON.stringify({ evento: tipo })])).rows[0];
       }
+      if (!f && cobrancaId) {
+        // v14.12 — entrada da adesão (página pública) paga por Pix
+        const ad = (await c.query('SELECT * FROM adesoes WHERE pagarme_cobranca_id = $1', [cobrancaId])).rows[0];
+        if (ad) { const { marcarPaga } = await import('./adesao.js'); await marcarPaga(c, ad, { detalhes: { evento: tipo, pagarme_id: d.id } }); return { ok: true, adesao: ad.id }; }
+      }
       if (!f) return { ignorado: 'cobrança desconhecida' };
       await confirmarFatura(c, f, { detalhes: { evento: tipo, pagarme_id: d.id } });
       return { ok: true, fatura: f.id };
     }
     if (/\.(payment_failed|refused)$/.test(tipo) || tipo === 'charge.underpaid') {
       const cobrancaId = d.id || d.charges?.[0]?.id;
+      if (cobrancaId) await c.query(`UPDATE adesoes SET status = 'falhou', observacao = $2, atualizada_em = now() WHERE pagarme_cobranca_id = $1 AND status = 'aguardando'`, [cobrancaId, tipo]).catch(() => {});   // v14.12
       const f = cobrancaId ? (await c.query(`UPDATE faturas_assinatura SET status = 'falhou', detalhes = coalesce(detalhes, '{}'::jsonb) || $2::jsonb WHERE pagarme_cobranca_id = $1 AND status <> 'paga' RETURNING *`, [cobrancaId, JSON.stringify({ evento: tipo })])).rows[0] : null;
       const subId = d.subscription?.id || d.subscription_id || null;
       if (f) await c.query(`UPDATE assinaturas SET status = 'atrasada', atualizada_em = now() WHERE id = $1 AND status = 'ativa'`, [f.assinatura_id]);
@@ -221,8 +242,9 @@ export async function processarEvento(evento) {
 
 // ---------- rotina diária: faturas Pix e atraso ----------
 export async function rodarCiclos() {
-  if (!ligada()) return { geradas: 0, atrasadas: 0, suspensas: 0 };
-  let geradas = 0, atrasadas = 0, suspensas = 0;
+  let geradas = 0, atrasadas = 0, suspensas = 0, isencoes = 0;
+  await comoSistema(async (c) => { isencoes = await encerrarIsencoesVencidas(c); const { expirarAntigas } = await import('./adesao.js'); await expirarAntigas(c); });   // v14.11/14.12 — roda mesmo sem a Pagar.me ligada
+  if (!ligada()) return { geradas, atrasadas, suspensas, isencoes };
   await comoSistema(async (c) => {
     // Pix: gera a fatura do próximo ciclo 5 dias antes do vencimento
     const pix = (await c.query(`SELECT a.*, l.razao_social FROM assinaturas a JOIN lojas l ON l.id = a.loja_id WHERE a.status IN ('ativa', 'atrasada') AND a.forma = 'pix' AND a.proxima_cobranca <= ($1::date + $2::int)`, [hoje(), DIAS_ANTES_DO_VENCIMENTO])).rows;
@@ -247,5 +269,5 @@ export async function rodarCiclos() {
        RETURNING a.id`, [hoje(), diasBloqueio()]);
     suspensas = s.rowCount;
   });
-  return { geradas, atrasadas, suspensas };
+  return { geradas, atrasadas, suspensas, isencoes };
 }

@@ -1406,3 +1406,59 @@ DROP POLICY IF EXISTS plano_config_versoes_ver ON plano_config_versoes;
 CREATE POLICY plano_config_versoes_ver ON plano_config_versoes FOR SELECT USING (ctx_perfil() IN ('admin', 'matriz', 'sistema'));
 DROP POLICY IF EXISTS plano_config_versoes_inserir ON plano_config_versoes;
 CREATE POLICY plano_config_versoes_inserir ON plano_config_versoes FOR INSERT WITH CHECK (ctx_perfil() IN ('admin', 'sistema'));
+
+-- v14.11 — Isenção com prazo ("liberada até") e registro do pagamento de entrada feito fora (landing page / link da Pagar.me).
+-- Quando isenta_ate passa, a rotina troca o status para 'pendente' e o gestor escolhe a forma de pagamento na tela de assinatura.
+ALTER TABLE assinaturas ADD COLUMN IF NOT EXISTS isenta_ate date;
+ALTER TABLE assinaturas ADD COLUMN IF NOT EXISTS entrada_valor_centavos integer CHECK (entrada_valor_centavos IS NULL OR entrada_valor_centavos >= 0);
+ALTER TABLE assinaturas ADD COLUMN IF NOT EXISTS entrada_referencia text;
+ALTER TABLE assinaturas ADD COLUMN IF NOT EXISTS entrada_em timestamptz;
+
+-- v14.12 — Adesões pela página pública (/adesao): dados da loja e dos acessos + pagamento da entrada (cartão recorrente ou Pix) na Pagar.me.
+-- A administração cria a loja a partir da adesão: cadastro fiscal preenchido, assinatura já ativa e convites enviados.
+CREATE TABLE IF NOT EXISTS adesoes (
+  id                      uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  chave_hash              text NOT NULL,                       -- hash da chave que a página usa para consultar a situação (sem login)
+  nome_loja               text NOT NULL,
+  cnpj                    text NOT NULL,
+  razao_social            text NOT NULL,
+  endereco                text NOT NULL,
+  cep                     text NOT NULL,
+  cidade                  text,
+  uf                      text,
+  whatsapp                text NOT NULL,
+  gestor_nome             text NOT NULL,
+  gestor_email            text NOT NULL,
+  atendente_nome          text,
+  atendente_email         text,
+  particularidades        text,
+  plano                   text NOT NULL DEFAULT 'basico',
+  ciclo                   text NOT NULL CHECK (ciclo IN ('mensal', 'anual')),
+  forma                   text NOT NULL CHECK (forma IN ('cartao', 'pix')),
+  valor_centavos          integer NOT NULL CHECK (valor_centavos >= 0),
+  status                  text NOT NULL DEFAULT 'aguardando' CHECK (status IN ('aguardando', 'paga', 'falhou', 'expirada', 'loja_criada', 'cancelada')),
+  pagarme_cliente_id      text,
+  pagarme_assinatura_id   text,
+  pagarme_cartao_id       text,
+  cartao_final            text,
+  cartao_bandeira         text,
+  pagarme_pedido_id       text,
+  pagarme_cobranca_id     text,
+  pix_codigo              text,
+  pix_qr_url              text,
+  pix_expira_em           timestamptz,
+  paga_em                 timestamptz,
+  loja_id                 uuid REFERENCES lojas(id) ON DELETE SET NULL,
+  ip                      text,
+  observacao              text,
+  criada_em               timestamptz NOT NULL DEFAULT now(),
+  atualizada_em           timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS adesoes_status ON adesoes (status, criada_em DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS adesoes_cobranca ON adesoes (pagarme_cobranca_id) WHERE pagarme_cobranca_id IS NOT NULL;
+GRANT SELECT, INSERT, UPDATE ON adesoes TO conecta_app;
+ALTER TABLE adesoes ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS adesoes_ver ON adesoes;
+CREATE POLICY adesoes_ver ON adesoes FOR SELECT USING (ctx_perfil() IN ('admin', 'matriz', 'sistema'));
+DROP POLICY IF EXISTS adesoes_alterar ON adesoes;
+CREATE POLICY adesoes_alterar ON adesoes FOR ALL USING (ctx_perfil() IN ('admin', 'sistema')) WITH CHECK (ctx_perfil() IN ('admin', 'sistema'));

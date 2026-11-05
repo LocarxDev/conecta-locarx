@@ -20,6 +20,7 @@ import { termos, termosAdmin } from './rotas/termos.js';
 import { relatorioLoja, relatorioRede } from './rotas/relatorios.js';
 import { webhookAbacatePay, pagamentosLoja, pagamentosAdmin } from './rotas/pagamentos.js';
 import { assinaturaLoja, assinaturaAdmin, webhookPagarme } from './rotas/assinatura.js';
+import { adesaoPublico, adesaoAdmin } from './rotas/adesao.js';
 import { site, siteAdmin, corsDoSite } from './rotas/site.js';
 import { instagramLoja, instagramPublico, webhookInstagram } from './rotas/instagram.js';
 
@@ -56,6 +57,9 @@ export function criarApp() {
 
   // chat do site (widget no site da LocarX): público, sem cookies, com CORS e limites próprios
   app.use('/api/site', corsDoSite, express.json({ limit: '20kb' }), site);
+
+  // v14.12 — adesão pela página pública (/adesao): sem login, mesma origem do Conecta, limites por IP e Turnstile opcional
+  app.use('/api/publico/adesao', cors, verificarOrigem, express.json({ limit: '32kb' }), adesaoPublico);   // POST só com Origin do próprio Conecta
 
   app.use('/api', cors);
   app.use('/api', rateLimit({ windowMs: 60_000, limit: 900, standardHeaders: 'draft-7', legacyHeaders: false, message: { mensagem: 'Muitas requisições. Aguarde um minuto.' } }));
@@ -103,6 +107,7 @@ export function criarApp() {
   naLoja.use('/usuarios', usuarios);
   app.use('/api/admin/na-loja/:lojaId', naLoja);
   app.use('/api/admin', admin, equipeAdmin, rede, locarxAdmin, relatorioRede, personalizacaoRede, canalAdmin, pagamentosAdmin, siteAdmin, termosAdmin, assinaturaAdmin);
+  app.use('/api/admin/adesoes', adesaoAdmin);
   app.use('/api/loja', loja, equipeLoja, canal, instagramLoja, respostas, assistente, reservas, relatorioLoja, pagamentosLoja, assinaturaLoja);
   app.use('/api/crm', crm, personalizacaoLoja);
   app.use('/api/conhecimento', conhecimento);

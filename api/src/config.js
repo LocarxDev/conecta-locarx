@@ -82,6 +82,12 @@ export const config = {
   } : null,
   // Servidor MCP (LocarX Tools para outros sistemas, ex.: Lia I.A. e chat do site). Desligado sem MCP_TOKEN.
   mcpToken: process.env.MCP_TOKEN && process.env.MCP_TOKEN.length >= 32 ? process.env.MCP_TOKEN : null,
+  // v14.12 — página pública de adesão (/adesao). Turnstile (Cloudflare) opcional, com chaves próprias (domínio do Conecta):
+  // ADESAO_TURNSTILE_SITEKEY + ADESAO_TURNSTILE_SECRET. Sem elas, a página funciona só com o limite por IP.
+  adesao: {
+    turnstileSecret: process.env.ADESAO_TURNSTILE_SECRET?.trim() || null,
+    turnstileChave: process.env.ADESAO_TURNSTILE_SITEKEY?.trim() || null,
+  },
   // Chat do site (widget no site da LocarX). Origens dos sites que podem abrir o chat (ex.: https://www.locarx.com.br,https://teste.exemplo.com).
   // Sem SITE_ORIGENS o chat do site fica desligado. TURNSTILE_SECRET (Cloudflare) é opcional: com ele, o código por WhatsApp só sai para quem passou no desafio.
   site: process.env.SITE_ORIGENS ? {

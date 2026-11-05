@@ -58,7 +58,7 @@ const admin = exigirPerfil('admin', 'matriz');
 // v14.8.7 — visão geral das assinaturas da rede (tela Assinaturas do admin): todas as lojas, contagens, receita do mês e previsão
 async function visaoGeral(c) {
   const lojas = (await c.query(
-    `SELECT l.id, l.nome, l.cidade, l.uf, l.cnpj, l.central, l.ativa, a.id AS assinatura_id, a.plano, a.ciclo, a.forma, a.status, a.valor_centavos, a.cartao_final, a.inicio_em, a.proxima_cobranca, a.cancelada_em, a.observacao,
+    `SELECT l.id, l.nome, l.cidade, l.uf, l.cnpj, l.central, l.ativa, a.id AS assinatura_id, a.plano, a.ciclo, a.forma, a.status, a.valor_centavos, a.cartao_final, a.inicio_em, a.proxima_cobranca, a.cancelada_em, a.observacao, a.isenta_ate, a.entrada_valor_centavos,
             (SELECT count(*)::int FROM faturas_assinatura f WHERE f.assinatura_id = a.id AND f.status IN ('pendente', 'vencida', 'falhou')) AS faturas_abertas,
             (SELECT min(f.vence_em) FROM faturas_assinatura f WHERE f.assinatura_id = a.id AND f.status IN ('pendente', 'vencida', 'falhou')) AS vence_aberta,
             (SELECT max(f.paga_em) FROM faturas_assinatura f WHERE f.assinatura_id = a.id AND f.status = 'paga') AS ultimo_pagamento
@@ -80,7 +80,7 @@ async function visaoGeral(c) {
     lojas: lojas.map((l) => ({
       lojaId: l.id, loja: l.nome, cidade: l.cidade, uf: l.uf, cnpj: l.cnpj, lojaAtiva: l.ativa,
       status: l.status || 'sem', plano: l.plano, planoNome: l.plano ? (PLANOS[l.plano]?.nome || l.plano) : null, ciclo: l.ciclo, forma: l.forma, formaNome: l.forma ? (FORMAS[l.forma] || l.forma) : null,
-      valor: l.valor_centavos != null ? l.valor_centavos / 100 : null, cartaoFinal: l.cartao_final, inicioEm: l.inicio_em, proximaCobranca: l.proxima_cobranca ? dataISO(l.proxima_cobranca) : null, canceladaEm: l.cancelada_em, observacao: l.observacao,
+      valor: l.valor_centavos != null ? l.valor_centavos / 100 : null, cartaoFinal: l.cartao_final, inicioEm: l.inicio_em, proximaCobranca: l.proxima_cobranca ? dataISO(l.proxima_cobranca) : null, canceladaEm: l.cancelada_em, observacao: l.observacao, isentaAte: l.isenta_ate ? dataISO(l.isenta_ate) : null, entradaValor: l.entrada_valor_centavos != null ? l.entrada_valor_centavos / 100 : null,
       faturasAbertas: l.faturas_abertas || 0, venceAberta: l.vence_aberta ? dataISO(l.vence_aberta) : null, ultimoPagamento: l.ultimo_pagamento,
     })),
   };
@@ -163,10 +163,10 @@ assinaturaAdmin.get('/lojas/:id/assinatura', admin, rota(async (req, res) => {
 // isenta a loja (cortesia) ou tira a isenção
 assinaturaAdmin.post('/lojas/:id/assinatura/isentar', exigirPerfil('admin'), rota(async (req, res) => {
   const id = req.params.id; if (!zUuid.safeParse(id).success) throw erro(404, 'Loja não encontrada.');
-  const d = validar(z.object({ isenta: z.boolean(), plano: z.enum(Object.keys(PLANOS)).default('basico'), observacao: z.string().trim().max(300).optional() }), req.body);
+  const d = validar(z.object({ isenta: z.boolean(), plano: z.enum(Object.keys(PLANOS)).default('basico'), observacao: z.string().trim().max(300).optional(), ate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), entradaValor: z.number().int().min(0).max(100000000).optional(), entradaReferencia: z.string().trim().max(120).optional() }), req.body);
   const a = await comContexto(ctx(req), async (c) => {
-    const a = await assinatura.isentar(c, id, { isenta: d.isenta, plano: d.plano, observacao: d.observacao || null, por: req.usuario.id });
-    await registrar(c, req, d.isenta ? 'isentou_assinatura' : 'tirou_isencao_assinatura', { alvo: id, lojaId: id, detalhes: { plano: d.plano, observacao: d.observacao || null } });
+    const a = await assinatura.isentar(c, id, { isenta: d.isenta, plano: d.plano, observacao: d.observacao || null, por: req.usuario.id, ate: d.ate || null, entrada: d.entradaValor != null || d.entradaReferencia ? { valorCentavos: d.entradaValor ?? null, referencia: d.entradaReferencia || null } : null });
+    await registrar(c, req, d.isenta ? 'isentou_assinatura' : 'tirou_isencao_assinatura', { alvo: id, lojaId: id, detalhes: { plano: d.plano, ate: d.ate || null, entradaValor: d.entradaValor ?? null, observacao: d.observacao || null } });
     return a;
   });
   res.json(assinatura.assinaturaPublica(a));
