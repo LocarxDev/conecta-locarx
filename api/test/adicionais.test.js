@@ -99,3 +99,18 @@ test('criarReserva com a flag ligada: se o portal recusar additionalServices (40
   assert.deepEqual(corpos[1].additionalServices, []);
   assert.match(corpos[1].observations, /SOLICITADOS .*Cadeirinha infantil x1/);
 });
+
+// v14.9.2 — caução sempre junto do total, com "somente no cartão de crédito"
+test('calcular_preco e consultar_disponibilidade trazem a caução e que ela é só no cartão de crédito', async (t) => {
+  stub(t);
+  const ctx = { lojaId: 'l', branchId: 12, locarxDisponivel: true, simulacao: true, aoGuardar: () => {} };
+  const fs = ferramentasDaLoja(ctx);
+  const cons = await fs.find((f) => f.nome === 'consultar_disponibilidade').executar({ data_retirada: '2026-11-15', hora_retirada: '10:00', data_devolucao: '2026-11-18', hora_devolucao: '10:00' });
+  assert.match(cons.caucao, /SOMENTE no cartão de crédito/);
+  assert.match(cons.caucao, /800,00/);
+  assert.match(cons.caucao, /junto com o total/);
+  const r = await fs.find((f) => f.nome === 'calcular_preco').executar({ fleet_id: 5, data_retirada: '2026-11-15', hora_retirada: '10:00', data_devolucao: '2026-11-18', hora_devolucao: '10:00', protecoes: ['PROTECAO_X'] });
+  assert.match(r.texto_para_cliente, /💳 Caução: R\$.800,00 — somente no cartão de crédito/);
+  assert.match(r.texto_para_cliente, /não entra no total/);
+});
+

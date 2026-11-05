@@ -263,3 +263,7 @@ Um app da Meta (dono: LocarX; App ID `2324380125023153`) para a rede; cada loja 
 
 ## v14.9.1 — menu lateral
 - A coluna do menu é pintada inteira (e o menu usa `100dvh`): não sobra faixa clara abaixo do último item em telas altas, com zoom ou no celular.
+
+## v14.9.2 — caução na cotação
+- Regra 19 do prompt da Lia: ao passar o total da cotação e no resumo da reserva, a caução vai junto, **somente no cartão de crédito** do condutor (pré-autorização liberada após a devolução, fora do total). Sem valor da API, diz que é confirmado na retirada; cliente sem cartão de crédito → equipe.
+- `calcular_preco`, `consultar_disponibilidade` e o resumo de `criar_reserva` já trazem a linha "💳 Caução: … — somente no cartão de crédito".

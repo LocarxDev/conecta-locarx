@@ -244,7 +244,7 @@ export function ferramentasDaLoja(ctx) {
             cartoes_na_tela: true,
             grupos: mostrar.map((g, i) => ({ letra: rotuloGrupo(g, i + (a.mais_opcoes ? 4 : 1)).letra, fleet_id: g.fleetId, grupo: g.grupo, cambio: g.cambio, total: reais(g.total) })),
             protecoes_disponiveis: (mostrar[0].protecoes || []).map((x) => ({ codigo: x.codigo, nome: x.nome, diaria: reais(x.diaria), basica: x.base, caucao: x.caucao != null ? reais(x.caucao) : null })),
-            caucao: mostrar[0].protecoes?.find((x) => x.base && x.padrao)?.caucao != null ? `Caução (pré-autorização no cartão de crédito, liberada após a devolução): ${reais(mostrar[0].protecoes.find((x) => x.base && x.padrao).caucao)} com a Proteção X. Informe se o cliente perguntar.` : null,
+            caucao: mostrar[0].protecoes?.find((x) => x.base && x.padrao)?.caucao != null ? `Caução (SOMENTE no cartão de crédito, como pré-autorização liberada após a devolução): ${reais(mostrar[0].protecoes.find((x) => x.base && x.padrao).caucao)} com a Proteção X. Informe junto com o total da cotação e sempre que o cliente perguntar.` : null,
             ha_mais_opcoes: !a.mais_opcoes && grupos.length > 3,
             ...(adicionaisDisp.length ? { adicionais_disponiveis: adicionaisDisp.map((x) => ({ id: x.id, nome: x.nome, valor: x.diaria != null ? reais(x.diaria) : 'a confirmar', maximo: x.maximo })) } : {}),
             instrucao: `OS CARROS JÁ ESTÃO APARECENDO NA TELA DO CLIENTE como cartões (com foto do carro, câmbio, diária e total ${periodo}). Escreva só UMA frase curta de abertura (ex.: "Encontrei estas opções para ${periodo}:") e peça para escolher um cartão. NÃO liste os carros, letras nem preços no texto. O botão "Escolher" do cartão manda a letra e o fleet_id para você.`,
@@ -255,7 +255,7 @@ export function ferramentasDaLoja(ctx) {
           ...(p.corrigido ? { aviso_data: `O ano veio errado (${p.corrigido.de}); a consulta foi feita para ${p.corrigido.para}. Não diga ao cliente que a data passou: confirme com ele as datas ${periodo}.` } : {}),
           grupos: mostrar.map((g, i) => ({ letra: rotuloGrupo(g, i + (a.mais_opcoes ? 4 : 1)).letra, fleet_id: g.fleetId, grupo: g.grupo, cambio: g.cambio, total: reais(g.total) })),
           protecoes_disponiveis: (mostrar[0].protecoes || []).map((x) => ({ codigo: x.codigo, nome: x.nome, diaria: reais(x.diaria), basica: x.base, caucao: x.caucao != null ? reais(x.caucao) : null })),
-          caucao: mostrar[0].protecoes?.find((x) => x.base && x.padrao)?.caucao != null ? `Caução (pré-autorização no cartão de crédito, liberada após a devolução): ${reais(mostrar[0].protecoes.find((x) => x.base && x.padrao).caucao)} com a Proteção X. Informe se o cliente perguntar.` : null,
+          caucao: mostrar[0].protecoes?.find((x) => x.base && x.padrao)?.caucao != null ? `Caução (SOMENTE no cartão de crédito, como pré-autorização liberada após a devolução): ${reais(mostrar[0].protecoes.find((x) => x.base && x.padrao).caucao)} com a Proteção X. Informe junto com o total da cotação e sempre que o cliente perguntar.` : null,
           ha_mais_opcoes: !a.mais_opcoes && grupos.length > 3,
           ...(adicionaisDisp.length ? { adicionais_disponiveis: adicionaisDisp.map((x) => ({ id: x.id, nome: x.nome, valor: x.diaria != null ? reais(x.diaria) : 'a confirmar', maximo: x.maximo })), instrucao_adicionais: 'No Passo 4, junto com a proteção, ofereça estes serviços adicionais com os valores acima (só estes; nada além do que veio da API). Se o cliente quiser, passe em adicionais no calcular_preco.' } : {}),
         };
@@ -290,7 +290,7 @@ export function ferramentasDaLoja(ctx) {
           `🛡️ Proteção: ${nomesProt.join(' + ') || 'Proteção X'}`,
           (r.adicionais || []).length ? `➕ Adicionais: ${r.adicionais.map((x) => `${x.nome}${x.qtd > 1 ? ' x' + x.qtd : ''}`).join(', ')}` : null,
           `*Total: ${reais(r.total)}* (já com proteção${(r.adicionais || []).length ? ', adicionais' : ''} e taxas)`,
-          r.caucao != null ? `Caução: ${reais(r.caucao)} (pré-autorização no cartão, liberada após a devolução; não entra no total)` : null,
+          r.caucao != null ? `💳 Caução: ${reais(r.caucao)} — somente no cartão de crédito (pré-autorização, liberada após a devolução; não entra no total)` : '💳 Caução: somente no cartão de crédito (pré-autorização, liberada após a devolução; valor confirmado na retirada)',
         ].filter(Boolean).join('\n');
         saida.proximo_passo = 'Envie texto_para_cliente EXATAMENTE como veio (com o Total). ' + (!protecoes.includes('PROTECAO_SUPER_X')
           ? 'Se ainda não perguntou se o cliente prefere a Super X ou opcionais, pergunte na mesma mensagem (Passo 4) e só depois siga. '
@@ -358,7 +358,7 @@ export function ferramentasDaLoja(ctx) {
         const pixOk = ctx.pixDisponivel && !ctx.simulacao;
         const forma = pixOk && a.forma_pagamento === 'pix' ? 'pix' : 'loja';
         if (a.forma_pagamento === 'pix' && !pixOk) return 'Pagamento via Pix não está disponível nesta loja. Siga com pagamento na loja, na retirada (forma_pagamento = "loja").';
-        const resumo = `*Resumo da reserva*\n🚗 ${cotacao.grupo ? `${rg.letra} – ${rg.nome}` : 'Grupo escolhido'}${variasFiliais && cotacao.filialNome ? `\n📍 Filial: ${cotacao.filialNome}` : ''}\n📅 Retirada: ${dataBr(cotacao.retirada)}\n📅 Devolução: ${dataBr(cotacao.devolucao)}\n🛡️ Proteção: ${nomesDasProtecoes(cotacao.protecoes).join(', ')}${(cotacao.adicionais || []).length ? `\n➕ Adicionais: ${cotacao.adicionais.map((x) => `${x.nome}${x.qtd > 1 ? ' x' + x.qtd : ''}`).join(', ')}` : ''}\n💰 Total: *${reais(cotacao.total)}* (${forma === 'pix' ? 'pagamento via Pix por aqui' : 'pagamento na loja, na retirada'})${cotacao.caucao != null ? `\n💳 Caução: ${reais(cotacao.caucao)} (pré-autorização no cartão, liberada após a devolução)` : ''}\n👤 ${cliente.nome} · CPF final ${cliente.cpf.slice(-2)} · ${cliente.email}`;
+        const resumo = `*Resumo da reserva*\n🚗 ${cotacao.grupo ? `${rg.letra} – ${rg.nome}` : 'Grupo escolhido'}${variasFiliais && cotacao.filialNome ? `\n📍 Filial: ${cotacao.filialNome}` : ''}\n📅 Retirada: ${dataBr(cotacao.retirada)}\n📅 Devolução: ${dataBr(cotacao.devolucao)}\n🛡️ Proteção: ${nomesDasProtecoes(cotacao.protecoes).join(', ')}${(cotacao.adicionais || []).length ? `\n➕ Adicionais: ${cotacao.adicionais.map((x) => `${x.nome}${x.qtd > 1 ? ' x' + x.qtd : ''}`).join(', ')}` : ''}\n💰 Total: *${reais(cotacao.total)}* (${forma === 'pix' ? 'pagamento via Pix por aqui' : 'pagamento na loja, na retirada'})\n💳 Caução: ${cotacao.caucao != null ? reais(cotacao.caucao) + ' — ' : ''}somente no cartão de crédito (pré-autorização, liberada após a devolução)\n👤 ${cliente.nome} · CPF final ${cliente.cpf.slice(-2)} · ${cliente.email}`;
         const assinatura = `${cliente.cpf}|${cliente.email}|${cotacao.em}|${forma}`;
 
         // passo 1: o resumo precisa ter sido enviado e o cliente precisa ter respondido depois dele
