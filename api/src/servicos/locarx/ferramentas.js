@@ -83,8 +83,27 @@ export function ferramentasDaLoja(ctx) {
       ctx.branchId = f.branchId; ctx.branchEscolhido = true; ctx.filialNome = f.nome;
       if (!ctx.simulacao && ctx.conversaId) await comoSistema((c) => c.query(`UPDATE conversas SET opcoes = coalesce(opcoes, '{}'::jsonb) || $2::jsonb WHERE id = $1`, [ctx.conversaId, { branchId: f.branchId, filialNome: f.nome }]));
       if (ctx.simulacao) ctx.aoGuardar?.('opcoes_mesclar', { branchId: f.branchId, filialNome: f.nome });
+      // v14.13 — loja com mais de uma filial (Central, principalmente): marca o cliente com a etiqueta da filial escolhida
+      // (criada na hora se não existir, com o nome da filial). Assim o funil e os relatórios da Central separam por cidade.
+      if (!ctx.simulacao && ctx.contatoId && ctx.filiais.length > 1) await etiquetarFilial(f.nome).catch((e) => console.warn('[lia] etiqueta da filial:', e.message));
     }
     return ctx.branchId;
+  }
+  async function etiquetarFilial(nomeFilial) {
+    const nome = String(nomeFilial || '').trim().slice(0, 30);
+    if (nome.length < 2) return;
+    await comoSistema(async (c) => {
+      let e = (await c.query('SELECT id FROM etiquetas WHERE loja_id = $1 AND lower(nome) = lower($2)', [ctx.lojaId, nome])).rows[0];
+      if (!e) e = (await c.query(`INSERT INTO etiquetas (loja_id, nome, cor, descricao_bot) VALUES ($1, $2, '#0ea5e9', NULL) ON CONFLICT DO NOTHING RETURNING id`, [ctx.lojaId, nome])).rows[0]
+        || (await c.query('SELECT id FROM etiquetas WHERE loja_id = $1 AND lower(nome) = lower($2)', [ctx.lojaId, nome])).rows[0];
+      if (!e) return;
+      // troca a etiqueta de outra filial desta loja, se o cliente mudou de cidade no meio da conversa
+      const outras = ctx.filiais.filter((x) => x.nome !== nomeFilial).map((x) => x.nome.toLowerCase());
+      if (outras.length) await c.query(`DELETE FROM contato_etiquetas ce USING etiquetas t WHERE ce.etiqueta_id = t.id AND ce.contato_id = $1 AND t.loja_id = $2 AND lower(t.nome) = ANY($3) AND ce.pelo_assistente`, [ctx.contatoId, ctx.lojaId, outras]);
+      await c.query(`INSERT INTO contato_etiquetas (contato_id, etiqueta_id, loja_id, pelo_assistente) VALUES ($1, $2, $3, true) ON CONFLICT DO NOTHING`, [ctx.contatoId, e.id, ctx.lojaId]);
+      if (ctx.conversaId) await c.query('UPDATE conversas SET atualizada_em = now() WHERE id = $1', [ctx.conversaId]);
+    });
+    ctx.etiquetasNestaResposta = [...(ctx.etiquetasNestaResposta || []), nome];
   }
   const lista = [
     {
